@@ -1,0 +1,54 @@
+# 개인 설정과 비밀정보
+.env
+.env.*
+!.env.example
+*.pem
+*.p12
+*.pfx
+*.key
+*.keystore
+*.jks
+CLAUDE.local.md
+
+# Python / Raspberry Pi
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/
+venv/
+
+# Flutter / Dart
+.dart_tool/
+.flutter-plugins
+.flutter-plugins-dependencies
+.packages
+.pub-cache/
+.pub/
+**/build/
+coverage/
+
+# 편집기 및 OS
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+*.log
+*.tmp
+
+# 실사용자 이미지 및 로컬 데이터
+local_data/
+private_data/
+secrets/
+*.sqlite
+*.sqlite3
+*.db
+
+# 대용량 모델과 임시 결과물
+*.onnx
+*.pt
+*.pth
+*.ckpt
+*.tflite
+*.safetensors

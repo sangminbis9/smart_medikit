@@ -19,15 +19,16 @@ __pycache__/
 .venv/
 venv/
 
-# Flutter / Dart
-.dart_tool/
-.flutter-plugins
-.flutter-plugins-dependencies
-.packages
-.pub-cache/
-.pub/
+# React / TypeScript / 웹 검증 결과
+node_modules/
+dist/
+.vite/
+.amplify/
+*.tsbuildinfo
 **/build/
 coverage/
+playwright-report/
+test-results/
 
 # 편집기 및 OS
 .idea/

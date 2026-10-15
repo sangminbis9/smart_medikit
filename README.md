@@ -1,8 +1,10 @@
 # smart_medikit — 타이레놀 팀
 
-**Raspberry Pi + Flutter(Android/iOS) + AWS 기반 스마트 약품보관함** 캡스톤 프로젝트.
+**Raspberry Pi + React(TypeScript)·Tailwind CSS 반응형 웹/PWA + AWS 기반 스마트 약품보관함** 캡스톤 프로젝트.
 
 기존 투명 보관함에 카메라·조명·개폐 센서를 부착하여 일반의약품과 처방약 포장을 **카메라에 보여주는 것만으로 신규 등록**하고, 입출고·복약 기록·예상 재고·DUR 주의정보·3D 보관함을 통합 관리한다.
+
+기존 Figma 디자인을 기준으로 PC·Android·iPhone을 지원한다. Three.js를 React에 직접 연동하고, 웹은 **GitHub 연동 AWS Amplify Hosting**에서 HTTPS로 배포한다. 현재 저장소는 설계·개발 지침 단계이며 실행 가능한 소스와 배포 환경은 아직 없다.
 
 ## 먼저 읽을 문서
 
@@ -22,12 +24,20 @@
 ```text
 hardware/    # Raspberry Pi 촬영·센서·LED·오프라인 큐 (Python/OpenCV)
 backend/     # AWS Lambda·PaddleOCR·DynamoDB·S3·API 및 이벤트 처리
-mobile/      # Flutter Android/iOS 앱·알림·Three.js 3D View
+frontend/    # React·TypeScript·Tailwind CSS·PWA·Three.js 반응형 웹
 ```
 
 - 기능이 독립될 때만 파일을 나누고, 설정값 하나를 위해 파일을 새로 만들지 않는다.
 - 소스코드가 생기면 각 영역 README에 **검증된 실제 실행 명령만** 추가한다. 존재하지 않는 명령을 임의로 만들어 적지 않는다.
 - 제품/처방 사진은 반드시 **합성 또는 개인정보가 없는 테스트 데이터**를 사용한다.
+
+## 웹/PWA와 AWS 역할
+
+- **Pi → S3 → ECR Lambda(PaddleOCR+OpenCV) → DynamoDB**의 촬영·식별·상태 처리와 API Gateway·WebSocket·EventBridge Scheduler를 유지한다. 예상 재고·복약·DUR·유효기간 정책은 `plan.md`를 따른다.
+- 웹 보완 사진은 촬영 또는 파일 선택 후 개인정보를 제거하고 임시 S3 경로로 전송해 기존 Lambda/PaddleOCR로 처리한다. 사용자 확인 후 필요한 처방 필드만 반영하고 임시 원본을 삭제한다.
+- **Lambda → Web Push(VAPID) → Service Worker**로 알림을 보내고 DynamoDB에 브라우저별 구독을 저장한다. 알림 허용·구독 완료 대상 모두에 발송하며 권한 거부·미지원 환경에서도 웹 알림 이력은 조회할 수 있다.
+- iPhone 푸시는 **iOS 16.4 이상에서 홈 화면에 추가한 PWA를 열고 사용자 동작으로 알림을 허용·구독**해야 한다. 일반 Safari 탭은 기본 웹 기능을 제공하고 홈 화면 설치를 안내한다. 환경별 제약과 공식 근거는 [`plan.md` 7절](plan.md#7-react-반응형-웹pwa-및-다중-기기)을 참고한다.
+- 기본 기능은 URL 접속으로 사용한다. 단일 보관함·무로그인은 시연 범위이며 HTTPS/CORS가 접근 제어를 대신하지 않는다. IAM·VAPID 비밀키를 웹 번들에 포함하지 않는다.
 
 ## Codex / Claude Code 이용법
 

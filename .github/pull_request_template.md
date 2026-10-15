@@ -7,8 +7,10 @@
 
 - [ ] Raspberry Pi (`hardware/`)
 - [ ] AWS (`backend/`)
-- [ ] Flutter (`mobile/`)
+- [ ] React/PWA/Three.js (`frontend/`)
+- [ ] 웹 배포 (Amplify Hosting/GitHub)
 - [ ] 문서/계약
+- [ ] Codex/Claude 리뷰 스킬
 
 ## 완료 전 확인
 
@@ -18,6 +20,14 @@
 - [ ] 입력 오류·통신 실패·중복 이벤트 등 예외 테스트
 - [ ] 개인정보·비밀키·실제 처방전 이미지 미포함
 - [ ] API/상태 변경 시 다른 영역 담당자에게 공유
+- [ ] 기존 Figma 기준 PC·Android·iPhone 반응형 화면과 기존 3D 기능 유지
+- [ ] Web Push 권한·구독·중복/실패와 iPhone 홈 화면 PWA/일반 Safari 제약 구분
+- [ ] 보완 OCR 사용자 확인·임시 이미지 정리·Pi 이벤트 분리 및 민감정보 오프라인 캐시 미저장
+- [ ] WebSocket 재연결·화면 복귀·알림 클릭 후 재조회와 최초 응답 일관성
+- [ ] 웹 번들/빌드 변수에 IAM·VAPID 비밀키·구독 비밀정보 미포함
+- [ ] 배포 변경 시 HTTPS·SPA 링크·Service Worker 갱신·CORS/접근 제어 검증
+
+변경 범위와 무관한 항목은 테스트 결과에 해당 없음을 기록한다. 미구현·미검증 항목을 완료로 표시하지 않는다.
 
 ## 테스트 결과
 

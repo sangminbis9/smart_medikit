@@ -161,3 +161,43 @@ test('좁은 휴대폰·태블릿·PC 전환에서도 선택 유지', async func
     ).toBe(false);
   }
 });
+
+// 높이가 낮은 PC에서도 홈의 마지막 안내문까지 휠로 볼 수 있는지 확인한다.
+test('낮은 PC 홈 화면 세로 스크롤', async function desktopScroll({
+  page,
+}, testInfo) {
+  test.skip(testInfo.project.name !== 'desktop');
+  await page.setViewportSize({ width: 1440, height: 620 });
+  await page.goto('/');
+  await page
+    .getByRole('button', { name: '시연 데이터 보기', exact: true })
+    .last()
+    .click();
+
+  const home = page.locator('.main-home');
+  const caption = page.locator('.scene-caption');
+  await expect(caption).toBeAttached();
+  // 잘린 영역에 실제 사용자 스크롤이 적용되는지 확인한다.
+  const layout = await home.evaluate(function measure(element) {
+    return {
+      visible: element.clientHeight,
+      total: element.scrollHeight,
+      overflow: getComputedStyle(element).overflowY,
+    };
+  });
+  expect(layout.overflow).toBe('auto');
+  expect(layout.total).toBeGreaterThan(layout.visible);
+  await page.getByRole('heading', { name: '우리집 약품함' }).hover();
+  await page.mouse.wheel(0, 1000);
+  await expect
+    .poll(
+      // 실제 휠 입력으로 홈 영역이 내려갔는지 확인한다.
+      async function scrollPosition() {
+        return home.evaluate(function position(element) {
+          return element.scrollTop;
+        });
+      },
+    )
+    .toBeGreaterThan(0);
+  await expect(caption).toBeInViewport();
+});

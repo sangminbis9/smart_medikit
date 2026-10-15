@@ -272,7 +272,8 @@ small,
 .main-home {
   display: flex;
   flex-direction: column;
-  overflow: hidden;
+  overflow-x: hidden;
+  overflow-y: auto;
 }
 .standard-page,
 .home-page {

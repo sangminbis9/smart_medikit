@@ -3,7 +3,7 @@
 ## 1. 작업 단위
 
 - 모든 기능은 **GitHub Issue 또는 합의된 작업 항목** 하나를 기준으로 한다.
-- 브랜치 이름은 `feat/hardware-capture`, `feat/backend-recognition`, `feat/mobile-inventory`, `fix/...`, `docs/...`처럼 목적을 드러낸다.
+- 브랜치 이름은 `feat/hardware-capture`, `feat/backend-recognition`, `feat/frontend-inventory`, `fix/...`, `docs/...`처럼 목적을 드러낸다. Codex가 만드는 브랜치는 기본적으로 `codex/` 접두사를 사용한다.
 - 여러 명이 같은 파일을 동시에 크게 수정하지 않는다. 공통 계약 변경은 먼저 PR에서 합의한다.
 - 개발과 무관한 정리·폴더 분할·라이브러리 교체를 작업 중 덧붙이지 않는다.
 - `main` 직접 작업보다 작은 PR과 **동료 1인 이상 리뷰**를 우선한다.
@@ -24,12 +24,15 @@
 | 영역 | 기본 검증 | 비고 |
 |---|---|---|
 | Python(`hardware/`, `backend/`) | `python -m pytest` | pytest 설정/테스트를 추가한 경우에만 실행 |
-| Flutter(`mobile/`) | `dart format --output=none --set-exit-if-changed .`, `flutter analyze`, `flutter test` | Flutter 프로젝트가 생성된 경우 실행 |
+| React/TypeScript(`frontend/`) | 실제 `package.json`에 정의한 포맷·정적 분석·타입 검사·테스트·빌드 명령 | 패키지 매니저·스크립트가 확정된 후 실행. 존재하지 않는 명령을 가정하지 않음 |
+| 웹/PWA·Three.js | 반응형 화면·카메라/파일·3D 조작, Manifest·Service Worker·푸시·재연결 흐름 검증 | PC·Android·실제 iPhone과 일반 Safari/홈 화면 PWA를 구분. 수동/자동 검증 범위를 기록 |
 | AWS | Lambda 이벤트 테스트, DynamoDB 멱등성 확인, S3 비동기 재시도 테스트 | 실제 IAM·배포 권한 확인 후 검증 |
+| Amplify Hosting | GitHub 연결 브랜치 빌드·HTTPS·SPA 직접 링크·Service Worker 갱신 검증 | 실제 배포 설정 후 실행. 자원·권한·공개 설정은 팀 승인 범위 확인 |
 
 - 정확한 실행 위치와 옵션은 코드가 생성되면 해당 디렉터리의 README 또는 빌드 설정을 통해 확정한다.
 - 재현되지 않은 성공률·성능 수치를 결과라고 작성하지 않는다.
 - 테스트 시 실제 처방전이나 환자 개인정보를 포함하지 않는다.
+- 문서만 변경한 경우 `git diff --check`, 문서·API 계약·스킬 간 일관성 및 기존 운영 정책 보존을 확인한다. 실행 소스/배포가 없으면 런타임 검증을 통과했다고 기록하지 않는다.
 
 ## 4. 팀 통합 최소 점검표
 
@@ -40,8 +43,15 @@
 - [ ] 복약 예정 후 60분 미확인 재알림은 **1회만** 발송되는가?
 - [ ] 처방약은 예상 회분, 정제·캡슐은 예상 수량, 기타 제형은 잔여량 없이 표시되는가?
 - [ ] 3D는 추정 위치와 주황/빨강 위험 조합을 구분하는가?
-- [ ] Android와 iOS의 주요 화면 및 푸시 동작을 확인했는가?
-- [ ] IAM 자격 증명·토큰·실제 처방전 이미지를 Git에 올리지 않았는가?
+- [ ] 기존 Figma 기준 PC·Android·iPhone 반응형 화면과 Three.js 직접 연동·터치/마우스/키보드를 검증했는가?
+- [ ] 보완 사진은 개인정보 제거 후 기존 Lambda/PaddleOCR로 처리하고, 실패·취소·중단 시에도 임시 원본을 정리하는가?
+- [ ] 보완 OCR이 Pi 촬영 이벤트와 분리되고 재고·입출고를 중복 반영하지 않는가?
+- [ ] Web Push 구독 등록/갱신/해제·권한 거부·만료·재시도·중복 표시와 알림 클릭 후 재조회를 검증했는가?
+- [ ] 실제 iPhone에서 iOS 16.4 이상 홈 화면 PWA의 사용자 동작 기반 권한·푸시를 검증하고 일반 Safari의 설치 안내를 구분했는가?
+- [ ] WebSocket 재연결·화면 복귀 후 최신 서버 상태를 조회하고, 오프라인 정정을 완료로 표시하지 않는가?
+- [ ] 복약 예약은 EventBridge Scheduler에서 유지하고 푸시 수락·실제 도착·사용자 확인을 구분하는가?
+- [ ] Amplify HTTPS·GitHub 배포·SPA 링크·Service Worker 갱신 및 API/S3 CORS·WebSocket 접근 제어를 확인했는가?
+- [ ] 원본·OCR 원문·민감 응답을 오프라인 캐시에 남기지 않고 IAM·VAPID 비밀키·구독 암호화 정보를 Git/웹 번들/로그에 노출하지 않았는가?
 
 ## 5. PR에 작성할 내용
 
@@ -50,6 +60,6 @@
 ## 6. 권장 개발 도구 (선택 사항)
 
 - **GitHub 연결:** Issue 및 Pull Request 검토, 변경 이력 추적.
-- **Context7 등 공식 문서 조회 도구:** Flutter, PaddleOCR, AWS SDK의 **최신 API**가 필요할 때만 활용. 검색 결과만 믿지 말고 공식 문서로 확인한다.
+- **Context7 등 공식 문서 조회 도구:** React, TypeScript, Tailwind CSS, Three.js, Web Push, PaddleOCR, AWS의 **최신 API·지원 조건**이 필요할 때 활용. 검색 결과만 믿지 말고 공식 문서로 확인한다.
 - **Codex / Claude Code의 `medikit-review` 스킬:** 변경한 파일과 `plan.md`의 관련 요구사항이 충돌하지 않는지 점검.
 - 자동 수정·배포·삭제 권한이 있는 플러그인/훅은 기본으로 설치하지 않는다. 도입 시 팀 리뷰를 거친다.

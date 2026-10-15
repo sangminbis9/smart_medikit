@@ -18,19 +18,26 @@
 [Lambda + DynamoDB]
   - 반입/반출, 재고/복약 추정, 안전정보·만료일, 이벤트 멱등성
   - 보류·정정 이력 저장 및 복용 알림 예약
-    ├─ API Gateway WebSocket → 실행 중인 Flutter 앱 실시간 갱신
-    └─ SNS → FCM/APNs → 등록된 전체 스마트폰 푸시
-[Flutter Android/iOS + Three.js(WebView)]
+    ├─ API Gateway WebSocket → 활성 React 웹앱 실시간 갱신
+    └─ Lambda → 브라우저 푸시 서비스(Web Push/VAPID)
+               → 구독 브라우저/PWA Service Worker → 알림 표시
+[React(TypeScript) + Tailwind CSS + Three.js 직접 연동]
   - 약품 목록, 실시간 3D, 복약, 재고, 확인 요청, 알림
+  - 기존 Figma 기반 PC·Android·iPhone 반응형 화면
+
+[GitHub 배포 브랜치 → Amplify Hosting → HTTPS 웹/PWA 제공]
+  - Manifest·Service Worker·React 정적 빌드 배포
 ```
+
+보완 정보가 부족할 때만 **웹 촬영/파일 선택 → 개인정보 제거 → 제한된 임시 S3 → 기존 ECR Lambda/PaddleOCR → 사용자 검토·확인** 경로를 사용한다. Pi 촬영 세션과 구분하며 보완 업로드만으로 입출고·차감을 만들지 않는다. 성공·실패·취소 및 중단 작업의 임시 이미지는 삭제한다.
 
 ## 2. 3인 개발 경계
 
 | 영역 | 담당 | 입력 | 출력 / 책임 |
 |---|---|---|---|
 | `hardware/` | Raspberry Pi / 비전 | 개폐 센서, 카메라 | 촬영 세션, 전처리 이미지, 안정적인 로컬 전송 큐, LED |
-| `backend/` | AWS / OCR / DB | 세션 이미지, 외부 의약품 데이터, 앱 요청 | 제품 식별, 상태 갱신, 재고/복용 추정, API, 실시간 이벤트, 알림 |
-| `mobile/` | Flutter / 3D | 조회 API, 실시간 이벤트, 푸시 | Android/iOS 화면, 추가 촬영, 확인·수정, 3D 박스 뷰 |
+| `backend/` | AWS / OCR / DB | 세션·보완 이미지, 외부 의약품 데이터, 웹 요청·브라우저 구독 | 제품 식별, 상태 갱신, 재고/복용 추정, API, WebSocket, 보완 OCR·이미지 삭제, Web Push 발송·구독 저장·VAPID 비밀키 관리 |
+| `frontend/` | React / PWA / Three.js | 기존 Figma, 조회 API, 실시간 이벤트, Web Push | PC·Android·iPhone 반응형 화면, 촬영/파일 선택·검토·정정, Three.js 직접 연동, Manifest·Service Worker·구독·권한·설치 안내, Amplify·GitHub 배포 연동 |
 
 - 공통 API·이벤트 변경은 `docs/CONTRACTS.md`를 먼저 갱신하고 세 영역 담당자가 리뷰한다.
 - 권한·외부 API·인식 가중치·AWS 자원은 실제 구현 가능 여부를 검증한 뒤 확정한다.
@@ -49,6 +56,16 @@
 ## 4. 출시 범위와 제외 기능
 
 - **단일 Raspberry Pi 기반 프로토타입 1대.** 개발팀이 Wi-Fi·AWS 연동을 미리 설정한다.
-- Flutter 앱은 회원가입·초대코드·보관함 페어링 없이 테스트용 단일 보관함 데이터를 연다.
+- React 웹앱은 회원가입·로그인·초대코드·보관함 페어링 없이 HTTPS URL 접속으로 테스트용 단일 보관함 데이터를 연다. 기본 기능은 PWA 설치를 강제하지 않는다.
 - 약품 식별 스티커/ArUco/QR코드 부착과 실제 포장 사진을 3D 텍스처로 렌더링하는 기능은 제외한다.
 - 인증 없는 공개 쓰기 API나 실제 개인정보를 수집하는 공개 서비스로 출시한다고 가정하지 않는다.
+
+## 5. 웹 실행·푸시·배포 경계
+
+- AWS가 상태의 기준이다. WebSocket은 활성 화면 갱신에 사용하고 재연결·백그라운드 복귀·알림 클릭 시 최신 상태를 재조회한다. 중지된 PWA에서 WebSocket·브라우저 타이머가 계속 동작한다고 가정하지 않는다.
+- 푸시는 알림 권한을 허용하고 구독을 완료한 브라우저/프로필/PWA별로 발송한다. iPhone은 **iOS 16.4 이상 홈 화면 PWA + 사용자 동작으로 권한 허용·구독**이 필요하며 일반 Safari 탭의 푸시는 지원하지 않는다. 미지원·거부 상태에서도 서버 알림 이력·확인 요청은 유지한다.
+- EventBridge Scheduler의 기존 복약·만료·재시도 예약과 Lambda 발송을 유지한다. 논리 알림과 구독별 전송 중복을 관리하며 실제 전달 시각·수신/읽음을 보장하지 않는다.
+- Three.js의 박스·목록 선택·회전/확대·가림 객체 반투명·위험 강조와 기존 포장·추정 좌표 구조를 유지한다. 반응형 캔버스·터치/마우스/키보드 및 React 해제 시 자원 정리를 검증한다.
+- Amplify Hosting은 프론트엔드 HTTPS 배포만 담당한다. 기존 S3·ECR·Lambda·DynamoDB·API Gateway·WebSocket·EventBridge Scheduler를 대체하거나 별도 백엔드를 자동 생성하지 않는다.
+- API·S3 CORS, WebSocket 출처·접근 제어, SPA 직접 링크·Service Worker 경로와 갱신을 검증한다. 원본·OCR 원문·민감 응답은 오프라인 캐시에 저장하지 않고 오프라인 정정을 완료로 표시하지 않는다. Pi 오프라인 큐는 유지한다.
+- 비밀키는 서버에서만 관리한다. GitHub 연결·IAM 변경·공개 설정·실제 배포는 학교 계정의 허용 범위와 팀 승인을 확인한 후 진행한다.

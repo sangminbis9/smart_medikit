@@ -60,8 +60,8 @@ npm run preview
 
 ## AWS Amplify Hosting
 
-1. 변경 내용을 GitHub의 배포할 브랜치에 반영합니다.
-2. Amplify Hosting에서 GitHub 저장소 `sangminbis9/smart_medikit`과 해당 브랜치를 선택합니다. **모노레포 경로를 `frontend`**로 지정합니다. `AMPLIFY_MONOREPO_APP_ROOT=frontend`도 확인합니다.
+1. `main`에서 변경 내용을 검증·커밋하고 `git push origin main`으로 GitHub에 반영합니다. 별도 작업 브랜치나 PR은 사용자가 명시적으로 요청한 경우에만 사용합니다.
+2. Amplify Hosting에서 GitHub 저장소 `sangminbis9/smart_medikit`과 **`main`**을 선택합니다. **모노레포 경로를 `frontend`**로 지정합니다. `AMPLIFY_MONOREPO_APP_ROOT=frontend`도 확인합니다. 기존에 다른 브랜치를 연결했다면 배포 대상에 `main`을 추가로 연결합니다.
 3. 루트 [`amplify.yml`](../amplify.yml)을 사용합니다. Node 22 → `npm ci` → 타입·린트·단위 테스트 → 빌드, 산출물은 `frontend/dist`입니다. AWS 백엔드 생성 단계는 없습니다.
 4. **Rewrites and redirects**의 JSON 편집기에 [`amplify-rewrites.json`](../amplify-rewrites.json)을 적용합니다. 이 JSON은 자동 로딩되지 않습니다. `/schedule`, `/alerts`, `/device`, `/packages/…`만 앱 셸로 연결하며 `/sw.js`, Manifest, 아이콘, `/assets/…`, API 경로는 제외합니다.
 5. 루트 [`customHttp.yml`](../customHttp.yml)의 응답 헤더가 Hosting에 반영됐는지 확인합니다. Service Worker는 재검증하고 HTML·Manifest를 무기한 캐시하지 않습니다.

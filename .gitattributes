@@ -1,0 +1,3 @@
+# Windows와 Amplify에서 같은 텍스트 줄바꿈으로 검증한다.
+* text=auto eol=lf
+*.png binary

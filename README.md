@@ -17,7 +17,7 @@
 | [`plan.md`](plan.md) | 프로젝트의 **상세 확정 요구사항 및 개발 계획** |
 | [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) | 3인 역할 분리, 구현 경계, 데이터 흐름 |
 | [`docs/CONTRACTS.md`](docs/CONTRACTS.md) | 컴포넌트 간 이벤트·API·상태 계약 **초안** |
-| [`docs/CONTRIBUTING.md`](docs/CONTRIBUTING.md) | 브랜치, PR, 리뷰 및 검증 방법 |
+| [`docs/CONTRIBUTING.md`](docs/CONTRIBUTING.md) | `main` 직접 작업·커밋·push 및 검증 방법 |
 
 ## 개발 영역
 
@@ -56,6 +56,8 @@ frontend/    # React·TypeScript·Tailwind CSS·PWA·Three.js 반응형 웹
 
 ## 협업 원칙
 
-서로 다른 에이전트를 써도 **저장소의 계약 문서와 상태 enum은 동일**해야 한다. 백엔드 변경으로 앱/Pi가 깨질 수 있으면 PR에서 인터페이스 변경과 검증을 같이 다룬다.
+기본 작업·커밋·push 대상은 **`main`**이다. 별도 작업 브랜치·PR은 사용자가 명시적으로 요청한 경우에만 사용한다. Amplify Hosting도 `main`을 배포 대상으로 연결한다.
+
+서로 다른 에이전트를 써도 **저장소의 계약 문서와 상태 enum은 동일**해야 한다. 백엔드 변경으로 앱/Pi가 깨질 수 있으면 인터페이스 변경과 검증을 같은 변경 묶음에서 다룬다.
 
 개발에 착수하기 전 확정되지 않은 값(인식 임계값, 모델 메모리, 식약처 API 응답 필드)은 **실험을 통해 정하고 문서에 반영**한다.

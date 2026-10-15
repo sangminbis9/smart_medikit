@@ -25,7 +25,7 @@
   - 약품 목록, 실시간 3D, 복약, 재고, 확인 요청, 알림
   - 기존 Figma 기반 PC·Android·iPhone 반응형 화면
 
-[GitHub 배포 브랜치 → Amplify Hosting → HTTPS 웹/PWA 제공]
+[GitHub main 직접 push → Amplify Hosting → HTTPS 웹/PWA 제공]
   - Manifest·Service Worker·React 정적 빌드 배포
 ```
 

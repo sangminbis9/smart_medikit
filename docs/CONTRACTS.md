@@ -122,7 +122,7 @@ WebSocket은 **상태 변경 사실과 버전 정보**를 알리고, 웹앱은 �
 
 ## 9. 웹 배포·캐시와 API 경계
 
-- **GitHub 연동 Amplify Hosting**은 React 정적 웹/PWA의 HTTPS 배포를 담당하며 기존 AWS 백엔드를 대체하지 않는다. 브랜치·빌드 명령·산출물 경로는 실제 소스 생성 후 확정한다.
+- **GitHub 연동 Amplify Hosting**은 React 정적 웹/PWA의 HTTPS 배포를 담당하며 기존 AWS 백엔드를 대체하지 않는다. 배포 대상은 `main`, 앱 루트는 `frontend`, 빌드 명령은 `npm run build`, 산출물은 앱 루트 기준 `dist`다. 루트 `amplify.yml`의 설치·검증 절차를 함께 사용한다.
 - SPA 상세 경로와 알림 링크 새로고침을 지원하되 Manifest·Service Worker·실제 정적 자산 경로를 HTML로 치환하지 않는다. Service Worker 범위·캐시 버전·갱신 후 API 호환성을 검증한다.
 - 정적 화면 자산만 캐시하고 민감 API 응답·처방 이미지는 오프라인 저장하지 않는다. 서버 상태 재조회 및 오프라인 안내를 적용하며 Pi의 촬영·오프라인 큐 계약은 변경하지 않는다.
 

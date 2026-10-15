@@ -1,0 +1,6 @@
+[
+  { "source": "/schedule", "target": "/index.html", "status": "200" },
+  { "source": "/alerts", "target": "/index.html", "status": "200" },
+  { "source": "/device", "target": "/index.html", "status": "200" },
+  { "source": "/packages/<*>", "target": "/index.html", "status": "200" }
+]

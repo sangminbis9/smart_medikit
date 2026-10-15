@@ -4,7 +4,9 @@
 
 기존 투명 보관함에 카메라·조명·개폐 센서를 부착하여 일반의약품과 처방약 포장을 **카메라에 보여주는 것만으로 신규 등록**하고, 입출고·복약 기록·예상 재고·DUR 주의정보·3D 보관함을 통합 관리한다.
 
-기존 Figma 디자인을 기준으로 PC·Android·iPhone을 지원한다. Three.js를 React에 직접 연동하고, 웹은 **GitHub 연동 AWS Amplify Hosting**에서 HTTPS로 배포한다. 현재 저장소는 설계·개발 지침 단계이며 실행 가능한 소스와 배포 환경은 아직 없다.
+기존 Figma 디자인을 기준으로 PC·Android·iPhone을 지원한다. Three.js를 React에 직접 연동하고, 웹은 **GitHub 연동 AWS Amplify Hosting**에서 HTTPS로 배포하도록 준비했다. [`frontend/`](frontend/README.md)에 실행 가능한 초기 웹/PWA가 있으며 API·약품 DB·보관함 치수가 없어도 빈 화면과 선택형 시연 모드로 실행된다. 실제 Pi/AWS 백엔드와 배포 환경은 아직 연결하지 않았다.
+
+**빠른 실행:** `cd frontend` → `npm ci` → `npm run dev` (Node.js 22.12 이상). 사용자가 채울 공개 설정, Amplify 연결 절차와 현재 구현 범위는 [프론트엔드 안내](frontend/README.md)에 정리했다.
 
 ## 먼저 읽을 문서
 
@@ -19,7 +21,7 @@
 
 ## 개발 영역
 
-아래 디렉터리는 **실제 소스코드를 처음 추가할 때에만** 생성한다. 빈 폴더나 `.gitkeep` 파일을 만들 필요는 없다.
+`frontend/`에 웹 소스가 있으며, 나머지 디렉터리는 **실제 소스코드를 처음 추가할 때에만** 생성한다. 빈 폴더나 `.gitkeep` 파일을 만들 필요는 없다.
 
 ```text
 hardware/    # Raspberry Pi 촬영·센서·LED·오프라인 큐 (Python/OpenCV)

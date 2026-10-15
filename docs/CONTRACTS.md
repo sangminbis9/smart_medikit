@@ -125,3 +125,19 @@ WebSocket은 **상태 변경 사실과 버전 정보**를 알리고, 웹앱은 �
 - **GitHub 연동 Amplify Hosting**은 React 정적 웹/PWA의 HTTPS 배포를 담당하며 기존 AWS 백엔드를 대체하지 않는다. 브랜치·빌드 명령·산출물 경로는 실제 소스 생성 후 확정한다.
 - SPA 상세 경로와 알림 링크 새로고침을 지원하되 Manifest·Service Worker·실제 정적 자산 경로를 HTML로 치환하지 않는다. Service Worker 범위·캐시 버전·갱신 후 API 호환성을 검증한다.
 - 정적 화면 자산만 캐시하고 민감 API 응답·처방 이미지는 오프라인 저장하지 않는다. 서버 상태 재조회 및 오프라인 안내를 적용하며 Pi의 촬영·오프라인 큐 계약은 변경하지 않는다.
+
+## 10. 초기 프론트엔드 조회 어댑터 v0.1
+
+`frontend/src/data.ts`에 **프론트엔드가 읽는 초기 응답 스키마**를 구현했다. 이는 배포된 AWS 계약이나 쓰기 API 확정을 뜻하지 않는다. 백엔드 담당자는 실제 제공 가능 필드와 접근 제어를 확인하고 연동 전에 합의한다. 기존 Pi 이벤트·멱등성·상태 전이 정책을 변경하지 않는다.
+
+- `VITE_API_URL`에 `/inventory`, `/alerts`를 붙이고 `box_id` query를 전달한다. `credentials: include`, `cache: no-store`를 사용하며 12초 후 요청을 종료한다. 웹 변수에 토큰을 넣지 않는다. 쿠키 인증을 쓸 경우 서버의 HTTPS·SameSite·CORS·접근 제어 설정을 별도 검토한다.
+- `GET /inventory` 응답: `{ box, packages, doses, synced_at }`. `box`: `{ box_id, dimensions: { width, depth, height } | null, device_status: ONLINE | OFFLINE | UNKNOWN }`. 치수와 `PositionSnapshot` 좌표의 단위는 이 어댑터에서 **mm**, X=가로/Y=세로/Z=바닥 기준 추정 높이다. 정확한 영상 보정은 Pi/AWS가 담당한다.
+- `packages`는 조회용 결합 결과이며 새 저장 엔터티가 아니다. 각 항목은 기존 `Package`의 `package_id`, `box_id`, `state`, `size_class`, `base_color`와 `kind: OTC | PRESCRIPTION`, `name`, `medicines`, `inventory`, `remaining_doses`, `expiry`, `position`, `safety_status`, `note`를 포함한다. `medicines`는 `Medicine`/`PackageMedicine`, `inventory`는 `Inventory`, `remaining_doses`는 `PrescriptionPlan`, `expiry`는 `ExpiryInfo`, `position`은 `PositionSnapshot`의 조회 결합이다.
+- `medicines`: `{ medicine_id, name, form: TABLET | CAPSULE | OTHER | UNKNOWN, ingredients: string[], indications: string[] }[]`. 효능 검색어는 제공된 제품정보에서만 가져온다. 비정제·미확인 제형은 `stock_enabled=true`가 잘못 들어와도 수량을 표시하지 않는다.
+- `inventory`: `{ stock_enabled, initial_qty: number | null, estimated_qty: number | null } | null`; `expiry`: `{ actual_expiry: YYYY-MM-DD | null, temporary_management_date: YYYY-MM-DD | null, verified }`; `position`: `{ x, y, z_estimated, certainty: OBSERVED | ESTIMATED | UNCERTAIN } | null`. 화면은 확인 여부와 수량의 추정 성격을 구분한다.
+- `doses`: `{ dose_id, package_id, scheduled_at, result }[]`. 표시용 `result`는 `SCHEDULED | ESTIMATED | CONFIRMED | NOT_TAKEN | DEFERRED | UNCONFIRMED`를 사용하며 `DoseEvent`에서 변환한다. 실제 회차 조회 범위·추가 조회·정정 요청은 후속 합의 대상이다. 프론트엔드는 받은 일정만 표시하고 예약·자동 차감을 수행하지 않는다.
+- `GET /alerts` 응답: `{ alerts: [...] }`. 각 항목은 `alert_id`, `type`, `title`, `body`, `scope`, `package_ids`, `occurred_at`, `ack_state`, `source_event_id`를 포함한다. `type`: `DUPLICATE_INGREDIENT | DUR_CONTRAINDICATION | REGISTRATION | EXPIRY | REVIEW`; `scope`: `STORED | DAILY_WITHDRAWAL | null`; `ack_state`: `PENDING | ACKNOWLEDGED`. 안전정보의 보관 검사와 당일 반출 검사를 합치지 않는다.
+- 빈 배열/없는 선택 필드는 빈 목록 또는 `null`/미확인으로 표시한다. 잘못된 제형·날짜·수량 타입, 중복 포장 ID, 다른 보관함의 포장은 조회 오류로 처리하며 이전 메모리 스냅샷을 최신 성공으로 표시하지 않는다. 시연 샘플을 오류 대체 데이터로 사용하지 않는다.
+- WebSocket 메시지는 본문을 상태에 직접 쓰지 않고 재조회 신호로 사용한다. 재연결 간격은 1초에서 최대 30초까지 늘리고 숨겨진 탭에서는 연결을 닫는다. 화면 복귀·온라인 복구·푸시 클릭은 재조회한다.
+- 현재 실제 API 쓰기·사진 업로드·Web Push 구독은 실행하지 않는다. 시연 편집은 메모리에만 반영되고 서버 성공 문구를 표시하지 않는다. 구독 소유권·서버 쓰기 계약이 합의되면 기존 경로와 연결한다.
+- Service Worker는 정적 산출물만 캐시한다. `push`의 `notification_id`를 알림 tag로 사용하고 일반 문구만 표시한다. 알림 클릭은 같은 출처 `/alerts`를 열고 상태를 재조회할 뿐 확인/복용 API를 호출하지 않는다. 실제 서버 발송·구독은 아직 미연동이다.

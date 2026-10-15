@@ -1,0 +1,23 @@
+applications:
+  - appRoot: frontend
+    customHeaders:
+      - pattern: '**/*'
+        headers:
+          - key: X-Content-Type-Options
+            value: nosniff
+          - key: Referrer-Policy
+            value: strict-origin-when-cross-origin
+          - key: X-Frame-Options
+            value: DENY
+      - pattern: '/sw.js'
+        headers:
+          - key: Cache-Control
+            value: no-cache, no-store, must-revalidate
+      - pattern: '/index.html'
+        headers:
+          - key: Cache-Control
+            value: no-cache
+      - pattern: '/manifest.webmanifest'
+        headers:
+          - key: Cache-Control
+            value: no-cache

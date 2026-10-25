@@ -21,7 +21,7 @@
 
 ## 개발 영역
 
-`frontend/`에 웹 소스가 있으며, 나머지 디렉터리는 **실제 소스코드를 처음 추가할 때에만** 생성한다. 빈 폴더나 `.gitkeep` 파일을 만들 필요는 없다.
+`frontend/`에 웹 소스가 있고, [`hardware/`](hardware/README.md)에 DroidCam/OpenCV 기반 **PC 미리보기·수동 프레임 저장 실험**이 있다. 실제 Pi 자동 촬영과 AWS 연동은 아직 구현하지 않았다. 나머지 디렉터리는 **실제 소스코드를 처음 추가할 때에만** 생성한다. 빈 폴더나 `.gitkeep` 파일을 만들 필요는 없다.
 
 ```text
 hardware/    # Raspberry Pi 촬영·센서·LED·오프라인 큐 (Python/OpenCV)

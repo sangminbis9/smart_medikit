@@ -25,10 +25,10 @@
 
 PC 웹캠 실시간 객체 탐지는 `Raspberry_Pi`에서 `python -m medikit_pi --config config.example.toml webcam --camera 0`으로 실행한다. 준비된 YOLOE 모델을 사용하며 자동 촬영·저장·AWS 전송은 하지 않는다. 환경 설치와 카메라 선택은 [Pi/PC 실행 안내](Raspberry_Pi/README.md)를 참고한다.
 
-`frontend/`에 웹 소스가 있고, [`hardware/`](hardware/README.md)에 DroidCam/OpenCV 기반 **PC 미리보기·수동 프레임 저장 실험**이 있다. Pi 자동 촬영은 `Raspberry_Pi/`에 구현했으며 실기기 검증과 AWS 서버 배포·연결은 아직 수행하지 않았다. 나머지 디렉터리는 **실제 소스코드를 처음 추가할 때에만** 생성한다. 빈 폴더나 `.gitkeep` 파일을 만들 필요는 없다.
+`frontend/`에 웹 소스가 있고, [`hardware/`](hardware/README.md)에 DroidCam/OpenCV 기반 **PC 미리보기·수동 방향 보정·프레임 저장 및 선택형 YOLOE-26n 포장 후보 탐지·품질 검사·영역 저장 실험**이 있다. Pi 자동 촬영은 `Raspberry_Pi/`에 구현했으며 실기기 검증과 AWS 서버 배포·연결은 아직 수행하지 않았다. 나머지 디렉터리는 **실제 소스코드를 처음 추가할 때에만** 생성한다. 빈 폴더나 `.gitkeep` 파일을 만들 필요는 없다.
 
 ```text
-hardware/    # PC 카메라 수동 미리보기 실험
+hardware/    # PC 카메라 탐지·품질 검사·수동 저장 실험
 Raspberry_Pi/ # Raspberry Pi 자동 촬영·YOLOE·센서·LED·오프라인 큐
 backend/     # AWS Lambda·PaddleOCR·DynamoDB·S3·API 및 이벤트 처리
 frontend/    # React·TypeScript·Tailwind CSS·PWA·Three.js 반응형 웹

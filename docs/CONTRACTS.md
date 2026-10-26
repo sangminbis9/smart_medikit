@@ -34,6 +34,18 @@
 
 **순서:** Pi는 한 세션을 업로드하고 `GET /capture-events/{event_id}`에서 처리가 끝났는지 2~3초 간격으로 조회한 뒤 다음 세션을 업로드한다. 중간에 촬영한 세션은 로컬 큐에 보관한다.
 
+### 2.1 Pi 구현 상태와 배포 전 확정 항목 (2026-10-26)
+
+`Raspberry_Pi/`는 위 세션 필드와 처리 상태를 사용한 로컬 영속 큐를 구현한다. `sequence`는 세션 시작 때 할당하며 재부팅·재전송해도 `event_id`와 함께 유지한다. 촬영 실패 이미지의 키는 `null`이다. 중단된 열린 세션은 확보한 사진만 보존한 채 불완전 세션으로 복구한다. 내부 사진 실패를 받은 AWS가 기존 위치 보존 및 `POSITION_UNCERTAIN`을 적용해야 하며, Pi는 재고·입출고를 확정하지 않는다.
+
+서버 구현은 아직 없으므로 기본 `aws.enabled=false`다. 구현된 S3 전송 어댑터는 다음 배포 계약이 실제로 확인된 경우에만 `contract_confirmed=true`로 활성화한다. 아래는 **어댑터가 지원하는 연결 조건**이며 배포된 서버를 뜻하지 않는다.
+
+- 명시한 `prefix/<session_id>/package.jpg`, `interior.jpg`를 먼저 업로드하고, 설정한 `manifest_name` JSON을 마지막에 올린다. JSON의 이미지 키는 실제 prefix로 치환한다. Lambda는 완료 객체만 트리거하고 이미지별 트리거를 함께 사용하지 않는다.
+- 상태 조회의 **전체 HTTPS URL 템플릿**, 인증 방식(SigV4 `execute-api` 또는 외부 파일의 bearer 토큰), 응답 `processing_status`와 기존 enum을 확정한다. 미구현 `POST /capture-events`나 업로드 URL 발급 API를 자동 호출하지 않는다.
+- 서버는 `event_id` 멱등성, `sequence` 순서, `FAILED` 이벤트의 동일 ID 재처리와 중복 완료 객체를 처리한다. `PENDING`/`PROCESSING`은 계속 조회하고 `FAILED`/통신 오류는 큐 선두를 보존한다. `COMPLETED`/`REVIEW_REQUIRED` 확인 후에만 임시 사진을 삭제하고 다음 세션을 전송한다.
+- S3·API 권한은 외부에서 갱신되는 단기 AWS 세션 자격증명으로 제한한다. 이 구현은 IAM·버킷 공개 설정·Lambda·API를 생성하거나 변경하지 않는다.
+- YOLOE-26n의 결과는 Pi 내부 포장 **후보**이며 이벤트에 약품명·복용·재고 확정값을 추가하지 않는다. 한글 OCR과 최종 식별은 기존 AWS 책임을 유지한다. 포장 사진이 없으면 내부 전후 비교와 확인 요청 판단도 AWS에서 수행한다.
+
 ## 3. 이벤트 처리 상태
 
 | `processing_status` | 의미 | Pi 동작 |

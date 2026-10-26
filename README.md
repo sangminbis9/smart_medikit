@@ -21,10 +21,13 @@
 
 ## 개발 영역
 
-`frontend/`에 웹 소스가 있고, [`hardware/`](hardware/README.md)에 DroidCam/OpenCV 기반 **PC 미리보기·수동 프레임 저장 실험**이 있다. 실제 Pi 자동 촬영과 AWS 연동은 아직 구현하지 않았다. 나머지 디렉터리는 **실제 소스코드를 처음 추가할 때에만** 생성한다. 빈 폴더나 `.gitkeep` 파일을 만들 필요는 없다.
+[`Raspberry_Pi/`](Raspberry_Pi/README.md)는 YOLOE-26n 후보 감지, Picamera2 자동 촬영, GPIO 및 영속 순차 큐를 구현한다. 요청에 따라 Pi 제어 소스는 이 폴더에 두며, 기존 `hardware/`의 PC 카메라 수동 미리보기 실험은 유지한다. AWS는 배포 계약 미확정으로 기본 비활성화되어 있다.
+
+`frontend/`에 웹 소스가 있고, [`hardware/`](hardware/README.md)에 DroidCam/OpenCV 기반 **PC 미리보기·수동 프레임 저장 실험**이 있다. Pi 자동 촬영은 `Raspberry_Pi/`에 구현했으며 실기기 검증과 AWS 서버 배포·연결은 아직 수행하지 않았다. 나머지 디렉터리는 **실제 소스코드를 처음 추가할 때에만** 생성한다. 빈 폴더나 `.gitkeep` 파일을 만들 필요는 없다.
 
 ```text
-hardware/    # Raspberry Pi 촬영·센서·LED·오프라인 큐 (Python/OpenCV)
+hardware/    # PC 카메라 수동 미리보기 실험
+Raspberry_Pi/ # Raspberry Pi 자동 촬영·YOLOE·센서·LED·오프라인 큐
 backend/     # AWS Lambda·PaddleOCR·DynamoDB·S3·API 및 이벤트 처리
 frontend/    # React·TypeScript·Tailwind CSS·PWA·Three.js 반응형 웹
 ```

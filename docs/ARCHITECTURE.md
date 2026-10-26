@@ -35,7 +35,7 @@
 
 | 영역 | 담당 | 입력 | 출력 / 책임 |
 |---|---|---|---|
-| `hardware/` | Raspberry Pi / 비전 | 개폐 센서, 카메라 | 촬영 세션, 전처리 이미지, 안정적인 로컬 전송 큐, LED |
+| `Raspberry_Pi/` (`hardware/`는 PC 입력 실험 유지) | Raspberry Pi / 비전 | 개폐 센서, 카메라 | YOLOE-26n 후보 감지, 촬영 세션, 전처리 이미지, 영속 순차 전송 큐, LED |
 | `backend/` | AWS / OCR / DB | 세션·보완 이미지, 외부 의약품 데이터, 웹 요청·브라우저 구독 | 제품 식별, 상태 갱신, 재고/복용 추정, API, WebSocket, 보완 OCR·이미지 삭제, Web Push 발송·구독 저장·VAPID 비밀키 관리 |
 | `frontend/` | React / PWA / Three.js | 기존 Figma, 조회 API, 실시간 이벤트, Web Push | PC·Android·iPhone 반응형 화면, 촬영/파일 선택·검토·정정, Three.js 직접 연동, Manifest·Service Worker·구독·권한·설치 안내, Amplify·GitHub 배포 연동 |
 

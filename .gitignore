@@ -53,3 +53,7 @@ secrets/
 *.ckpt
 *.tflite
 *.safetensors
+Raspberry_Pi/*.ts
+Raspberry_Pi/models/
+Raspberry_Pi/config.toml
+Raspberry_Pi/Ultralytics/

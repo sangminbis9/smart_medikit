@@ -1,0 +1,68 @@
+# 상대 경로는 이 설정 파일의 폴더를 기준으로 한다.
+box_id = "prototype-01"
+pi_model = "unconfirmed"
+data_dir = "../local_data/raspberry_pi"
+
+[camera]
+preview_size = [768, 432]
+still_size = [4608, 2592]
+fps = 15
+timeout_seconds = 3.0
+still_delay_frames = 3
+camera_index = 0
+restart_seconds = 2.0
+jpeg_quality = 95
+
+[gpio]
+# 실제 배선 후 BCM 번호를 지정한다. -1은 미설정으로 실행을 차단한다.
+lid_pin = -1
+lamp_pin = -1
+white_pin = -1
+blue_pin = -1
+green_pin = -1
+yellow_pin = -1
+red_pin = -1
+lid_pull_up = true
+lid_closed_when_active = true
+output_active_high = true
+debounce_seconds = 0.08
+
+[detector]
+model_path = "models/yoloe-26n-medikit.pt"
+source_model = "yoloe-26n-seg.pt"
+prompts = ["medicine box", "prescription medicine bag", "pill blister pack", "syrup bottle", "ointment tube", "medicine pouch", "cardboard box", "bottle"]
+image_size = 320
+confidence = 0.25
+threads = 2
+interval_seconds = 0.4
+max_age_seconds = 1.2
+
+[vision]
+analysis_width = 320
+warmup_seconds = 0.6
+stable_seconds = 1.0
+motion_threshold = 0.018
+pixel_threshold = 25
+minimum_change = 0.08
+min_area = 0.01
+max_area = 0.9
+min_iou = 0.6
+sharpness_threshold = 65.0
+still_sharpness_threshold = 65.0
+capture_motion_threshold = 0.08
+close_settle_seconds = 0.75
+close_attempt_seconds = 3.0
+close_retries = 2
+package_retry_seconds = 1.0
+
+[aws]
+# 서버 구현이 없으므로 기본값은 로컬 큐 저장이다.
+enabled = false
+contract_confirmed = false
+poll_seconds = 2.5
+bucket = ""
+region = ""
+prefix = ""
+manifest_name = ""
+status_url_template = ""
+auth_mode = "sigv4"

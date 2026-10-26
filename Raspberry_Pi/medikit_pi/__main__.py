@@ -1,8 +1,9 @@
-"""Pi 실기기 실행, 영상 재생 검증, 모델 준비 명령을 제공한다."""
+"""Pi 실행, PC 웹캠 탐지, 영상 재생 검증, 모델 준비 명령을 제공한다."""
 
 import argparse
 import json
 import logging
+import os
 import queue
 import threading
 import time
@@ -48,6 +49,16 @@ def parse_args(argv=None):
     commands.add_parser("run", help="Pi 카메라·GPIO로 실행")
     commands.add_parser("prepare-model", help="사전 학습 모델에 포장 설명을 저장")
     commands.add_parser("check-config", help="설정 형식 검사")
+    webcam = commands.add_parser("webcam", help="PC 웹캠에서 실시간 포장 후보만 표시")
+    webcam.add_argument("--camera", type=int, default=0, help="웹캠 번호")
+    webcam.add_argument(
+        "--backend",
+        choices=("auto", "dshow", "msmf"),
+        default="dshow" if os.name == "nt" else "auto",
+        help="Windows 기본 dshow, 연결 실패 시 msmf 사용",
+    )
+    webcam.add_argument("--confidence", type=float, help="탐지 신뢰도 기준(0 초과 1 이하)")
+    webcam.add_argument("--interval", type=float, help="추론 요청 최소 간격(초)")
     video = commands.add_parser("video", help="영상 시각과 개폐 기록으로 로컬 검증")
     video.add_argument("--input", required=True, type=Path)
     video.add_argument("--lid-events", required=True, type=Path)
@@ -56,7 +67,15 @@ def parse_args(argv=None):
     )
     video.add_argument("--show", action="store_true", help="미리보기 창 표시")
     video.add_argument("--report", type=Path, help="촬영 상태 변화와 처리시간 보고서")
-    return parser.parse_args(argv)
+    args = parser.parse_args(argv)
+    if args.command == "webcam":
+        if args.camera < 0:
+            parser.error("웹캠 번호는 0 이상이어야 합니다.")
+        if args.confidence is not None and not 0 < args.confidence <= 1:
+            parser.error("신뢰도는 0 초과 1 이하이어야 합니다.")
+        if args.interval is not None and not 0 < args.interval < float("inf"):
+            parser.error("추론 간격은 양의 유한한 값이어야 합니다.")
+    return args
 
 
 # 비동기 전송 결과를 메인 루프에 전달하고 네트워크 대기를 촬영과 분리한다.
@@ -275,6 +294,10 @@ def main(argv=None):
             prepare_model(settings["source_model"], settings["model_path"], settings["prompts"])
             LOGGER.info("포장 후보 설명을 저장한 모델 준비 완료")
             return 0
+        if args.command == "webcam":
+            from .webcam import run_webcam
+
+            return run_webcam(config, args)
         return run_video(config, args) if args.command == "video" else run_hardware(config)
     except Exception as error:
         LOGGER.error("실행 실패(%s). 설정·모델·장치 연결을 확인하세요.", type(error).__name__)

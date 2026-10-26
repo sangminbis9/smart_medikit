@@ -76,6 +76,29 @@ python -m medikit_pi --config config.toml run
 
 ## 하드웨어 없는 영상 테스트
 
+### PC 웹캠 실시간 탐지 전용 모드
+
+웹캠 또는 DroidCam의 현재 영상과 YOLOE 후보 상자·영문 포장 분류·신뢰도를 확인할 수 있다. **자동 촬영·사진 저장·GPIO·세션 큐·AWS 전송은 실행하지 않는다.** 핀 설정 없이 `config.example.toml`을 그대로 사용할 수 있다. 기존 가상환경과 준비된 모델이 있는 현재 PC에서는 저장소 루트 PowerShell에서 실행한다.
+
+```powershell
+cd Raspberry_Pi
+.\.venv\Scripts\python.exe -m medikit_pi --config config.example.toml webcam --camera 0
+```
+
+다른 PC에서는 Python 3.11 이상으로 가상환경을 만들고 `requirements.txt`를 설치한 뒤, 같은 설정으로 `prepare-model`을 한 번 실행한다. Picamera2·GPIO 패키지는 필요 없다. 준비된 모델이 없다면 다음 명령을 먼저 실행한다.
+
+```powershell
+.\.venv\Scripts\python.exe -m medikit_pi --config config.example.toml prepare-model
+```
+
+창의 **왼쪽은 현재 카메라 영상**, **오른쪽은 실제 검출에 사용한 프레임과 후보 상자**다. 비동기 추론이 늦게 끝난 상자를 다른 현재 프레임에 겹쳐 표시하지 않는다. 오른쪽이 검으면 아직 결과가 없거나 `detector.max_age_seconds`를 넘긴 상태다. 기본 신뢰도는 0.25, 추론 요청 간격은 0.4초이며 `--confidence 0.15 --interval 0.1`처럼 이번 실행만 조정할 수 있다. 낮은 신뢰도는 오탐을 늘릴 수 있다. CPU가 느린 경우 설정의 입력 크기·결과 유효시간을 조정한다.
+
+카메라가 다르면 `--camera 1` 또는 `2`를 사용한다. Windows 연결 실패 시 `--backend msmf`를 추가하고, DroidCam은 PC 클라이언트에서 영상이 나오는지 먼저 확인한다. `Q`, `Esc`, 창 닫기 또는 `Ctrl+C`로 종료한다. 이 화면은 포장 후보만 보여주며 한글 약품명이나 제품을 식별하는 화면이 아니다. 실제 카메라·GUI 표시는 해당 PC에서 확인해야 한다.
+
+2026-10-26 검증: 탐지 전용 모드 테스트 10개 추가 후 전체 72개와 하위 검증 3개 통과. 실제 준비 모델의 CPU 추론 결과를 두 화면으로 합성하는 경로도 확인했다. 실제 웹캠과 화면 창은 이번 검증에서 열지 않았다.
+
+### 녹화 영상으로 촬영 알고리즘 검증
+
 Windows/Linux에서 Python 3.11 이상 가상환경에 `requirements-dev.txt`를 설치하고 모델을 준비한다. Picamera2와 GPIO 패키지는 영상 모드에 필요 없다. 실제 환자 정보가 없는 포장 영상만 사용한다.
 
 영상과 같은 시간축의 개폐 기록을 `../local_data/lid-events.json`에 저장한다. `at`는 영상 시작부터 초, `open`은 열린 상태다. 마지막 닫힘 이후 최소 2~3초 이상의 내부 영상(실패 시도 검증은 10초 이상)을 포함한다.

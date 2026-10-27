@@ -10,7 +10,7 @@ import numpy as np
 @dataclass(frozen=True)
 class QualityThresholds:
     # 초기 비교용 값이며 실제 카메라·포장·OCR 결과로 보정한 합격 기준이 아니다.
-    min_sharpness: float = 100.0
+    min_sharpness: float = 500.0
     min_brightness: float = 50.0
     max_brightness: float = 210.0
     max_dark_ratio: float = 0.30

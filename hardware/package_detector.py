@@ -4,6 +4,7 @@ import math
 import os
 from dataclasses import dataclass
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import cv2
 import numpy as np
@@ -12,6 +13,9 @@ if __package__:
     from .image_quality import PhotoQuality, WARNING_MESSAGES
 else:
     from image_quality import PhotoQuality, WARNING_MESSAGES
+
+if TYPE_CHECKING:
+    from hardware.auto_capture import AutoCaptureGate
 
 
 MODEL_DIRECTORY = Path(__file__).resolve().parents[1] / "local_data" / "models" / "yoloe"
@@ -148,8 +152,9 @@ class PackageDetector:
         *,
         candidate_number: int | None = None,
         candidate_count: int = 0,
+        auto_capture: "AutoCaptureGate | None" = None,
     ) -> np.ndarray:
-        image = self._image.new("RGB", (800, 220), (25, 29, 36))
+        image = self._image.new("RGB", (800, 260 if auto_capture is not None else 220), (25, 29, 36))
         draw = self._image_draw.Draw(image)
         text_color = (230, 234, 240)
         title_color = text_color
@@ -168,6 +173,12 @@ class PackageDetector:
                     "Show a package to the camera." if candidate_count == 0 else "S: freeze | Tab: select target | Enter: save",
                     "Quality details appear for a single or selected target.",
                 ]
+            if auto_capture is not None and candidate_count > 1:
+                rows = (
+                    ["자동 촬영은 후보가 하나일 때만 진행합니다.", "수동 선택: S → Tab으로 대상 선택 → Enter로 저장"]
+                    if self.use_korean_labels
+                    else ["Automatic capture needs exactly one target.", "Manual selection: S | Tab: next target | Enter: save"]
+                )
         else:
             title_color = (255, 190, 80) if report.warnings else (95, 220, 160)
             if self.use_korean_labels:
@@ -210,7 +221,34 @@ class PackageDetector:
         )
         if report is None and candidate_count == 0:
             footer = "대상이 없어 저장하지 않습니다." if self.use_korean_labels else "No target: nothing will be saved."
-        draw.text((12, 190), footer, font=self.font, fill=(170, 180, 195), anchor="lt")
+        if auto_capture is not None:
+            # 품질 판정과 자동 저장 대기·중복 방지 상태를 구분해 표시한다.
+            if self.use_korean_labels:
+                messages = {
+                    "waiting": "자동: 촬영할 대상 대기",
+                    "multiple": "자동: 포장을 하나만 보여주세요.",
+                    "quality": "자동: 품질 개선 대기 · 위의 주의 사유를 확인하세요.",
+                    "holding": f"자동: 양호 유지 {auto_capture.held_seconds:.1f} / {auto_capture.hold_seconds:.1f}초",
+                    "ready": "자동: 저장 준비 중",
+                    "locked": "자동: 저장 완료 · 포장을 화면 밖으로 치워주세요.",
+                    "absent": f"자동: 다음 촬영 준비 {auto_capture.absent_seconds:.1f} / {auto_capture.rearm_seconds:.1f}초 (대상 없음)",
+                }
+                footer = "S: 수동 저장 | 저장 완료는 약품 식별 성공이 아님"
+            else:
+                messages = {
+                    "waiting": "Auto: waiting for a target",
+                    "multiple": "Auto: show only one package.",
+                    "quality": "Auto: waiting for better quality; check warnings above.",
+                    "holding": f"Auto: quality held {auto_capture.held_seconds:.1f} / {auto_capture.hold_seconds:.1f}s",
+                    "ready": "Auto: ready to save",
+                    "locked": "Auto: saved; remove the package from view.",
+                    "absent": f"Auto: rearming {auto_capture.absent_seconds:.1f} / {auto_capture.rearm_seconds:.1f}s (no target)",
+                }
+                footer = "S: manual save | Saving does not confirm medicine identity"
+            draw.text((12, 190), messages[auto_capture.status], font=self.font, fill=text_color, anchor="lt")
+            draw.text((12, 222), footer, font=self.font, fill=(170, 180, 195), anchor="lt")
+        else:
+            draw.text((12, 190), footer, font=self.font, fill=(170, 180, 195), anchor="lt")
         return cv2.cvtColor(np.asarray(image), cv2.COLOR_RGB2BGR)
 
     # 탐지 결과를 다시 추론하지 않고 표시용 복사본에 번호와 선택 상태를 그린다.

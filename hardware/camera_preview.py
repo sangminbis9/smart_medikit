@@ -1,10 +1,12 @@
-"""PC에 연결된 카메라 영상을 확인하고 테스트용 프레임을 수동 저장한다."""
+"""PC 카메라에서 포장 품질을 확인하고 수동 또는 조건부 자동으로 저장한다."""
 
 import argparse
 from datetime import datetime
+import math
 import os
 from pathlib import Path
 import sys
+import time
 from uuid import uuid4
 from typing import TYPE_CHECKING
 
@@ -12,9 +14,11 @@ import cv2
 import numpy as np
 
 if __package__:
-    from .image_quality import PhotoQuality, WARNING_MESSAGES, assess_photo
+    from .auto_capture import AutoCaptureGate
+    from .image_quality import DEFAULT_THRESHOLDS, PhotoQuality, QualityThresholds, WARNING_MESSAGES, assess_photo
 else:
-    from image_quality import PhotoQuality, WARNING_MESSAGES, assess_photo
+    from auto_capture import AutoCaptureGate
+    from image_quality import DEFAULT_THRESHOLDS, PhotoQuality, QualityThresholds, WARNING_MESSAGES, assess_photo
 
 if TYPE_CHECKING:
     from hardware.package_detector import PackageDetection, PackageDetector
@@ -51,11 +55,32 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--conf", type=float, default=0.25, help="탐지 점수의 최소값 (0 초과 1 이하, 기본값: 0.25)"
     )
+    parser.add_argument(
+        "--min-sharpness",
+        type=float,
+        default=DEFAULT_THRESHOLDS.min_sharpness,
+        help="품질 검사의 선명도 최소값 (기본값: %(default)g, --detect/--auto-capture에 적용)",
+    )
+    parser.add_argument(
+        "--auto-capture", action="store_true", help="품질 양호가 유지되면 한 번 자동 저장한다 (--detect 포함)"
+    )
+    parser.add_argument(
+        "--hold-seconds", type=float, default=2.0, help="자동 저장 전 양호 유지 시간 (기본값: 2초)"
+    )
+    parser.add_argument(
+        "--rearm-seconds", type=float, default=1.5, help="다음 자동 촬영을 허용할 연속 미감지 시간 (기본값: 1.5초)"
+    )
     args = parser.parse_args(argv)
     if args.camera < 0:
         parser.error("카메라 번호는 0 이상의 정수여야 합니다.")
     if not 0 < args.conf <= 1:
         parser.error("--conf는 0 초과 1 이하의 수여야 합니다.")
+    if not math.isfinite(args.min_sharpness) or args.min_sharpness < 0:
+        parser.error("--min-sharpness는 0 이상의 유한한 수여야 합니다.")
+    for option, value in (("--hold-seconds", args.hold_seconds), ("--rearm-seconds", args.rearm_seconds)):
+        if not math.isfinite(value) or value <= 0:
+            parser.error(f"{option}는 0보다 큰 유한한 수여야 합니다.")
+    args.detect = args.detect or args.auto_capture
     return args
 
 
@@ -159,13 +184,17 @@ def select_detection(
             redraw = True
 
 
-# 선택한 카메라의 미리보기를 표시하고 수동 회전, 저장 및 종료를 처리한다.
+# 카메라의 품질 판정과 수동·자동 저장을 연결하고 회전 및 종료를 처리한다.
 def run_preview(
     camera_index: int,
     backend: str,
     rotation: int = 0,
     detector: "PackageDetector | None" = None,
+    auto_capture: AutoCaptureGate | None = None,
+    thresholds: QualityThresholds = DEFAULT_THRESHOLDS,
 ) -> int:
+    if auto_capture is not None and detector is None:
+        raise ValueError("자동 촬영에는 포장 탐지기가 필요합니다.")
     capture = cv2.VideoCapture()
     window_created = False
     rotation_codes = {
@@ -188,12 +217,19 @@ def run_preview(
         print(f"카메라 {camera_index}번 / 입력 방식: {backend}")
         print("영상 창을 선택한 뒤 R: 시계 방향 90도 회전, S: 저장, Q 또는 Esc: 종료")
         print(f"수동 회전: {rotation}도. 표시 방향 그대로 저장하며 휴대폰 방향은 자동 감지하지 않습니다.")
-        print("개인정보가 없는 테스트용 포장만 사용하세요. 자동 촬영·약품 식별 기능은 없습니다.")
+        print("개인정보가 없는 테스트용 포장만 사용하세요. 최종 약품 식별이나 서버 전송은 하지 않습니다.")
         if detector is not None:
             print("YOLOE-26n: 포장 후보를 표시합니다. 탐지 점수는 약품 식별 정확도가 아닙니다.")
+            print(f"선명도 기준: {thresholds.min_sharpness:g} 미만이면 흐림 의심으로 표시합니다.")
             print("S: 10% 여백을 포함한 박스 영역 저장. 후보가 여러 개면 Tab으로 고른 뒤 Enter를 누르세요.")
             print("저장 사진에는 박스·라벨을 넣지 않습니다. 탐지 중에는 영상 갱신이 느려질 수 있습니다.")
             print("화면 아래에 사진 품질을 표시합니다. 실험 기준의 주의 표시이며 S 저장을 차단하지 않습니다.")
+        if auto_capture is not None:
+            print(
+                f"자동 촬영: 후보 하나의 품질이 {auto_capture.hold_seconds:g}초 양호하면 한 번 저장합니다. "
+                f"모든 후보가 {auto_capture.rearm_seconds:g}초 감지되지 않아야 다음 촬영을 허용합니다."
+            )
+            print("각 조건은 최소 3개 프레임에서 확인합니다. S 수동 저장도 성공하면 자동 중복 저장을 막습니다.")
 
         while True:
             received, frame = capture.read()
@@ -205,6 +241,9 @@ def run_preview(
                 )
                 return 1
 
+            # 처리하지 못한 시간이나 수동 선택에 머문 시간을 양호한 관측으로 세지 않는다.
+            observed_at = time.monotonic() if auto_capture is not None else 0.0
+
             # 탐지 좌표와 저장 이미지가 일치하도록 회전을 먼저 적용한다.
             if rotation:
                 frame = cv2.rotate(frame, rotation_codes[rotation])
@@ -214,19 +253,26 @@ def run_preview(
             detections = []
             qualities = []
             quality_panel = None
+            auto_ready = False
             if detector is not None:
                 try:
                     detections = detector.detect(frame)
                     # 박스·라벨을 그리기 전 저장할 원본 영역으로만 품질을 계산한다.
                     qualities = [
-                        assess_photo(detection.crop(frame), padding_clipped=detection.padding_clipped)
+                        assess_photo(
+                            detection.crop(frame), padding_clipped=detection.padding_clipped, thresholds=thresholds
+                        )
                         for detection in detections
                     ]
+                    if auto_capture is not None:
+                        auto_ready = auto_capture.update(detections, qualities, observed_at)
                     preview_frame = detector.annotate(frame, detections)
+                    panel_options = {} if auto_capture is None else {"auto_capture": auto_capture}
                     quality_panel = detector.make_quality_panel(
                         qualities[0] if len(qualities) == 1 else None,
                         candidate_number=1 if len(qualities) == 1 else None,
                         candidate_count=len(detections),
+                        **panel_options,
                     )
                 except Exception as error:
                     print(f"탐지·품질 검사 실패로 종료합니다: {error}", file=sys.stderr)
@@ -241,10 +287,17 @@ def run_preview(
 
             if key in (ord("r"), ord("R")):
                 rotation = (rotation + 90) % 360
+                if auto_capture is not None:
+                    # 회전 전 좌표의 유지 시간은 버리되 이미 저장한 대상의 잠금은 보존한다.
+                    auto_capture.reset_pending()
                 print(f"수동 회전: {rotation}도. 같은 설정으로 시작하려면 --rotate {rotation}")
                 continue
 
-            if key in (ord("s"), ord("S")):
+            manual_save = key in (ord("s"), ord("S"))
+            if manual_save or auto_ready:
+                if auto_capture is not None and manual_save:
+                    # 고정 화면에서 선택하는 동안 자동 촬영의 관측 시간이 흐르지 않게 한다.
+                    auto_capture.reset_pending()
                 selected_index = 0
                 if detector is not None:
                     if not detections:
@@ -269,13 +322,21 @@ def run_preview(
                         print_quality(qualities[selected_index])
                         # 표시용 박스나 라벨이 섞이지 않도록 원본 배열에서만 자른다.
                         cropped = selected.crop(frame)
-                        saved_path = save_frame(cropped, CAPTURE_DIRECTORY, prefix="crop")
+                        saved_path = save_frame(
+                            cropped, CAPTURE_DIRECTORY, prefix="crop" if manual_save else "auto_crop"
+                        )
                         if selected.padding_clipped:
                             print("화면 가장자리 때문에 10% 여백 일부를 확보하지 못했습니다.")
                 except (OSError, ValueError, cv2.error) as error:
+                    if auto_capture is not None:
+                        # 저장 실패를 성공으로 잠그지 않고 새 양호 구간을 확인한 뒤 재시도한다.
+                        auto_capture.reset_pending()
                     print(f"사진 저장 실패: {error}", file=sys.stderr)
                 else:
-                    print(f"테스트 프레임 저장 완료: {saved_path}")
+                    if auto_capture is not None:
+                        auto_capture.mark_saved()
+                    message = "테스트 프레임 저장 완료" if manual_save else "자동 촬영 저장 완료"
+                    print(f"{message}: {saved_path}")
 
     except KeyboardInterrupt:
         print("미리보기를 종료합니다.")
@@ -311,7 +372,9 @@ def main(argv: list[str] | None = None) -> int:
                 file=sys.stderr,
             )
             return 1
-    return run_preview(args.camera, args.backend, args.rotate, detector)
+    auto_capture = AutoCaptureGate(args.hold_seconds, args.rearm_seconds) if args.auto_capture else None
+    thresholds = QualityThresholds(min_sharpness=args.min_sharpness)
+    return run_preview(args.camera, args.backend, args.rotate, detector, auto_capture, thresholds)
 
 
 if __name__ == "__main__":

@@ -11,6 +11,7 @@ import cv2
 import numpy as np
 
 from hardware import camera_preview
+from hardware.auto_capture import AutoCaptureGate
 from hardware.package_detector import PackageDetection
 
 
@@ -38,6 +39,194 @@ class PreviewTests(unittest.TestCase):
         detector = Mock()
         detector.make_quality_panel.return_value = None
         return detector
+
+    # 품질이 양호한 합성 영상과 가짜 시계로 자동 촬영의 저장 결과를 검증한다.
+    def make_auto_detector(self, timestamps, contrast=100):
+        pattern = ((np.indices((240, 320)).sum(axis=0) // 4) % 2 * contrast + 75).astype(np.uint8)
+        self.frame = np.repeat(pattern[:, :, None], 3, axis=2)
+        self.capture.read.return_value = (True, self.frame)
+        self.enterContext(patch.object(camera_preview.time, "monotonic", side_effect=timestamps))
+        detector = self.make_detector()
+        detector.detect.return_value = [PackageDetection(0, 0.8, (20, 20, 300, 220))]
+        detector.annotate.return_value = np.full_like(self.frame, 255)
+        return detector
+
+    # 생략한 선명도 기준은 500이며 이전 기준만 통과하는 영상의 자동 저장을 막는다.
+    def test_default_sharpness_blocks_frame_below_500(self):
+        detector = self.make_auto_detector([0, 1, 2, 3], contrast=10)
+        self.keys.side_effect = [-1, -1, -1, ord("q")]
+        with patch.object(camera_preview, "load_detector", return_value=detector):
+            self.assertEqual(camera_preview.main(["--auto-capture"]), 0)
+        report = detector.make_quality_panel.call_args.args[0]
+        self.assertGreater(report.sharpness, 100)
+        self.assertLess(report.sharpness, 500)
+        self.assertIn("blur", report.warnings)
+        self.save.assert_not_called()
+        self.assertEqual(camera_preview.parse_args([]).min_sharpness, 500)
+
+    # 같은 영상에서 명령행 기준만 바꾸면 품질 표시와 자동 저장 여부가 함께 바뀐다.
+    def test_cli_sharpness_changes_warning_and_auto_save_together(self):
+        reports = []
+        for minimum, expected_saves in ((100, 1), (500, 0)):
+            with self.subTest(minimum=minimum):
+                detector = self.make_auto_detector([0, 1, 2, 3], contrast=10)
+                self.keys.side_effect = [-1, -1, -1, ord("q")]
+                self.save.reset_mock()
+                with patch.object(camera_preview, "load_detector", return_value=detector):
+                    self.assertEqual(camera_preview.main([
+                        "--auto-capture", "--min-sharpness", str(minimum),
+                    ]), 0)
+                report = detector.make_quality_panel.call_args.args[0]
+                reports.append(report)
+                self.assertEqual("blur" in report.warnings, minimum == 500)
+                self.assertEqual(self.save.call_count, expected_saves)
+        self.assertEqual(reports[0].sharpness, reports[1].sharpness)
+        self.assertEqual(reports[0].mean_brightness, reports[1].mean_brightness)
+
+    # 사용자 기준에서 주의인 후보도 수동 선택한 영역의 동일한 검사 결과로 저장한다.
+    def test_custom_sharpness_applies_to_manual_candidate_selection(self):
+        detector = self.make_auto_detector([])
+        detector.detect.return_value.append(PackageDetection(1, 0.9, (160, 30, 300, 210)))
+        self.keys.side_effect = [ord("s"), 9, 13, ord("q")]
+        with (
+            patch.object(camera_preview, "load_detector", return_value=detector),
+            patch.object(camera_preview, "assess_photo", wraps=camera_preview.assess_photo) as assess,
+        ):
+            self.assertEqual(camera_preview.main(["--detect", "--min-sharpness", "1000000000"]), 0)
+        self.assertTrue(all(call.kwargs["thresholds"].min_sharpness == 1_000_000_000 for call in assess.call_args_list))
+        selected_report = detector.make_quality_panel.call_args_list[2].args[0]
+        self.assertEqual((selected_report.width, selected_report.height), (140, 180))
+        self.assertIn("blur", selected_report.warnings)
+        self.save.assert_called_once()
+        np.testing.assert_array_equal(self.save.call_args.args[0], self.frame[30:210, 160:300])
+        self.assertIn("흐림 의심", self.output.getvalue())
+
+    # 잘못된 선명도 기준은 모델 다운로드나 카메라 연결 전에 거부하고 0은 허용한다.
+    def test_invalid_sharpness_is_rejected_before_model_load(self):
+        with patch.object(camera_preview, "load_detector") as loader:
+            for value in ("-1", "nan", "inf", "-inf"):
+                with self.subTest(value=value), self.assertRaises(SystemExit) as error:
+                    camera_preview.main(["--auto-capture", f"--min-sharpness={value}"])
+                self.assertEqual(error.exception.code, 2)
+        self.assertEqual(camera_preview.parse_args(["--min-sharpness", "0"]).min_sharpness, 0)
+        loader.assert_not_called()
+        self.capture_factory.assert_not_called()
+
+    # 자동 옵션만으로 탐지를 켜고 현재 원본 영역을 한 번 저장한 뒤 계속 잠근다.
+    def test_auto_capture_saves_once_and_uses_unannotated_crop(self):
+        detector = self.make_auto_detector([0, 1, 2, 3, 4, 5])
+        self.keys.side_effect = [-1] * 5 + [ord("q")]
+        with patch.object(camera_preview, "load_detector", return_value=detector) as loader:
+            self.assertEqual(camera_preview.main(["--auto-capture", "--backend", "msmf"]), 0)
+        loader.assert_called_once_with(0.25)
+        self.save.assert_called_once()
+        np.testing.assert_array_equal(self.save.call_args.args[0], self.frame[20:220, 20:300])
+        self.assertEqual(self.save.call_args.kwargs, {"prefix": "auto_crop"})
+        self.assertEqual(detector.detect.call_count, 6)
+        self.assertEqual(detector.make_quality_panel.call_args.kwargs["auto_capture"].status, "locked")
+        self.assertIn("자동 촬영 저장 완료", self.output.getvalue())
+
+    # 옵션의 유지 시간을 적용하되 준비된 프레임에서 종료를 누르면 저장하지 않는다.
+    def test_custom_hold_and_quit_take_priority_over_auto_save(self):
+        detector = self.make_auto_detector([0, 1, 2, 3])
+        self.keys.side_effect = [-1, -1, -1, ord("q")]
+        with patch.object(camera_preview, "load_detector", return_value=detector):
+            self.assertEqual(camera_preview.main(["--auto-capture", "--hold-seconds", "3"]), 0)
+        self.save.assert_not_called()
+
+    # 양호 유지 중 품질 경고가 있으면 그 전까지의 시간을 합산하지 않는다.
+    def test_quality_warning_restarts_auto_hold(self):
+        detector = self.make_auto_detector([0, 1, 2, 3, 4, 5, 6])
+        dark_frame = np.zeros_like(self.frame)
+        self.capture.read.side_effect = [(True, image) for image in (
+            self.frame, self.frame, dark_frame, self.frame, self.frame, self.frame, self.frame,
+        )]
+        self.keys.side_effect = [-1] * 6 + [ord("q")]
+        save_reads = []
+
+        # 저장에 사용된 프레임 순서를 기록한다.
+        def record_save(*args, **kwargs):
+            save_reads.append(self.capture.read.call_count)
+            return Path("synthetic.jpg")
+
+        self.save.side_effect = record_save
+        self.assertEqual(camera_preview.run_preview(0, "msmf", detector=detector, auto_capture=AutoCaptureGate()), 0)
+        self.assertEqual(save_reads, [6])
+
+    # 잠금 후 짧은 미감지는 무시하고 연속 미감지 확인 뒤 새 양호 구간에서만 다시 저장한다.
+    def test_auto_capture_rearms_after_continuous_absence(self):
+        detector = self.make_auto_detector([0, 1, 2, 3, 3.5, 4, 5, 5.75, 6.5, 7, 8, 9, 10])
+        target = detector.detect.return_value
+        detector.detect.side_effect = [target, target, target, [], target, target, [], [], [], target, target, target, target]
+        self.keys.side_effect = [-1] * 12 + [ord("q")]
+        self.assertEqual(camera_preview.run_preview(0, "msmf", detector=detector, auto_capture=AutoCaptureGate()), 0)
+        self.assertEqual(self.save.call_count, 2)
+
+    # 후보가 여러 개이면 임의의 하나를 자동 저장하지 않는다.
+    def test_multiple_candidates_block_auto_capture(self):
+        detector = self.make_auto_detector([0, 1, 2, 3])
+        detector.detect.return_value.append(PackageDetection(1, 0.9, (30, 30, 290, 210)))
+        self.keys.side_effect = [-1, -1, -1, ord("q")]
+        self.assertEqual(camera_preview.run_preview(0, "msmf", detector=detector, auto_capture=AutoCaptureGate()), 0)
+        self.save.assert_not_called()
+
+    # 저장 오류는 성공 잠금을 만들지 않으며 새 유지 구간 뒤 재시도해 한 번 성공한다.
+    def test_auto_save_failure_retries_after_new_hold(self):
+        detector = self.make_auto_detector([0, 1, 2, 3, 4, 5, 6, 7])
+        self.keys.side_effect = [-1] * 7 + [ord("q")]
+        self.save.side_effect = [OSError("테스트 저장 실패"), Path("synthetic.jpg")]
+        self.assertEqual(camera_preview.run_preview(0, "msmf", detector=detector, auto_capture=AutoCaptureGate()), 0)
+        self.assertEqual(self.save.call_count, 2)
+        self.assertIn("사진 저장 실패", self.errors.getvalue())
+        self.assertEqual(self.output.getvalue().count("자동 촬영 저장 완료"), 1)
+
+    # 자동 조건이 충족된 순간 수동 키를 누르면 한 번만 저장하고 자동 잠금을 건다.
+    def test_manual_save_does_not_duplicate_ready_auto_capture(self):
+        detector = self.make_auto_detector([0, 1, 2, 3, 4, 5])
+        self.keys.side_effect = [-1, -1, ord("s"), -1, -1, ord("q")]
+        self.assertEqual(camera_preview.run_preview(0, "msmf", detector=detector, auto_capture=AutoCaptureGate()), 0)
+        self.save.assert_called_once()
+        self.assertEqual(self.save.call_args.kwargs, {"prefix": "crop"})
+
+    # 회전은 유지 시간을 버리고 이미 저장된 대상의 자동 잠금을 유지한다.
+    def test_rotation_preserves_auto_capture_lock(self):
+        detector = self.make_auto_detector([0, 1, 2, 3, 4, 5, 6, 7])
+        target = detector.detect.return_value
+        rotated_target = [PackageDetection(0, 0.8, (20, 20, 220, 300))]
+        detector.detect.side_effect = [target] * 4 + [rotated_target] * 4
+        self.keys.side_effect = [-1, -1, -1, ord("r"), -1, -1, -1, ord("q")]
+        self.assertEqual(camera_preview.run_preview(0, "msmf", detector=detector, auto_capture=AutoCaptureGate()), 0)
+        self.save.assert_called_once()
+
+    # 여러 후보의 고정 화면 선택을 취소한 시간은 자동 유지 시간으로 계산하지 않는다.
+    def test_cancelled_manual_selection_restarts_auto_hold(self):
+        detector = self.make_auto_detector([0, 1, 2, 20, 21, 22, 23])
+        target = detector.detect.return_value
+        multiple = target + [PackageDetection(1, 0.9, (30, 30, 290, 210))]
+        detector.detect.side_effect = [target, target, multiple, target, target, target, target]
+        self.keys.side_effect = [-1, -1, ord("s"), 27, -1, -1, -1, ord("q")]
+        self.assertEqual(camera_preview.run_preview(0, "msmf", detector=detector, auto_capture=AutoCaptureGate()), 0)
+        self.save.assert_called_once()
+        self.assertEqual(self.capture.read.call_count, 7)
+
+    # 자동 촬영 도중 카메라 연결이 끊기면 오래된 프레임을 저장하지 않는다.
+    def test_disconnect_during_auto_hold_does_not_save(self):
+        detector = self.make_auto_detector([0, 1])
+        self.capture.read.side_effect = [(True, self.frame), (True, self.frame), (False, None)]
+        self.keys.return_value = -1
+        self.assertEqual(camera_preview.run_preview(0, "msmf", detector=detector, auto_capture=AutoCaptureGate()), 1)
+        self.save.assert_not_called()
+        self.capture.release.assert_called_once()
+
+    # 잘못된 자동 시간 옵션은 모델이나 카메라를 준비하기 전에 거부한다.
+    def test_invalid_auto_timings_are_rejected_before_model_load(self):
+        with patch.object(camera_preview, "load_detector") as loader:
+            for option in ("--hold-seconds", "--rearm-seconds"):
+                for value in ("0", "-1", "nan", "inf"):
+                    with self.subTest(option=option, value=value), self.assertRaises(SystemExit):
+                        camera_preview.main(["--auto-capture", option, value])
+        loader.assert_not_called()
+        self.capture_factory.assert_not_called()
 
     # 선택한 번호와 입력 방식을 사용하고 종료 시 장치를 해제한다.
     def test_selected_camera_and_backend_are_used(self):

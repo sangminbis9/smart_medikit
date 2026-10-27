@@ -271,6 +271,87 @@ class PackageDetectorTests(unittest.TestCase):
         self.assertIn("안정성·OCR 성공은 별도 검증", joined_messages)
         self.model.predict.assert_not_called()
 
+    # 자동 촬영의 진행과 잠금 상태를 품질 결과와 별도로 표시하고 입력 상태를 바꾸지 않는다.
+    def test_auto_panel_displays_progress_and_lock_without_changing_state(self):
+        detector = package_detector.PackageDetector()
+        report = package_detector.PhotoQuality(800, 600, 640, 480, 220.0, 125.0, 0.02, 0.03, ())
+        expected = {
+            "waiting": "Auto: waiting for a target",
+            "multiple": "Auto: show only one package.",
+            "quality": "Auto: waiting for better quality; check warnings above.",
+            "holding": "Auto: quality held 1.2 / 3.5s",
+            "ready": "Auto: ready to save",
+            "locked": "Auto: saved; remove the package from view.",
+            "absent": "Auto: rearming 0.7 / 2.2s (no target)",
+        }
+        for status, expected_message in expected.items():
+            gate = SimpleNamespace(
+                status=status, held_seconds=1.2, hold_seconds=3.5,
+                absent_seconds=0.7, rearm_seconds=2.2,
+            )
+            before = vars(gate).copy()
+            with self.subTest(status=status), patch.object(detector._image_draw.ImageDraw, "text") as draw_text:
+                panel = detector.make_quality_panel(report, candidate_number=1, candidate_count=1, auto_capture=gate)
+            messages = [call.args[1] for call in draw_text.call_args_list]
+            self.assertEqual(panel.shape, (260, 800, 3))
+            self.assertEqual(panel.dtype, np.uint8)
+            self.assertIn("Candidate #1 | Experimental: OK", messages)
+            self.assertIn(expected_message, messages)
+            self.assertTrue(any("does not confirm medicine identity" in message for message in messages))
+            self.assertEqual(vars(gate), before)
+            for call in draw_text.call_args_list:
+                x, y = call.args[0]
+                bounds = detector.font.getbbox(call.args[1], anchor="lt")
+                self.assertLessEqual(x + bounds[2], 800)
+                self.assertLessEqual(y + bounds[3], 260)
+        self.model.predict.assert_not_called()
+
+    # 자동 모드의 다중 후보와 미감지 상태에서 양호로 오해하거나 자동 선택을 안내하지 않는다.
+    def test_auto_panel_explains_ambiguous_and_missing_targets(self):
+        detector = package_detector.PackageDetector()
+        for count, status in ((0, "absent"), (3, "multiple")):
+            gate = SimpleNamespace(
+                status=status, held_seconds=0.0, hold_seconds=2.0,
+                absent_seconds=0.5, rearm_seconds=1.5,
+            )
+            with self.subTest(count=count), patch.object(detector._image_draw.ImageDraw, "text") as draw_text:
+                detector.make_quality_panel(None, candidate_count=count, auto_capture=gate)
+            messages = [call.args[1] for call in draw_text.call_args_list]
+            self.assertFalse(any("Experimental: OK" in message for message in messages))
+            if count:
+                self.assertIn("Automatic capture needs exactly one target.", messages)
+                self.assertIn("Manual selection: S | Tab: next target | Enter: save", messages)
+            else:
+                self.assertIn("Quality: no target", messages)
+                self.assertIn("Auto: rearming 0.5 / 1.5s (no target)", messages)
+        self.model.predict.assert_not_called()
+
+    # 한국어 자동 상태와 모든 품질 경고를 함께 표시하되 기존 수동 모드의 크기를 유지한다.
+    def test_korean_auto_panel_keeps_warnings_and_manual_panel_unchanged(self):
+        detector = package_detector.PackageDetector()
+        detector.use_korean_labels = True
+        report = package_detector.PhotoQuality(
+            80, 60, 80, 60, 0.0, 120.0, 0.4, 0.3, ("blur", "dark", "bright", "small", "edge")
+        )
+        gate = SimpleNamespace(
+            status="locked", held_seconds=0.0, hold_seconds=2.0,
+            absent_seconds=0.0, rearm_seconds=1.5,
+        )
+        with patch.object(detector._image_draw.ImageDraw, "text") as draw_text:
+            auto_panel = detector.make_quality_panel(report, candidate_number=1, auto_capture=gate)
+        joined_messages = "\n".join(call.args[1] for call in draw_text.call_args_list)
+        self.assertIn("자동: 저장 완료 · 포장을 화면 밖으로 치워주세요.", joined_messages)
+        self.assertIn("저장 완료는 약품 식별 성공이 아님", joined_messages)
+        for reason in report.warnings:
+            self.assertIn(package_detector.WARNING_MESSAGES[reason], joined_messages)
+        with patch.object(detector._image_draw.ImageDraw, "text") as draw_text:
+            manual_panel = detector.make_quality_panel(report, candidate_number=1)
+        self.assertEqual(auto_panel.shape, (260, 800, 3))
+        self.assertEqual(manual_panel.shape, (220, 800, 3))
+        self.assertFalse(any("자동:" in call.args[1] for call in draw_text.call_args_list))
+        self.assertEqual(report.warnings, ("blur", "dark", "bright", "small", "edge"))
+        self.model.predict.assert_not_called()
+
     # 후보 번호와 선택 강조를 표시하되 선택하지 않은 박스는 기존 색을 유지한다.
     def test_selection_label_and_outline_do_not_touch_original(self):
         detector = package_detector.PackageDetector()

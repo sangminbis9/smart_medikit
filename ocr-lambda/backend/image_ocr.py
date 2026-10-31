@@ -4,7 +4,7 @@ import os
 import re
 from operator import itemgetter
 
-from backend.recognition import candidate_name, fragment_kind, normalize_name
+from backend.recognition import candidate_name, fragment_kind, name_fields, normalize_name
 
 
 class ImageError(Exception):
@@ -121,9 +121,89 @@ def join_fragments(lines):
     return rows
 
 
+# 약품 목록의 제품 제목과 인접 함량만 남기고 설명·개인정보는 검색에서 제외한다.
+def product_row_titles(lines):
+    titles = []
+    for line in lines:
+        text = line["text"].strip()
+        if re.search(r"[.…]", text) and re.search(r"정|캡슐|캅셀|액|시럽", text):
+            # 소수점 함량은 잘림 기호와 구분한다.
+            if re.search(r"\.{2,}|…|\.$", text):
+                raise ImageError("TRUNCATED_PRODUCT_NAME")
+        text = re.sub(r"^\((?:한|비|급여|비급여)\)\s*", "", text)
+        if name_fields(text)["form"] and candidate_name(text):
+            titles.append({**line, "text": text})
+    strengths = [
+        line
+        for line in lines
+        if fragment_kind(line["text"]) == "strength"
+        and any(adjacent(title, line) for title in titles)
+    ]
+    return titles + strengths
+
+
+# 열 제목 또는 반복되는 약품명·분류 쌍을 근거로 제품 목록의 검색 범위를 좁힌다.
+def select_product_rows(lines):
+    headers = [
+        line
+        for line in lines
+        if normalize_name(line["text"])
+        in {"약품명/성분", "약품명및성분", "약명/성분", "약품명", "제품명"}
+    ]
+    selected = []
+    for header in headers:
+        x1, top, x2, bottom = header["box"]
+        height = max(1, bottom - top)
+        boundaries = [
+            line["box"][0]
+            for line in lines
+            if line["box"][0] > x2
+            and abs(line["box"][1] - top) < height
+            and re.search(r"복약|투약|횟수|일수", line["text"])
+        ]
+        right = min(boundaries) if boundaries else x2 + height * 5
+        selected.extend(
+            line
+            for line in lines
+            if line["box"][1] > bottom
+            and x1 - height <= line["box"][0] < right
+            and line["box"][2] <= right + height
+        )
+    if headers:
+        # 제목 아래에 제품이 없으면 개인정보 영역으로 검색 범위를 다시 넓히지 않는다.
+        return product_row_titles(selected)
+    pairs = []
+    for label in lines:
+        if not name_fields(label["text"])["form"] and not re.search(r"\.{2,}|…", label["text"]):
+            continue
+        if any(
+            description["box"][0] >= label["box"][2]
+            and abs(description["box"][1] - label["box"][1])
+            <= max(3, label["box"][3] - label["box"][1])
+            and re.match(r"^\[(?!비\]|급여)", description["text"].strip())
+            for description in lines
+        ):
+            pairs.append(label)
+    if len(pairs) >= 2:
+        lefts = [line["box"][0] for line in pairs]
+        heights = [line["box"][3] - line["box"][1] for line in pairs]
+        if max(lefts) - min(lefts) <= max(heights) * 2:
+            top = min(line["box"][1] for line in pairs)
+            bottom = max(line["box"][1] for line in pairs)
+            selected = [
+                line
+                for line in lines
+                if min(lefts) - max(heights) <= line["box"][0] <= max(lefts) + max(heights)
+                and top <= line["box"][1] <= bottom
+            ]
+            return product_row_titles(selected)
+    return None
+
+
 # 전체 OCR 영역에서 제품명 후보를 만들고 유일하게 가까운 부가정보만 연결한다.
 def group_lines(lines):
-    rows = join_fragments(lines)
+    product_rows = select_product_rows(lines)
+    rows = join_fragments(product_rows if product_rows is not None else lines)
     candidates = [
         {"box": line["box"], "lines": line.get("parts", [line]), "metadata": []}
         for line in rows

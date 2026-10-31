@@ -5,6 +5,7 @@ import math
 import re
 import unicodedata
 from decimal import Decimal
+from itertools import product as combinations
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode, urlparse
 from urllib.request import urlopen
@@ -216,7 +217,76 @@ def load_ingredients(api, code):
     return ingredients
 
 
-# 모든 후보의 필수 정보를 검증한 후 선택적인 성분 정보를 별도로 조회한다.
+# 같은 영역의 판독 대안만 제한적으로 조합하고 다른 약품 영역은 섞지 않는다.
+def reading_combinations(parts):
+    choices = [[part] + part.get("alternatives", []) for part in parts]
+    if math.prod(len(choice) for choice in choices) > 8:
+        raise RecognitionError("extraction", "TOO_MANY_OCR_ALTERNATIVES")
+    return list(combinations(*choices))
+
+
+# 한 판독 대안을 공식 품목과 대조하며 검색·성분 결과를 이벤트 안에서 재사용한다.
+def lookup_candidate(observed, api, ingredient_cache, search_cache, index, diagnostics):
+    try:
+        query = canonical_brand(observed["name"])
+        if query not in search_cache:
+            if len(search_cache) >= 32:
+                raise RecognitionError("matching", "TOO_MANY_SEARCH_QUERIES")
+            search_cache[query] = api.search(query)
+        rows = search_cache[query]
+    except ApiError as exc:
+        raise RecognitionError("matching", exc.code, exc.retryable) from None
+    candidates, reasons, detail_checks, plausible = {}, {}, 0, False
+    for product in rows:
+        # 불완전한 응답 행을 버리고 남은 하나를 유일 후보로 오판하지 않는다.
+        if (
+            not isinstance(product, dict)
+            or not isinstance(product.get("ITEM_NAME"), str)
+            or not product["ITEM_NAME"].strip()
+            or not re.fullmatch(r"\d{9}", str(product.get("ITEM_SEQ", "")))
+        ):
+            if diagnostics is not None:
+                diagnostics.matching(
+                    index, len(rows), len(candidates), {**reasons, "SCHEMA_INVALID": 1}
+                )
+            raise RecognitionError("matching", "API_PRODUCT_SCHEMA_INVALID")
+        reason = product_match_reason(observed, product)
+        code = str(product["ITEM_SEQ"])
+        if reason == "ANNOTATION_UNVERIFIED":
+            annotation = re.fullmatch(r"(.+)\(([^()]+)\)", product["ITEM_NAME"].strip())
+            # 이름 본문·함량·제형이 먼저 일치할 때만 같은 품목의 공식 성분으로 괄호를 검증한다.
+            bare = {**product, "ITEM_NAME": annotation[1]} if annotation else product
+            if annotation and product_match_reason(observed, bare) == "MATCH":
+                plausible = True
+                detail_checks += 1
+                try:
+                    if code not in ingredient_cache:
+                        ingredient_cache[code] = load_ingredients(api, code)
+                except Exception as exc:
+                    if diagnostics is not None:
+                        diagnostics.matching(
+                            index,
+                            len(rows),
+                            len(candidates),
+                            {**reasons, "ANNOTATION_LOOKUP_FAILED": 1},
+                            detail_checks,
+                        )
+                    error = exc.code if isinstance(exc, ApiError) else "ANNOTATION_LOOKUP_FAILED"
+                    retryable = exc.retryable if isinstance(exc, ApiError) else True
+                    raise RecognitionError("matching", error, retryable) from None
+                reason = product_match_reason(observed, product, ingredient_cache[code])
+        reasons[reason] = reasons.get(reason, 0) + 1
+        if reason in {"MATCH", "STRENGTH_MISMATCH", "FORM_MISMATCH", "MANUFACTURER_MISMATCH"}:
+            plausible = True
+        if reason == "MATCH":
+            code = str(product["ITEM_SEQ"])
+            if code in candidates and candidates[code] != product:
+                raise RecognitionError("matching", "API_CONFLICTING_PRODUCT")
+            candidates[code] = product
+    return candidates, plausible, reasons, detail_checks, len(rows)
+
+
+# 문자 가설을 제품으로 검증하고 모든 필수 제품 후보가 통과한 뒤 성분을 조회한다.
 def identify(cells, api, min_score=0.9, diagnostics=None):
     if not math.isfinite(min_score) or not 0 < min_score <= 1:
         raise ValueError("OCR_SCORE_CONFIGURATION_INVALID")
@@ -226,66 +296,59 @@ def identify(cells, api, min_score=0.9, diagnostics=None):
         raise RecognitionError("extraction", "NO_PRODUCT_NAME")
     if len(cells) > 25:
         raise RecognitionError("extraction", "TOO_MANY_PRODUCTS")
-    medicines, items, ingredient_cache = {}, [], {}
+    medicines, items, ingredient_cache, ignored, search_cache = {}, [], {}, [], {}
     for index, cell in enumerate(cells):
-        observed = extract_candidate(cell, min_score)
+        required = cell.get("required", True)
         try:
-            rows = api.search(canonical_brand(observed["name"]))
-        except ApiError as exc:
-            raise RecognitionError("matching", exc.code, exc.retryable) from None
-        candidates, reasons, detail_checks = {}, {}, 0
-        for product in rows:
-            # 불완전한 응답 행을 버리고 남은 하나를 유일 후보로 오판하지 않는다.
-            if (
-                not isinstance(product, dict)
-                or not isinstance(product.get("ITEM_NAME"), str)
-                or not product["ITEM_NAME"].strip()
-                or not re.fullmatch(r"\d{9}", str(product.get("ITEM_SEQ", "")))
-            ):
-                if diagnostics is not None:
-                    diagnostics.matching(
-                        index, len(rows), len(candidates), {**reasons, "SCHEMA_INVALID": 1}
-                    )
-                raise RecognitionError("matching", "API_PRODUCT_SCHEMA_INVALID")
-            reason = product_match_reason(observed, product)
-            code = str(product["ITEM_SEQ"])
-            if reason == "ANNOTATION_UNVERIFIED":
-                annotation = re.fullmatch(r"(.+)\(([^()]+)\)", product["ITEM_NAME"].strip())
-                # 이름 본문·함량·제형이 먼저 일치할 때만 같은 품목의 공식 성분으로 괄호를 검증한다.
-                bare = {**product, "ITEM_NAME": annotation[1]} if annotation else product
-                if annotation and product_match_reason(observed, bare) == "MATCH":
-                    detail_checks += 1
-                    try:
-                        if code not in ingredient_cache:
-                            ingredient_cache[code] = load_ingredients(api, code)
-                    except Exception as exc:
-                        if diagnostics is not None:
-                            diagnostics.matching(
-                                index,
-                                len(rows),
-                                len(candidates),
-                                {**reasons, "ANNOTATION_LOOKUP_FAILED": 1},
-                                detail_checks,
-                            )
-                        error = (
-                            exc.code if isinstance(exc, ApiError) else "ANNOTATION_LOOKUP_FAILED"
-                        )
-                        retryable = exc.retryable if isinstance(exc, ApiError) else True
-                        raise RecognitionError("matching", error, retryable) from None
-                    reason = product_match_reason(observed, product, ingredient_cache[code])
-            reasons[reason] = reasons.get(reason, 0) + 1
-            if reason == "MATCH":
-                code = str(product["ITEM_SEQ"])
+            observations = [
+                extract_candidate({**cell, "lines": list(parts)}, min_score)
+                for parts in reading_combinations(cell["lines"])
+            ]
+        except RecognitionError as exc:
+            # 제목·제형·약품 행 근거 없는 저신뢰 문구는 등록 후보로 승격하지 않는다.
+            if not required and exc.code == "LOW_OCR_CONFIDENCE":
+                ignored.append({"candidate_index": index, "reason": "LOW_LEXICAL_CONFIDENCE"})
+                continue
+            raise
+        candidates, witnesses, reasons = {}, {}, {}
+        plausible, unresolved, detail_checks, row_count = False, False, 0, 0
+        for observed in observations:
+            matched, possible, counts, checks, returned = lookup_candidate(
+                observed, api, ingredient_cache, search_cache, index, diagnostics
+            )
+            plausible = plausible or possible
+            unresolved = unresolved or (possible and not matched)
+            detail_checks += checks
+            row_count += returned
+            for reason, count in counts.items():
+                reasons[reason] = reasons.get(reason, 0) + count
+            for code, product in matched.items():
                 if code in candidates and candidates[code] != product:
                     raise RecognitionError("matching", "API_CONFLICTING_PRODUCT")
                 candidates[code] = product
+                if code not in witnesses or observed["score"] > witnesses[code]["score"]:
+                    witnesses[code] = observed
         if diagnostics is not None:
-            diagnostics.matching(index, len(rows), len(candidates), reasons, detail_checks)
+            diagnostics.matching(
+                index,
+                row_count,
+                len(candidates),
+                reasons,
+                detail_checks,
+                variant_count=len(observations),
+            )
+        if unresolved:
+            raise RecognitionError("matching", "PRODUCT_NOT_FOUND")
+        # 무결과인 주변 문구와 식약처에서 실제로 충돌하는 제품 후보를 구분한다.
+        if not candidates and not required and not plausible:
+            ignored.append({"candidate_index": index, "reason": "NO_CATALOG_MATCH"})
+            continue
         if len(candidates) != 1:
             raise RecognitionError(
                 "matching", "AMBIGUOUS_PRODUCT" if candidates else "PRODUCT_NOT_FOUND"
             )
         code, product = next(iter(candidates.items()))
+        observed = witnesses[code]
         fields = official_fields(product, ingredient_cache.get(code, ()))
         if not fields["form"] or len(fields["strengths"]) > 1:
             raise RecognitionError("validation", "REQUIRED_PRODUCT_FIELDS_MISSING")
@@ -316,6 +379,10 @@ def identify(cells, api, min_score=0.9, diagnostics=None):
                 else None,
             }
         )
+    if diagnostics is not None:
+        diagnostics.selection([item["cell_index"] for item in items], ignored)
+    if not items:
+        raise RecognitionError("matching", "PRODUCT_NOT_FOUND")
     for code, medicine in medicines.items():
         try:
             if code not in ingredient_cache:

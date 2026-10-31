@@ -38,7 +38,7 @@ def test_matching_rejection_details(observed, official, reason, caplog):
             api_for(official),
             diagnostics=Diagnostics("private-person-id"),
         )
-    summary = diagnostic_logs(caplog)[-1]
+    summary = next(row for row in diagnostic_logs(caplog) if row["kind"] == "product_matching")
     assert summary["kind"] == "product_matching"
     assert summary["api_row_count"] == 1
     assert summary["accepted_product_count"] == 0
@@ -140,7 +140,7 @@ def test_annotation_detail_diagnostic_is_private(caplog):
     api.ingredients.return_value = [{"name": "비공개성분"}]
     result = identify(group_lines([line("가상정")]), api, diagnostics=Diagnostics("test"))
     assert result["processing_status"] == "COMPLETED"
-    summary = diagnostic_logs(caplog)[-1]
+    summary = next(row for row in diagnostic_logs(caplog) if row["kind"] == "product_matching")
     assert summary["annotation_detail_checks"] == 1
     assert summary["rejections"] == {"MATCH": 1}
     assert "비공개성분" not in caplog.text

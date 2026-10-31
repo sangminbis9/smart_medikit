@@ -103,6 +103,7 @@ class Diagnostics:
                     {
                         **region_summary(part),
                         "role": fragment_kind(part["text"]),
+                        "alternative_count": len(part.get("alternatives", [])),
                         "passes_threshold": safe_number(score) is not None
                         and threshold <= score <= 1,
                     }
@@ -110,6 +111,10 @@ class Diagnostics:
             summaries.append(
                 {
                     "candidate_index": index,
+                    "evidence": cell.get("evidence")
+                    if cell.get("evidence") in {"row", "form", "title", "lexical"}
+                    else "unspecified",
+                    "required": cell.get("required", True) is not False,
                     "box": region_summary(cell)["box"],
                     "part_count": len(parts),
                     "omitted_parts": max(0, len(parts) - 24),
@@ -127,8 +132,44 @@ class Diagnostics:
             },
         )
 
+    # 주변 문자 가설을 제외한 이유와 최종 제품 근거의 번호만 기록한다.
+    def selection(self, accepted, ignored):
+        self._write(
+            "candidate_selection",
+            {
+                "accepted_indices": [safe_number(index) for index in accepted[:25]],
+                "ignored": [
+                    {
+                        "candidate_index": safe_number(row.get("candidate_index")),
+                        "reason": row.get("reason"),
+                    }
+                    for row in ignored[:25]
+                    if row.get("reason") in {"LOW_LEXICAL_CONFIDENCE", "NO_CATALOG_MATCH"}
+                ],
+            },
+        )
+
+    # 회전 보정 재인식은 원문 없이 위치·전후 점수·채택 여부만 기록한다.
+    def upright(self, rows):
+        self._write(
+            "upright_recognition",
+            {
+                "regions": [
+                    {
+                        "candidate_index": safe_number(row.get("candidate_index")),
+                        "part_index": safe_number(row.get("part_index")),
+                        "box": region_summary(row)["box"],
+                        "score_before": safe_number(row.get("score_before")),
+                        "score_after": safe_number(row.get("score_after")),
+                        "accepted": row.get("accepted") is True,
+                    }
+                    for row in rows[:8]
+                ]
+            },
+        )
+
     # 품목 이름·코드·API 응답 대신 첫 불일치 사유별 개수만 기록한다.
-    def matching(self, index, returned, accepted, reasons, detail_checks=0):
+    def matching(self, index, returned, accepted, reasons, detail_checks=0, variant_count=1):
         self._write(
             "product_matching",
             {
@@ -136,6 +177,7 @@ class Diagnostics:
                 "api_row_count": returned,
                 "accepted_product_count": accepted,
                 "annotation_detail_checks": detail_checks,
+                "variant_count": variant_count,
                 "rejections": {key: value for key, value in reasons.items() if key in REJECTIONS},
             },
         )

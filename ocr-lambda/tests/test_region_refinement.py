@@ -115,10 +115,8 @@ def test_same_low_confidence_is_not_promoted():
         identify(group_lines(lines), api_for(product("탁센400이부프로펜연질캡슐")))
 
 
-# 같은 영역의 다른 고신뢰 이름·함량·제형·수량을 점수 순으로 임의 선택하지 않는다.
-@pytest.mark.parametrize(
-    "before,after", [("모드코S", "모드코프S"), ("10mg", "20mg"), ("정", "캡슐"), ("10정", "20정")]
-)
+# 같은 영역의 다른 고신뢰 함량·제형·수량을 점수 순으로 임의 선택하지 않는다.
+@pytest.mark.parametrize("before,after", [("10mg", "20mg"), ("정", "캡슐"), ("10정", "20정")])
 def test_conflicting_high_confidence_regions_fail(before, after):
     with pytest.raises(ImageError, match="OCR_TEXT_CONFLICT"):
         reconcile_regions([line(before, score=0.95)], [line(after, score=0.99)])

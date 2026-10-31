@@ -78,3 +78,38 @@ def test_private_photo_decode_only(filename):
 def test_invalid_image_bytes(data):
     with pytest.raises(ImageError, match="INVALID_IMAGE"):
         read_image(data)
+
+
+# 명시적으로 지정한 로컬 모델만 초기화하고 기본 테스트에서는 실제 추론을 생략한다.
+@pytest.fixture(scope="module")
+def live_reader(tmp_path_factory):
+    root = os.environ.get("OCR_LIVE_MODEL_DIR")
+    if not root:
+        pytest.skip("실제 모델 검증은 OCR_LIVE_MODEL_DIR과 OCR_TEST_IMAGE_DIR을 지정할 때 실행")
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setenv("OCR_MODEL_DIR", root)
+        patch.setenv("PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK", "True")
+        patch.setenv("PADDLE_PDX_CACHE_HOME", str(tmp_path_factory.mktemp("ocr-cache")))
+        reader = PaddleReader()
+        reader._engine()
+        yield reader
+
+
+# 네 실제 사진의 모델 추론을 실행하되 식약처와 AWS는 합성 응답으로 분리한다.
+@pytest.mark.parametrize("filename,unused,official", PHOTO_CASES)
+def test_private_photo_live_ocr_mock_catalog(
+    filename, unused, official, live_reader, record_property
+):
+    directory = os.environ.get("OCR_TEST_IMAGE_DIR")
+    if not directory:
+        pytest.fail("실제 사진 검증에는 OCR_TEST_IMAGE_DIR이 필요함")
+    cells = live_reader((Path(directory) / filename).read_bytes())
+    # 다른 사진의 제품도 포함해 실제 이름이 다르면 성공할 수 없도록 대조한다.
+    products = [product(case[2], f"90000000{index + 1}") for index, case in enumerate(PHOTO_CASES)]
+    result = identify(cells, api_for(*products))
+    assert len(result["medicines"]) == 1
+    assert result["medicines"][0]["name"] == official
+    assert len(result["items"]) == 1
+    score = float(result["items"][0]["name_score"])
+    assert score >= 0.9
+    record_property("name_score", score)

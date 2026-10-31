@@ -5,7 +5,13 @@ import os
 import re
 from operator import itemgetter
 
-from backend.recognition import candidate_name, fragment_kind, name_fields, normalize_name
+from backend.recognition import (
+    candidate_name,
+    fragment_kind,
+    name_fields,
+    normalize_name,
+    reading_combinations,
+)
 
 
 class ImageError(Exception):
@@ -51,7 +57,11 @@ def can_join(left, right):
     # 수량·함량의 숫자와 단위가 분리된 경우 먼저 한 부가정보로 묶는다.
     if re.fullmatch(r"\d+(?:\.\d+)?", normalize_name(left["text"])):
         return fragment_kind(left["text"] + right["text"]) in {"quantity", "strength"}
-    if not candidate_name(left["text"]):
+    left_texts = [
+        "".join(part["text"] for part in parts)
+        for parts in reading_combinations(left.get("parts", [left]))
+    ]
+    if not any(candidate_name(text) for text in left_texts):
         return False
     if fragment_kind(right["text"]) in {"form", "strength"}:
         return True
@@ -65,7 +75,10 @@ def can_join(left, right):
         "탁센": {"400"},
         "탁센400": {"이부프로펜", "이부프로펜연질캡슐"},
     }
-    return normalize_name(right["text"]) in pairs.get(normalize_name(left["text"]), set())
+    return any(
+        normalize_name(right["text"]) in pairs.get(normalize_name(text), set())
+        for text in left_texts
+    )
 
 
 # 결합한 구성 요소를 보존하여 이름과 부가정보 점수를 분리한다.
@@ -233,8 +246,26 @@ def group_lines(lines):
     candidates = [
         {"box": line["box"], "lines": line.get("parts", [line]), "metadata": []}
         for line in rows
-        if candidate_name(line["text"])
+        if any(
+            candidate_name("".join(part["text"] for part in parts))
+            for parts in reading_combinations(line.get("parts", [line]))
+        )
     ]
+    # 문자처럼 보인다는 이유만으로 주변 문구까지 필수 약품으로 간주하지 않는다.
+    tallest = max((name_height(cell) for cell in candidates), default=0)
+    for cell in candidates:
+        fields = name_fields("".join(part["text"] for part in cell["lines"]))
+        evidence = (
+            "row"
+            if product_rows is not None
+            else "form"
+            if fields["form"] or fields["strengths"]
+            else "title"
+            if name_height(cell) >= tallest * 0.6
+            else "lexical"
+        )
+        cell["evidence"] = evidence
+        cell["required"] = evidence != "lexical"
     for line in rows:
         if fragment_kind(line["text"]) not in {"quantity", "manufacturer"}:
             continue
@@ -252,6 +283,18 @@ def group_lines(lines):
     return candidates
 
 
+# 결합 상자 대신 이름을 읽은 글자 조각의 높이를 제품 제목 근거로 사용한다.
+def name_height(cell):
+    return max(
+        (
+            part["box"][3] - part["box"][1]
+            for part in cell["lines"]
+            if fragment_kind(part["text"]) == "name"
+        ),
+        default=0,
+    )
+
+
 # 두 영역의 교집합과 각 면적을 계산한다.
 def box_overlap(left, right):
     x1, y1, x2, y2 = left["box"]
@@ -260,15 +303,22 @@ def box_overlap(left, right):
     return intersection, max(1, (x2 - x1) * (y2 - y1)), max(1, (a2 - a1) * (b2 - b1))
 
 
-# 확대 재검출 결과를 원래 영역과 대조하고 서로 다른 확신 높은 판독은 거부한다.
+# 재검출 결과를 같은 위치의 판독 대안으로 통합하고 다른 제품 영역은 보존한다.
 def reconcile_regions(original, refined):
-    retained, consumed = [], set()
+    retained, updated = [], [dict(line) for line in refined]
     for old in original:
-        overlaps = []
-        for index, new in enumerate(refined):
+        overlaps, equivalents = [], []
+        for index, new in enumerate(updated):
             intersection, old_area, new_area = box_overlap(old, new)
             if intersection / min(old_area, new_area) >= 0.7:
                 overlaps.append((index, new))
+            if intersection / max(old_area, new_area) >= 0.6:
+                equivalents.append((intersection / (old_area + new_area - intersection), index))
+        # 주변 작은 상자의 겹침 여부와 무관하게 같은 위치의 판독부터 하나로 통합한다.
+        if equivalents:
+            _, index = max(equivalents)
+            updated[index] = choose_reading(old, updated[index])
+            continue
         if not overlaps:
             retained.append(old)
             continue
@@ -287,28 +337,50 @@ def reconcile_regions(original, refined):
         )
         if split:
             continue
-        if len(children) == 1:
-            index, new = overlaps[0]
-            intersection, old_area, new_area = box_overlap(old, new)
-            # 포함 관계만 있는 인접 줄은 같은 글자의 재인식으로 간주하지 않는다.
-            if intersection / max(old_area, new_area) >= 0.5:
-                same = normalize_name(old["text"]) == normalize_name(new["text"])
-                if (
-                    not same
-                    and min(old["score"], new["score"]) >= 0.9
-                    and (
-                        candidate_name(old["text"])
-                        or candidate_name(new["text"])
-                        or fragment_kind(old["text"]) != "name"
-                        or fragment_kind(new["text"]) != "name"
-                    )
-                ):
-                    raise ImageError("OCR_TEXT_CONFLICT")
-                if new["score"] > old["score"]:
-                    continue
-                consumed.add(index)
         retained.append(old)
-    return retained + [line for i, line in enumerate(refined) if i not in consumed]
+    return sorted(retained + updated, key=itemgetter("box"))
+
+
+# 같은 물리 영역의 점수를 부풀리지 않고 확신 높은 판독 충돌을 보존한다.
+def choose_reading(old, new):
+    same = normalize_name(old["text"]) == normalize_name(new["text"])
+    conflict = (
+        not same
+        and min(old["score"], new["score"]) >= 0.9
+        and (
+            candidate_name(old["text"])
+            or candidate_name(new["text"])
+            or fragment_kind(old["text"]) != "name"
+            or fragment_kind(new["text"]) != "name"
+        )
+    )
+    if conflict:
+        a, b = name_fields(old["text"]), name_fields(new["text"])
+        # 이름 철자 대안은 공식 품목으로 판정하되 함량·제형·수량 충돌은 숨기지 않는다.
+        if (
+            fragment_kind(old["text"]) != "name"
+            or fragment_kind(new["text"]) != "name"
+            or any(a[key] != b[key] for key in ("form", "strengths", "quantities"))
+        ):
+            raise ImageError("OCR_TEXT_CONFLICT")
+    selected = new if new["score"] > old["score"] else old
+    variants = {}
+    readings = [old, new] if conflict else [selected]
+    readings += old.get("alternatives", []) + new.get("alternatives", [])
+    for line in readings:
+        key = normalize_name(line["text"])
+        if key not in variants or line["score"] > variants[key]["score"]:
+            variants[key] = {field: line[field] for field in ("text", "score", "box")}
+    if len(variants) > 3:
+        raise ImageError("TOO_MANY_OCR_ALTERNATIVES")
+    selected = normalize_name(max(variants.values(), key=itemgetter("score"))["text"])
+    result = variants[selected]
+    if len(variants) > 1:
+        result = {
+            **result,
+            "alternatives": [value for key, value in variants.items() if key != selected],
+        }
+    return result
 
 
 # 큰 상표 영역을 여백과 함께 최대 두 개 선택하고 동일 영역의 중복 재검출을 막는다.
@@ -435,6 +507,64 @@ class PaddleReader:
             raise ImageError("OCR_OUTPUT_INVALID") from None
         return lines
 
+    # 세로로 긴 저신뢰 제목 조각은 자동 90도 회전을 거치지 않고 기존 인식기로 다시 읽는다.
+    def _retry_upright(self, image, cells, diagnostics):
+        import cv2
+
+        targets, crops, seen = [], [], set()
+        for index, cell in enumerate(cells):
+            if not cell.get("required", True):
+                continue
+            for part_index, part in enumerate(cell["lines"]):
+                x1, y1, x2, y2 = part["box"]
+                key = tuple(part["box"])
+                if key in seen or not 0 <= part["score"] < 0.9 or (y2 - y1) / max(1, x2 - x1) < 1.5:
+                    continue
+                if len(targets) == 8:
+                    break
+                seen.add(key)
+                crop = image[y1:y2, x1:x2]
+                if max(crop.shape[:2]) > 960:
+                    scale = 960 / max(crop.shape[:2])
+                    crop = cv2.resize(crop, None, fx=scale, fy=scale)
+                crops.append(crop)
+                targets.append((index, part_index, part))
+        if not targets:
+            return cells
+        # PaddleX의 기존 인식기를 재사용하며 두 번째 모델을 메모리에 올리지 않는다.
+        pipeline = getattr(self._engine(), "paddlex_pipeline", None)
+        pipeline = getattr(pipeline, "_pipeline", pipeline)
+        recognizer = getattr(pipeline, "text_rec_model", None)
+        if not callable(recognizer):
+            raise ImageError("OCR_RUNTIME_INCOMPATIBLE")
+        results = list(recognizer(crops))
+        if len(results) != len(targets):
+            raise ImageError("OCR_OUTPUT_INVALID")
+        summaries = []
+        for (index, part_index, part), result in zip(targets, results):
+            try:
+                text, score = result["rec_text"], float(result["rec_score"])
+                if not isinstance(text, str) or not math.isfinite(score) or not 0 <= score <= 1:
+                    raise ImageError("OCR_OUTPUT_INVALID")
+            except (KeyError, TypeError, ValueError):
+                raise ImageError("OCR_OUTPUT_INVALID") from None
+            accepted = normalize_name(text) == normalize_name(part["text"]) and score >= 0.9
+            summaries.append(
+                {
+                    "candidate_index": index,
+                    "part_index": part_index,
+                    "box": part["box"],
+                    "score_before": part["score"],
+                    "score_after": score,
+                    "accepted": accepted,
+                }
+            )
+            if accepted:
+                part["score"] = score
+        if diagnostics is not None:
+            diagnostics.upright(summaries)
+        return cells
+
     # 전체 OCR 뒤 저해상도·큰 상표 영역을 같은 모델로 최대 세 번 더 검출한다.
     def __call__(self, data, diagnostics=None):
         image = read_image(data)
@@ -453,4 +583,4 @@ class PaddleReader:
                 lines = reconcile_regions(lines, refined)
         if not lines:
             raise ImageError("NO_TEXT")
-        return group_lines(lines)
+        return self._retry_upright(image, group_lines(lines), diagnostics)

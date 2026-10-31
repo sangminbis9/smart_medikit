@@ -9,6 +9,7 @@ import re
 from datetime import datetime, timezone
 from urllib.parse import unquote_plus
 
+from backend.diagnostics import Diagnostics, event_reference
 from backend.image_ocr import ImageError, PaddleReader
 from backend.recognition import MfdsClient, RecognitionError, identify
 from backend.storage import DynamoStore
@@ -19,12 +20,24 @@ _reader = PaddleReader()
 
 # 예외·OCR 원문·객체 경로 없이 이벤트와 실패 단계·고정 코드만 기록한다.
 def log_failure(event_id, stage, code):
-    LOGGER.warning(json.dumps({"event_id": event_id, "stage": stage, "error_code": code}))
+    LOGGER.warning(
+        json.dumps({"event_ref": event_reference(event_id), "stage": stage, "error_code": code})
+    )
 
 
 # 허용된 S3 입력만 처리하며 제품 저장 실패가 부분 등록으로 이어지지 않게 한다.
 def process_records(
-    event, *, s3, store, api, ocr, bucket, prefix="ocr-input/", context=None, min_score=0.9
+    event,
+    *,
+    s3,
+    store,
+    api,
+    ocr,
+    bucket,
+    prefix="ocr-input/",
+    context=None,
+    min_score=0.9,
+    diagnostics_enabled=True,
 ):
     if not math.isfinite(min_score) or not 0 < min_score <= 1:
         raise ValueError("OCR_SCORE_CONFIGURATION_INVALID")
@@ -95,9 +108,13 @@ def process_records(
             finally:
                 body.close()
             stage = "ocr"
-            cells = ocr(data)
+            diagnostics = Diagnostics(event_id, enabled=diagnostics_enabled)
+            diagnostics.started(min_score)
+            cells = (
+                ocr(data, diagnostics=diagnostics) if isinstance(ocr, PaddleReader) else ocr(data)
+            )
             stage = "extraction"
-            result = identify(cells, api, min_score)
+            result = identify(cells, api, min_score, diagnostics=diagnostics)
             for medicine in result["medicines"]:
                 if medicine["ingredients_error_code"]:
                     log_failure(event_id, "ingredients", medicine["ingredients_error_code"])
@@ -155,4 +172,5 @@ def handler(event, context):
         prefix=prefix,
         context=context,
         min_score=float(os.environ.get("OCR_MIN_SCORE", "0.9")),
+        diagnostics_enabled=os.environ.get("OCR_DIAGNOSTICS", "1") == "1",
     )

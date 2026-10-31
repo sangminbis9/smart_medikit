@@ -176,32 +176,39 @@ def official_fields(product):
 
 
 # 이름·관측 함량·세부 제형·명시된 업체명을 함께 대조한다.
-def matches_product(observed, product):
+def product_match_reason(observed, product):
     official = official_fields(product)
     if official is None:
-        return False
+        return "ANNOTATION_UNVERIFIED"
     name, target = canonical_brand(observed["name"]), canonical_brand(official["name"])
     # 브랜드만 관측한 경우 계열 전체를 검토하며 두 품목 이상이면 상위 로직에서 실패한다.
     if name != target and not (name == "화이투벤" and target.startswith(name)):
-        return False
+        return "NAME_MISMATCH"
     if observed["strengths"] and observed["strengths"] != official["strengths"]:
-        return False
+        return "STRENGTH_MISMATCH"
     if observed["form"] and observed["form"] != official["form"]:
-        return False
+        return "FORM_MISMATCH"
     if observed["manufacturer"]:
         maker = normalize_name(observed["manufacturer"]).replace("(주)", "").replace("주식회사", "")
         target_maker = (
             normalize_name(product.get("ENTP_NAME", "")).replace("(주)", "").replace("주식회사", "")
         )
         if maker != target_maker:
-            return False
-    return True
+            return "MANUFACTURER_MISMATCH"
+    return "MATCH"
+
+
+# 기존 불리언 대조 인터페이스와 동일한 판단 기준을 유지한다.
+def matches_product(observed, product):
+    return product_match_reason(observed, product) == "MATCH"
 
 
 # 모든 후보의 필수 정보를 검증한 후 선택적인 성분 정보를 별도로 조회한다.
-def identify(cells, api, min_score=0.9):
+def identify(cells, api, min_score=0.9, diagnostics=None):
     if not math.isfinite(min_score) or not 0 < min_score <= 1:
         raise ValueError("OCR_SCORE_CONFIGURATION_INVALID")
+    if diagnostics is not None:
+        diagnostics.candidates(cells, min_score)
     if not cells:
         raise RecognitionError("extraction", "NO_PRODUCT_NAME")
     if len(cells) > 25:
@@ -213,7 +220,7 @@ def identify(cells, api, min_score=0.9):
             rows = api.search(canonical_brand(observed["name"]))
         except ApiError as exc:
             raise RecognitionError("matching", exc.code, exc.retryable) from None
-        candidates = {}
+        candidates, reasons = {}, {}
         for product in rows:
             # 불완전한 응답 행을 버리고 남은 하나를 유일 후보로 오판하지 않는다.
             if (
@@ -222,12 +229,20 @@ def identify(cells, api, min_score=0.9):
                 or not product["ITEM_NAME"].strip()
                 or not re.fullmatch(r"\d{9}", str(product.get("ITEM_SEQ", "")))
             ):
+                if diagnostics is not None:
+                    diagnostics.matching(
+                        index, len(rows), len(candidates), {**reasons, "SCHEMA_INVALID": 1}
+                    )
                 raise RecognitionError("matching", "API_PRODUCT_SCHEMA_INVALID")
-            if matches_product(observed, product):
+            reason = product_match_reason(observed, product)
+            reasons[reason] = reasons.get(reason, 0) + 1
+            if reason == "MATCH":
                 code = str(product["ITEM_SEQ"])
                 if code in candidates and candidates[code] != product:
                     raise RecognitionError("matching", "API_CONFLICTING_PRODUCT")
                 candidates[code] = product
+        if diagnostics is not None:
+            diagnostics.matching(index, len(rows), len(candidates), reasons)
         if len(candidates) != 1:
             raise RecognitionError(
                 "matching", "AMBIGUOUS_PRODUCT" if candidates else "PRODUCT_NOT_FOUND"

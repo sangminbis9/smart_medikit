@@ -257,7 +257,7 @@ class PaddleReader:
         return self.engine
 
     # 표·문서 종류를 요구하지 않고 이미지 전체에서 OCR을 한 번 수행한다.
-    def __call__(self, data):
+    def __call__(self, data, diagnostics=None):
         image = read_image(data)
         predictions = list(self._engine().predict(image, text_rec_score_thresh=0.0))
         if len(predictions) != 1:
@@ -284,6 +284,8 @@ class PaddleReader:
                     )
         except (KeyError, TypeError, ValueError, IndexError):
             raise ImageError("OCR_OUTPUT_INVALID") from None
+        if diagnostics is not None:
+            diagnostics.regions(lines, image.shape)
         if not lines:
             raise ImageError("NO_TEXT")
         return group_lines(lines)

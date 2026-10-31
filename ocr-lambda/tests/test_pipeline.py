@@ -11,6 +11,7 @@ from boto3.dynamodb.types import TypeDeserializer
 from botocore.exceptions import ClientError
 from test_recognition import api_for, line, product
 
+from backend.diagnostics import event_reference
 from backend.image_ocr import ImageError, group_lines
 from backend.lambda_function import process_records
 from backend.recognition import ApiError, MfdsClient, identify
@@ -111,7 +112,7 @@ def test_failure_saves_only_safe_event(failure, expected_stage, expected_code, c
     assert args[0] == "test-event-01"
     assert args[2:4] == (expected_stage, expected_code)
     assert "환자이름" not in caplog.text and "지르텍" not in caplog.text
-    assert "test-event-01" in caplog.text and expected_code in caplog.text
+    assert event_reference("test-event-01") in caplog.text and expected_code in caplog.text
 
 
 # 선택적 API 장애에도 완전한 필수 필드를 가진 성공 결과는 저장한다.

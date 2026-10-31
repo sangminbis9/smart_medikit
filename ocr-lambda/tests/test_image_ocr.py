@@ -9,6 +9,7 @@ import numpy as np
 import pytest
 from test_recognition import PHOTO_CASES, api_for, product
 
+from backend.diagnostics import Diagnostics
 from backend.image_ocr import ImageError, PaddleReader, read_image
 from backend.recognition import identify
 
@@ -28,12 +29,16 @@ def prediction(lines):
 
 # 표가 없는 실제 JPEG 바이트를 해석하고 모델 출력만 대체해 공통 경로를 검증한다.
 @pytest.mark.parametrize("filename,lines,official", PHOTO_CASES)
-def test_no_table_image_with_mock_paddle_output(filename, lines, official):
+def test_no_table_image_with_mock_paddle_output(filename, lines, official, caplog):
     data = cv2.imencode(".jpg", np.full((300, 600, 3), 255, dtype=np.uint8))[1].tobytes()
     reader = PaddleReader()
     reader.engine = Mock()
     reader.engine.predict.return_value = [prediction(lines)]
-    result = identify(reader(data), api_for(product(official)))
+    result = identify(
+        reader(data, diagnostics=Diagnostics("test-image")), api_for(product(official))
+    )
+    assert '"kind": "ocr_regions"' in caplog.text
+    assert official not in caplog.text
     assert result["medicines"][0]["name"] == official
     assert reader.engine.predict.call_args.kwargs == {"text_rec_score_thresh": 0.0}
     assert reader.engine.predict.call_args.args[0].shape == (300, 600, 3)

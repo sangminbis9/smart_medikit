@@ -23,7 +23,7 @@
 - 필수 제품 필드: 9자리 품목기준코드, 코드에 연결된 `medicine_id`, 공식 제품명, 공식 제품명의 검증 가능한 제형, 일치한 OCR 근거. 함량은 명시적 단위가 확인될 때만 저장하며 `탁센400`의 숫자만 보고 400mg을 만들어 내지 않는다. 제조사·포장 수량·함량이 확인되지 않으면 `null`이다.
 - `Medicine`은 기존 필드를 유지하고 `dosage_form`, `manufacturer`를 추가한다. `RecognitionEvent.items`의 `name_score`, `package_quantity`는 이미지에서 관측한 근거다. 포장 수량은 실제 잔여량이 아니며 동일 제품의 다른 포장에 적용하지 않는다.
 - 내부 성공 단계는 `ocr_status`, `extraction_status`, `matching_status`로 구분한다. 선택적 성분 조회는 `ingredients_status=SUCCEEDED | NO_DATA | UNAVAILABLE`로 구분하며 제품 대조 성공을 OCR 실패로 바꾸지 않는다. 기존 성분 캐시는 장애 시 지우지 않으며 최근 조회 상태와 `ingredients_last_success_at`을 함께 해석해야 한다. 안전성 검사 완료를 뜻하지 않는다.
-- 필수 단계 실패는 `processing_status=FAILED`, `failure_stage`, `failure_code`, `retryable`, 처리 시각, 재처리용 S3 참조를 이벤트에 저장한다. 제품 후보·OCR 원문·환자 정보를 실패 레코드나 CloudWatch 로그에 넣지 않는다. 로그는 `event_id`, `stage`, `error_code`만 포함한다. S3 객체 키와 event_id에도 개인정보를 사용하지 않아야 한다.
+- 필수 단계 실패는 `processing_status=FAILED`, `failure_stage`, `failure_code`, `retryable`, 처리 시각, 재처리용 S3 참조를 이벤트에 저장한다. 제품 후보·OCR 원문·환자 정보를 실패 레코드나 CloudWatch 로그에 넣지 않는다. 오류 로그는 원본 이벤트 ID 대신 SHA-256 `event_ref`, `stage`, `error_code`를 포함한다. 추가 진단 로그 범위는 아래 진단 절을 따른다. S3 객체 키와 event_id에도 개인정보를 사용하지 않아야 한다.
 - 신규 `PENDING`/`PROCESSING`/`REVIEW_REQUIRED` 레코드는 만들지 않는다. 실패 레코드는 같은 ID에서 성공으로 교체 가능하다. 기존 ZIP이 남긴 `FAILED`/`REVIEW_REQUIRED`/`PENDING`과 임대가 만료된 `PROCESSING`도 재처리할 수 있다. 기존에 잘못 저장된 제품을 자동 삭제하거나 정정하지는 않는다.
 - 성공 이벤트의 조건부 기록이 제품 갱신과 같은 트랜잭션에 있으므로 중복 완료가 제품을 다시 갱신하지 않는다. 응답 유실 뒤 재시도에서도 완료 기록을 읽어 건너뛴다. 같은 성공 ID의 다른 S3 입력은 `EVENT_SOURCE_CONFLICT`다. 메타데이터 ID가 없으면 재업로드가 다른 S3 이벤트로 취급될 수 있으므로 호출자가 안정된 ID를 제공해야 한다.
 - 사전 DB 임대를 없앴기 때문에 동시 호출이 OCR/API 계산을 중복 실행할 수는 있다. 최종 저장은 조건부 트랜잭션으로 한 번만 반영한다. 제품 수를 25개로 제한해 완료 이벤트를 포함한 단일 트랜잭션 범위 안에 둔다.
@@ -66,7 +66,7 @@ python -m pytest -q
 | test-3.jpg | 모드코S, 연질캡슐, 종근당 로고 | 실제 JPEG 디코딩 + 영문/한글 상표 대응 |
 | test-4.jpg | 지르텍정, 10정, 증상 문구 | 실제 JPEG 디코딩 + 제형 결합·포장 수량 분리 |
 
-2026-10-31 로컬 검증: **87개 테스트 통과**(실제 사진 4개 디코딩 포함), Ruff 검사·포맷 확인·Python 컴파일 확인 통과. 저장소의 기존 `Raspberry_Pi/.venv/Scripts/python.exe`를 사용했다. PaddleOCR가 설치되어 있지 않아 모델 추론을 실행하지 않았고, 실제 식약처 API·AWS도 실행하지 않았으므로 사진 인식 성공률은 산출하지 않았다.
+2026-10-31 로컬 검증: **99개 테스트 통과**(실제 사진 4개 디코딩 포함), Ruff 검사·포맷 확인·Python 컴파일 확인 통과. 저장소의 기존 `Raspberry_Pi/.venv/Scripts/python.exe`를 사용했다. PaddleOCR가 설치되어 있지 않아 모델 추론을 실행하지 않았고, 실제 식약처 API·AWS도 실행하지 않았으므로 사진 인식 성공률은 산출하지 않았다.
 
 ## 실환경 검증 필요 항목
 
@@ -92,3 +92,27 @@ python -m pytest -q
 - `1일 3회 5일` 또는 별도 숫자 열은 포장 수량·재고·복용 일정으로 변환하지 않는다. 현재 확장 범위는 **구성 약품 식별**이며 복용량·기간의 구조화와 사용자 확인은 후속 구현 대상이다. `prescription_status=NOT_EVALUATED`를 유지한다.
 - 새 예시에는 개인식별 영역이 있으므로 첨부 원본을 Git이나 테스트 데이터로 복사하지 않았다. `test_bag_rows.py`는 가상 약품·가상 인적 문구로 두 배치와 오류 조건을 재현한다. 이 필터는 업로드 전 개인정보 제거를 대체하지 않는다.
 - 제공한 약봉투 원본에 대한 PaddleOCR 추론은 실행하지 않았다. 작은 글자·기울기·잘린 제목·다단 배치·선택 범위 밖의 광고 및 제형이 빠진 행의 검출 누락은 실제 모델로 검증해야 한다. 일부 글자 미검출만으로 전체 약품 목록의 완전성을 보증하지 않는다.
+
+## 개인정보 없는 OCR 진단 로그
+
+`OCR_DIAGNOSTICS=1`이 기본값이며 `0`으로 끌 수 있다. CloudWatch 진단은 WARNING 수준으로 기록한다. 이 수준은 진단 레코드가 인식 실패라는 뜻이 아니다. DB 저장 필드·인식 임계값·매칭 판정은 변경하지 않는다.
+
+- `diagnostic_version=ocr-diag-v1`: 배포한 진단 코드가 실행됐는지 확인한다.
+- `event_ref`: DynamoDB의 `event_id` 문자열을 UTF-8로 SHA-256 해시한 값이다. 호출자가 ID에 개인 이름을 넣어도 로그에 복사되지 않는다. 같은 이벤트의 재시도는 같은 값이며, `attempt_id`는 호출마다 다르다. 기존 오류 로그도 같은 `event_ref`로 연결한다.
+- `pipeline_started`: OCR 초기화 전의 진단 실행 표시와 임계값이다. 이미 완료된 이벤트는 중복 방지 때문에 OCR과 진단을 건너뛴다.
+- `ocr_regions`: 실제 PaddleReader가 검출한 영역의 `[x1,y1,x2,y2]`와 점수, 이미지 크기다. 좌표는 모델에 입력된 이미지의 픽셀 기준이다. 원문·이미지·텍스트 해시·파일명은 기록하지 않는다. 최대 120개, 초과 개수는 `omitted_regions`다.
+- `ocr_candidates`: 이름 후보별 `candidate_index`, 결합 영역, 최대 24개 구성 조각의 좌표·점수·역할(`name`, `form`, `strength` 등), `passes_threshold`를 기록한다. 모든 후보를 첫 실패 이전에 기록하므로 무관한 영역이 후보가 됐는지 좌표로 확인할 수 있다. 점수 표시는 소수점 넷째 자리로 반올림하되 판정은 원래 값으로 계산한다. 별도 부가정보는 최대 8개다.
+- `product_matching`: 후보별 API 반환 행 수, 검증 통과한 고유 품목 수, 첫 거부 조건별 개수다. API 반환이 0이면 검색 무결과이며 반환이 있는데 통과가 0이면 아래 검증 조건에서 탈락했다. `MATCH`는 통과 행 수다. 이름·품목코드·함량 값·제조사·API 응답·인증키는 기록하지 않는다.
+
+| 거부 코드 | 의미 |
+|---|---|
+| ANNOTATION_UNVERIFIED | 공식 제품명 괄호를 성분 필드로 검증하지 못함 |
+| NAME_MISMATCH | 정규화·허용 별칭 적용 후 이름 불일치 |
+| STRENGTH_MISMATCH | 관측 함량과 공식 제품명 함량 불일치 |
+| FORM_MISMATCH | 관측 세부 제형 불일치 |
+| MANUFACTURER_MISMATCH | 명시된 업체명 불일치 |
+| SCHEMA_INVALID | API 행의 필수 이름·품목코드 형식 누락/오류 |
+
+호출당 진단 JSON을 최대 32건으로 제한한다. API 자체 오류는 기존 안전한 오류 코드로 기록하며 그 경우 제품 대조 요약이 없을 수 있다. 제3자 라이브러리의 DEBUG 로그나 OCR 원문 출력은 활성화하지 않는다. 해시와 좌표는 익명화의 보증이 아니라 데이터 최소화 수단이므로 기존 CloudWatch 접근 제한·보존 정책을 유지한다.
+
+검증: 99개 테스트 통과. 원문·가상 환자 ID·제품명·품목코드·임의 추가 필드의 로그 미포함, NaN 처리, 출력 상한, 진단 비활성화, 매칭 거부 분기, 낮은 신뢰도, 기존 저장 정책을 확인했다. 실제 Lambda에서 발생하는 네 사진의 실패 원인은 새 로그를 수집한 뒤 판별해야 한다.

@@ -153,3 +153,18 @@ WebSocket은 **상태 변경 사실과 버전 정보**를 알리고, 웹앱은 �
 - WebSocket 메시지는 본문을 상태에 직접 쓰지 않고 재조회 신호로 사용한다. 재연결 간격은 1초에서 최대 30초까지 늘리고 숨겨진 탭에서는 연결을 닫는다. 화면 복귀·온라인 복구·푸시 클릭은 재조회한다.
 - 현재 실제 API 쓰기·사진 업로드·Web Push 구독은 실행하지 않는다. 시연 편집은 메모리에만 반영되고 서버 성공 문구를 표시하지 않는다. 구독 소유권·서버 쓰기 계약이 합의되면 기존 경로와 연결한다.
 - Service Worker는 정적 산출물만 캐시한다. `push`의 `notification_id`를 알림 tag로 사용하고 일반 문구만 표시한다. 알림 클릭은 같은 출처 `/alerts`를 열고 상태를 재조회할 뿐 확인/복용 API를 호출하지 않는다. 실제 서버 발송·구독은 아직 미연동이다.
+
+## 11. 공통 제품 OCR Lambda 저장 계약 (2026-10-31)
+
+`ocr-lambda/`는 첨부 ZIP의 제품 식별 계층을 가져온 구현이다. 이 절은 해당 코드의 입출력과 저장 계약을 설명하며, 위 Pi 세션·웹 API 초안의 배포 완료를 뜻하지 않는다.
+
+- 입력은 허용 버킷·prefix의 S3 ObjectCreated 이미지다. 객체 버전 또는 ETag를 고정해 읽고, 문서 종류 메타데이터는 사용하지 않는다. 전체 이미지 OCR 결과의 위치·크기·거리로 제품명과 부가정보를 구분한다. 한 이미지에 여러 제품 후보가 있으면 모두 검증해야 제품 저장을 실행한다.
+- `event-id`/`event_id` S3 메타데이터가 있으면 그 값을 멱등 키로 쓴다. 없으면 기존 ZIP의 S3 이벤트 해시를 유지한다. 호출자는 같은 논리 이벤트에 안정된 ID를 제공해야 하며 성공 ID를 다른 이미지에 재사용하면 충돌이다. ID·객체 키에 개인정보를 넣지 않는다.
+- 기존 테이블 `inha-capstone-02-medkit-data`, 소문자 `pk`/`sk`, `MEDICINE#<ITEM_SEQ>` + `META`, `RECOGNITION#<event_id>` + `META`를 유지한다. 이는 ZIP 코드에서 확인한 규칙이며 실제 AWS 테이블은 조회하지 않았다.
+- **사용자의 후속 지시에 따라 실패 이력은 유지한다.** 필수 OCR·추출·매칭·검증·저장 단계가 실패하면 제품을 쓰지 않고 `RecognitionEvent`만 `FAILED`로 기록한다. `failure_stage`, `failure_code`, `retryable`, `processed_at`, S3 참조를 포함하며 원문·환자정보·미확정 제품 후보는 저장하지 않는다. 실패 저장 자체가 불가능하면 안전한 로그와 Lambda 예외로 남긴다.
+- 성공은 `processing_status=COMPLETED`, `recognition_status=SUCCEEDED`와 단계별 `ocr_status`/`extraction_status`/`matching_status`를 기록한다. 선택적 성분 API 실패는 `ingredients_status=UNAVAILABLE`이며 OCR 실패로 집계하지 않는다. `NO_DATA`도 안전성 확인 완료를 뜻하지 않는다. 과거 정상 성분은 장애 시 지우지 않고 최근 조회 상태·마지막 성공 시각을 함께 제공한다.
+- 모든 제품과 완료 이벤트는 한 `TransactWriteItems`로 저장한다. 완료 이벤트 조건이 중복 제품 갱신을 막고, 실패 기록은 완료된 성공을 덮어쓸 수 없다. 실패 이벤트 및 구버전 미완료/임대 만료 이벤트는 같은 키에서 재처리 가능하다. 사전 `PROCESSING` 쓰기는 없으므로 동시 호출의 중복 OCR 계산은 가능하다.
+- 포장 수량은 `RecognitionEvent.items[].package_quantity={value, unit}` 또는 `null`로 기록한다. 이미지 관측값이며 실제 재고·잔여 회분을 뜻하지 않는다. 제품의 `dosage_form`과 `manufacturer`는 추가 필드이며 기존 `form` 값은 `TABLET | CAPSULE | OTHER`를 유지한다. 확인되지 않은 함량·업체·포장 수량은 만들어 내지 않는다.
+- 이 Lambda는 입출고·재고·Package·웹 `kind`를 생성하지 않는다. 같은 품목의 여러 OCR 영역은 제품 캐시 하나로 합치지만 같은 물리 포장이라고 단정하지 않는다. `REVIEW_REQUIRED` 사용자 확인은 **제품 식별 후 물리적 포장/동작이 모호한 계층**에서 별도로 처리한다.
+- Pi의 완료 manifest·`sequence` 처리 및 `GET /capture-events`와 연결되지 않았다. 여기의 제품 인식 `COMPLETED`를 Pi 세션 완료로 직접 반환하면 안 된다. 현재 Pi 호출부와 웹 조회 어댑터를 변경하지 않으며 AWS 기본 비활성화를 유지한다.
+- S3 사진은 기존 보존 정책에 맡기고 이 코드에서 삭제하지 않는다. 웹 보완 OCR의 개인정보 제거·임시 원본 삭제 계약은 별도 경로에 유지한다. 런타임 진입점·설정·검증 범위는 [OCR Lambda 안내](../ocr-lambda/README.md)를 따른다.

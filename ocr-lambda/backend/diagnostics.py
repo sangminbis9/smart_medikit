@@ -77,12 +77,14 @@ class Diagnostics:
         self._write("pipeline_started", {"threshold": safe_number(threshold)})
 
     # 검출 영역은 최대 120개만 기록하고 잘린 개수를 명시한다.
-    def regions(self, lines, shape):
+    def regions(self, lines, shape, pass_index=0, source_box=None):
         self._write(
             "ocr_regions",
             {
                 "image_height": safe_number(shape[0]),
                 "image_width": safe_number(shape[1]),
+                "pass_index": safe_number(pass_index),
+                "source_box": region_summary({"box": source_box})["box"],
                 "region_count": len(lines),
                 "omitted_regions": max(0, len(lines) - 120),
                 "regions": [region_summary(line) for line in lines[:120]],

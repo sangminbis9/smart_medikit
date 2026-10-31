@@ -33,15 +33,16 @@ def test_no_table_image_with_mock_paddle_output(filename, lines, official, caplo
     data = cv2.imencode(".jpg", np.full((300, 600, 3), 255, dtype=np.uint8))[1].tobytes()
     reader = PaddleReader()
     reader.engine = Mock()
-    reader.engine.predict.return_value = [prediction(lines)]
+    reader.engine.predict.side_effect = [[prediction(lines)]] + [[prediction([])]] * 3
     result = identify(
         reader(data, diagnostics=Diagnostics("test-image")), api_for(product(official))
     )
     assert '"kind": "ocr_regions"' in caplog.text
     assert official not in caplog.text
     assert result["medicines"][0]["name"] == official
-    assert reader.engine.predict.call_args.kwargs == {"text_rec_score_thresh": 0.0}
-    assert reader.engine.predict.call_args.args[0].shape == (300, 600, 3)
+    assert reader.engine.predict.call_args_list[0].kwargs == {"text_rec_score_thresh": 0.0}
+    assert reader.engine.predict.call_args_list[0].args[0].shape == (300, 600, 3)
+    assert reader.engine.predict.call_count <= 4
 
 
 # 모델 출력 길이 불일치와 빈 텍스트를 명확한 오류로 구분한다.

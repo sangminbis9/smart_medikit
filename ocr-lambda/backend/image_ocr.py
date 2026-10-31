@@ -1,5 +1,6 @@
 """문서 형식과 관계없이 전체 이미지에서 위치가 검증된 제품 후보를 만든다."""
 
+import math
 import os
 import re
 from operator import itemgetter
@@ -38,7 +39,9 @@ def adjacent(left, right, *, below=False):
         overlap = min(x2, a2) - max(x1, a1)
         return -other * 0.2 <= b1 - y2 <= height * 1.2 and overlap >= min(x2 - x1, a2 - a1) * 0.5
     return (
-        -min(height, other) * 0.2 <= a1 - x2 <= height * 1.2
+        # 기울어진 글자의 외접 사각형은 겹칠 수 있지만 중심 순서는 유지해야 한다.
+        -min(x2 - x1, a2 - a1) * 0.35 <= a1 - x2 <= height * 1.2
+        and (a1 + a2) > (x1 + x2)
         and min(y2, b2) - max(y1, b1) >= min(height, other) * 0.5
     )
 
@@ -59,6 +62,7 @@ def can_join(left, right):
         "화이투벤": {"큐", "큐플러스"},
         "화이투벤큐": {"플러스", "코프", "노즈"},
         "화이투벤큐플러스": {"코프", "노즈"},
+        "탁센": {"400"},
         "탁센400": {"이부프로펜", "이부프로펜연질캡슐"},
     }
     return normalize_name(right["text"]) in pairs.get(normalize_name(left["text"]), set())
@@ -79,6 +83,26 @@ def combine(left, right):
     }
 
 
+# 상표 구성 조각은 마지막 글자와의 기울어진 배치도 확인한다.
+def fragment_adjacent(left, right, *, below=False):
+    if adjacent(left, right, below=below):
+        return True
+    tail = left.get("parts", [left])[-1]
+    if can_join(left, right) and adjacent(tail, right, below=below):
+        return True
+    if not below or fragment_kind(right["text"]) != "name" or not can_join(left, right):
+        return False
+    x1, y1, x2, y2 = tail["box"]
+    a1, b1, a2, b2 = right["box"]
+    height, other = y2 - y1, b2 - b1
+    return (
+        max(height, other) <= min(height, other) * 4
+        and (b1 + b2) - (y1 + y2) >= min(height, other) * 0.5
+        and -other * 0.55 <= b1 - y2 <= height * 1.2
+        and min(x2, a2) - max(x1, a1) >= min(x2 - x1, a2 - a1) * 0.5
+    )
+
+
 # 같은 줄에서도 공간·의미 조건을 모두 만족한 유일한 연결만 수행한다.
 def merge_lines(lines):
     rows = sorted((dict(line) for line in lines), key=itemgetter("box"))
@@ -89,7 +113,7 @@ def merge_lines(lines):
             owners = [
                 i
                 for i, left in enumerate(rows)
-                if i != index and adjacent(left, right) and can_join(left, right)
+                if i != index and fragment_adjacent(left, right) and can_join(left, right)
             ]
             if len(owners) == 1:
                 owner = owners[0]
@@ -110,7 +134,9 @@ def join_fragments(lines):
             owners = [
                 i
                 for i, left in enumerate(rows)
-                if i != index and adjacent(left, right, below=True) and can_join(left, right)
+                if i != index
+                and fragment_adjacent(left, right, below=True)
+                and can_join(left, right)
             ]
             if len(owners) == 1:
                 owner = owners[0]
@@ -226,6 +252,94 @@ def group_lines(lines):
     return candidates
 
 
+# 두 영역의 교집합과 각 면적을 계산한다.
+def box_overlap(left, right):
+    x1, y1, x2, y2 = left["box"]
+    a1, b1, a2, b2 = right["box"]
+    intersection = max(0, min(x2, a2) - max(x1, a1)) * max(0, min(y2, b2) - max(y1, b1))
+    return intersection, max(1, (x2 - x1) * (y2 - y1)), max(1, (a2 - a1) * (b2 - b1))
+
+
+# 확대 재검출 결과를 원래 영역과 대조하고 서로 다른 확신 높은 판독은 거부한다.
+def reconcile_regions(original, refined):
+    retained, consumed = [], set()
+    for old in original:
+        overlaps = []
+        for index, new in enumerate(refined):
+            intersection, old_area, new_area = box_overlap(old, new)
+            if intersection / min(old_area, new_area) >= 0.7:
+                overlaps.append((index, new))
+        if not overlaps:
+            retained.append(old)
+            continue
+        children = [new for _, new in overlaps]
+        old_height = old["box"][3] - old["box"][1]
+        # 큰 검출 상자 안에서 둘 이상의 겹치지 않는 작은 줄이 확인되면 줄 분리를 우선한다.
+        split = (
+            len(children) >= 2
+            and all(new["box"][3] - new["box"][1] <= old_height * 0.8 for new in children)
+            and all(box_overlap(old, new)[0] / box_overlap(old, new)[2] >= 0.8 for new in children)
+            and all(
+                box_overlap(a, b)[0] / min(box_overlap(a, b)[1:]) < 0.25
+                for i, a in enumerate(children)
+                for b in children[i + 1 :]
+            )
+        )
+        if split:
+            continue
+        if len(children) == 1:
+            index, new = overlaps[0]
+            intersection, old_area, new_area = box_overlap(old, new)
+            # 포함 관계만 있는 인접 줄은 같은 글자의 재인식으로 간주하지 않는다.
+            if intersection / max(old_area, new_area) >= 0.5:
+                same = normalize_name(old["text"]) == normalize_name(new["text"])
+                if (
+                    not same
+                    and min(old["score"], new["score"]) >= 0.9
+                    and (
+                        candidate_name(old["text"])
+                        or candidate_name(new["text"])
+                        or fragment_kind(old["text"]) != "name"
+                        or fragment_kind(new["text"]) != "name"
+                    )
+                ):
+                    raise ImageError("OCR_TEXT_CONFLICT")
+                if new["score"] > old["score"]:
+                    continue
+                consumed.add(index)
+        retained.append(old)
+    return retained + [line for i, line in enumerate(refined) if i not in consumed]
+
+
+# 큰 상표 영역을 여백과 함께 최대 두 개 선택하고 동일 영역의 중복 재검출을 막는다.
+def product_regions(lines, shape):
+    height, width = shape[:2]
+    proposals = []
+    ranked = sorted(lines, key=region_area, reverse=True)
+    for line in ranked:
+        x1, y1, x2, y2 = line["box"]
+        if y2 - y1 < max(24, height * 0.1) or x2 - x1 < 30:
+            continue
+        pad = max(8, int((y2 - y1) * 0.3))
+        box = [max(0, x1 - pad), max(0, y1 - pad), min(width, x2 + pad), min(height, y2 + pad)]
+        region = {"box": box}
+        if any(
+            box_overlap(region, other)[0] / min(box_overlap(region, other)[1:]) > 0.5
+            for other in proposals
+        ):
+            continue
+        proposals.append(region)
+        if len(proposals) == 2:
+            break
+    return [region["box"] for region in proposals]
+
+
+# 영역 면적으로 큰 검출 상자를 먼저 재검사한다.
+def region_area(line):
+    x1, y1, x2, y2 = line["box"]
+    return (x2 - x1) * (y2 - y1)
+
+
 class PaddleReader:
     # 모델은 컨테이너에 미리 포함하고 워밍 실행 동안 한 번만 초기화한다.
     def __init__(self):
@@ -253,13 +367,27 @@ class PaddleReader:
                 use_doc_unwarping=False,
                 use_textline_orientation=False,
                 enable_mkldnn=False,
+                text_recognition_batch_size=1,
             )
         return self.engine
 
-    # 표·문서 종류를 요구하지 않고 이미지 전체에서 OCR을 한 번 수행한다.
-    def __call__(self, data, diagnostics=None):
-        image = read_image(data)
-        predictions = list(self._engine().predict(image, text_rec_score_thresh=0.0))
+    # 모델 출력을 검증하고 확대·잘라내기 전 원본 좌표로 돌려놓는다.
+    def _predict(self, image, source_box, *, refined=False):
+        import cv2
+        import numpy as np
+
+        x1, y1, x2, y2 = source_box
+        crop = image[y1:y2, x1:x2]
+        options = {"text_rec_score_thresh": 0.0}
+        if refined:
+            # 검출 상자 확장을 줄이고 최대 960픽셀에서 순차 추론하여 메모리를 제한한다.
+            scale = min(3.0, 960 / max(crop.shape[:2]))
+            crop = cv2.resize(crop, None, fx=scale, fy=scale, interpolation=cv2.INTER_CUBIC)
+            options.update(
+                text_det_limit_side_len=960, text_det_limit_type="max", text_det_unclip_ratio=1.1
+            )
+        scale_x, scale_y = crop.shape[1] / (x2 - x1), crop.shape[0] / (y2 - y1)
+        predictions = list(self._engine().predict(crop, **options))
         if len(predictions) != 1:
             raise ImageError("OCR_OUTPUT_INVALID")
         output = predictions[0]
@@ -269,23 +397,60 @@ class PaddleReader:
                 raise ImageError("OCR_OUTPUT_INVALID")
             lines = []
             for text, score, poly in zip(texts, scores, polys):
+                poly = np.asarray(poly, dtype=float)
+                score = float(score)
+                if (
+                    not isinstance(text, str)
+                    or not math.isfinite(score)
+                    or not 0 <= score <= 1
+                    or poly.shape != (4, 2)
+                    or not np.isfinite(poly).all()
+                ):
+                    raise ImageError("OCR_OUTPUT_INVALID")
                 if text.strip():
+                    box = [
+                        max(x1, int(poly[:, 0].min() / scale_x + x1)),
+                        max(y1, int(poly[:, 1].min() / scale_y + y1)),
+                        min(x2, int(round(poly[:, 0].max() / scale_x + x1))),
+                        min(y2, int(round(poly[:, 1].max() / scale_y + y1))),
+                    ]
+                    if box[2] <= box[0] or box[3] <= box[1]:
+                        raise ImageError("OCR_OUTPUT_INVALID")
+                    # 잘라낸 가장자리의 불완전한 글자는 기존 전체 이미지 판독을 대체하지 않는다.
+                    if refined and (
+                        (x1 > 0 and box[0] - x1 < 3)
+                        or (y1 > 0 and box[1] - y1 < 3)
+                        or (x2 < image.shape[1] and x2 - box[2] < 3)
+                        or (y2 < image.shape[0] and y2 - box[3] < 3)
+                    ):
+                        continue
                     lines.append(
                         {
                             "text": text,
-                            "score": float(score),
-                            "box": [
-                                int(poly[:, 0].min()),
-                                int(poly[:, 1].min()),
-                                int(poly[:, 0].max()),
-                                int(poly[:, 1].max()),
-                            ],
+                            "score": score,
+                            "box": box,
                         }
                     )
         except (KeyError, TypeError, ValueError, IndexError):
             raise ImageError("OCR_OUTPUT_INVALID") from None
+        return lines
+
+    # 전체 OCR 뒤 저해상도·큰 상표 영역을 같은 모델로 최대 세 번 더 검출한다.
+    def __call__(self, data, diagnostics=None):
+        image = read_image(data)
+        height, width = image.shape[:2]
+        full_box = [0, 0, width, height]
+        lines = self._predict(image, full_box)
         if diagnostics is not None:
             diagnostics.regions(lines, image.shape)
+        regions = product_regions(lines, image.shape)
+        # 약봉투의 열 제한은 최종 후보 추출에서도 유지하며 임의의 문서 종류를 요구하지 않는다.
+        if max(height, width) < 960 or regions:
+            for index, box in enumerate([full_box] + regions, start=1):
+                refined = self._predict(image, box, refined=True)
+                if diagnostics is not None:
+                    diagnostics.regions(refined, image.shape, pass_index=index, source_box=box)
+                lines = reconcile_regions(lines, refined)
         if not lines:
             raise ImageError("NO_TEXT")
         return group_lines(lines)

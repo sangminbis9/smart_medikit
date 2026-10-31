@@ -132,3 +132,15 @@ def test_attempt_isolation_and_log_budget(caplog):
     assert len(entries) == 33
     assert entries[0]["event_ref"] == entries[-1]["event_ref"]
     assert entries[0]["attempt_id"] != entries[-1]["attempt_id"]
+
+
+# 괄호 검증용 상세 조회 성공도 원문 없이 횟수와 판정만 진단한다.
+def test_annotation_detail_diagnostic_is_private(caplog):
+    api = api_for(product("가상정(비공개성분)"))
+    api.ingredients.return_value = [{"name": "비공개성분"}]
+    result = identify(group_lines([line("가상정")]), api, diagnostics=Diagnostics("test"))
+    assert result["processing_status"] == "COMPLETED"
+    summary = diagnostic_logs(caplog)[-1]
+    assert summary["annotation_detail_checks"] == 1
+    assert summary["rejections"] == {"MATCH": 1}
+    assert "비공개성분" not in caplog.text

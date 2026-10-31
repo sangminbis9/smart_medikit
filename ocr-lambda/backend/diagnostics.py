@@ -12,6 +12,7 @@ LOGGER = logging.getLogger(__name__)
 REJECTIONS = frozenset(
     {
         "ANNOTATION_UNVERIFIED",
+        "ANNOTATION_LOOKUP_FAILED",
         "NAME_MISMATCH",
         "STRENGTH_MISMATCH",
         "FORM_MISMATCH",
@@ -125,13 +126,14 @@ class Diagnostics:
         )
 
     # 품목 이름·코드·API 응답 대신 첫 불일치 사유별 개수만 기록한다.
-    def matching(self, index, returned, accepted, reasons):
+    def matching(self, index, returned, accepted, reasons, detail_checks=0):
         self._write(
             "product_matching",
             {
                 "candidate_index": index,
                 "api_row_count": returned,
                 "accepted_product_count": accepted,
+                "annotation_detail_checks": detail_checks,
                 "rejections": {key: value for key, value in reasons.items() if key in REJECTIONS},
             },
         )

@@ -276,3 +276,39 @@ def test_multiple_distinct_products_success():
         "900000001",
         "900000002",
     }
+
+
+# 목록에서 빠진 성분 근거는 같은 품목의 공식 상세로 확인하고 재조회 없이 재사용한다.
+def test_annotation_verified_by_same_product_details():
+    api = api_for(product("지르텍정(세티리진염산염)"))
+    api.ingredients.return_value = [{"name": "세티리진염산염", "amount": "10", "unit": "mg"}]
+    result = identify(group_lines([line("지르텍정", score=0.9703)]), api)
+    assert result["processing_status"] == "COMPLETED"
+    api.ingredients.assert_called_once_with("900000001")
+    assert result["medicines"][0]["ingredients_status"] == "SUCCEEDED"
+
+
+# 괄호가 실제 성분과 다르거나 제품 변형이면 삭제해서 맞추지 않는다.
+@pytest.mark.parametrize("annotation", ["소아용", "다른성분"])
+def test_annotation_detail_does_not_remove_unverified_variant(annotation):
+    api = api_for(product("지르텍정(" + annotation + ")"))
+    api.ingredients.return_value = [{"name": "세티리진염산염"}]
+    with pytest.raises(RecognitionError, match="PRODUCT_NOT_FOUND"):
+        identify(group_lines([line("지르텍정")]), api)
+
+
+# 괄호 확인에 필수인 상세 API가 실패하면 선택 API 장애와 달리 제품 저장을 보류한다.
+def test_required_annotation_detail_outage_fails_matching():
+    api = api_for(product("지르텍정(세티리진염산염)"))
+    api.ingredients.side_effect = ApiError("API_TIMEOUT", True)
+    with pytest.raises(RecognitionError) as error:
+        identify(group_lines([line("지르텍정")]), api)
+    assert error.value.stage == "matching" and error.value.retryable
+
+
+# 이름 본문이 다른 품목까지 상세 조회해서 억지로 일치시키지 않는다.
+def test_annotation_lookup_requires_matching_base():
+    api = api_for(product("다른정(세티리진염산염)"))
+    with pytest.raises(RecognitionError):
+        identify(group_lines([line("지르텍정")]), api)
+    api.ingredients.assert_not_called()

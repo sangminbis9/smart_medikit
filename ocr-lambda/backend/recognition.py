@@ -162,13 +162,14 @@ def canonical_brand(name):
 
 
 # 공식 성분 필드와 일치한 괄호만 이름에서 분리한다.
-def official_fields(product):
+def official_fields(product, details=()):
     name = product["ITEM_NAME"].strip()
     annotation = re.fullmatch(r"(.+)\(([^()]+)\)", name)
     if annotation:
         ingredients = product.get("ITEM_INGR_NAME") or product.get("MAIN_ITEM_INGR") or ""
         if normalize_name(annotation[2]) not in {
-            normalize_name(part) for part in re.split(r"[;,|]", ingredients)
+            normalize_name(part)
+            for part in re.split(r"[;,|]", ingredients) + [row["name"] for row in details]
         }:
             return None
         name = annotation[1]
@@ -176,8 +177,8 @@ def official_fields(product):
 
 
 # 이름·관측 함량·세부 제형·명시된 업체명을 함께 대조한다.
-def product_match_reason(observed, product):
-    official = official_fields(product)
+def product_match_reason(observed, product, details=()):
+    official = official_fields(product, details)
     if official is None:
         return "ANNOTATION_UNVERIFIED"
     name, target = canonical_brand(observed["name"]), canonical_brand(official["name"])
@@ -203,6 +204,17 @@ def matches_product(observed, product):
     return product_match_reason(observed, product) == "MATCH"
 
 
+# 공식 성분 상세의 이름 필드를 검증하고 원문 없는 오류로 변환한다.
+def load_ingredients(api, code):
+    ingredients = api.ingredients(code)
+    if not isinstance(ingredients, list) or any(
+        not isinstance(row, dict) or not isinstance(row.get("name"), str) or not row["name"].strip()
+        for row in ingredients
+    ):
+        raise ApiError("API_INGREDIENT_SCHEMA_MISMATCH")
+    return ingredients
+
+
 # 모든 후보의 필수 정보를 검증한 후 선택적인 성분 정보를 별도로 조회한다.
 def identify(cells, api, min_score=0.9, diagnostics=None):
     if not math.isfinite(min_score) or not 0 < min_score <= 1:
@@ -213,14 +225,14 @@ def identify(cells, api, min_score=0.9, diagnostics=None):
         raise RecognitionError("extraction", "NO_PRODUCT_NAME")
     if len(cells) > 25:
         raise RecognitionError("extraction", "TOO_MANY_PRODUCTS")
-    medicines, items = {}, []
+    medicines, items, ingredient_cache = {}, [], {}
     for index, cell in enumerate(cells):
         observed = extract_candidate(cell, min_score)
         try:
             rows = api.search(canonical_brand(observed["name"]))
         except ApiError as exc:
             raise RecognitionError("matching", exc.code, exc.retryable) from None
-        candidates, reasons = {}, {}
+        candidates, reasons, detail_checks = {}, {}, 0
         for product in rows:
             # 불완전한 응답 행을 버리고 남은 하나를 유일 후보로 오판하지 않는다.
             if (
@@ -235,6 +247,31 @@ def identify(cells, api, min_score=0.9, diagnostics=None):
                     )
                 raise RecognitionError("matching", "API_PRODUCT_SCHEMA_INVALID")
             reason = product_match_reason(observed, product)
+            code = str(product["ITEM_SEQ"])
+            if reason == "ANNOTATION_UNVERIFIED":
+                annotation = re.fullmatch(r"(.+)\(([^()]+)\)", product["ITEM_NAME"].strip())
+                # 이름 본문·함량·제형이 먼저 일치할 때만 같은 품목의 공식 성분으로 괄호를 검증한다.
+                bare = {**product, "ITEM_NAME": annotation[1]} if annotation else product
+                if annotation and product_match_reason(observed, bare) == "MATCH":
+                    detail_checks += 1
+                    try:
+                        if code not in ingredient_cache:
+                            ingredient_cache[code] = load_ingredients(api, code)
+                    except Exception as exc:
+                        if diagnostics is not None:
+                            diagnostics.matching(
+                                index,
+                                len(rows),
+                                len(candidates),
+                                {**reasons, "ANNOTATION_LOOKUP_FAILED": 1},
+                                detail_checks,
+                            )
+                        error = (
+                            exc.code if isinstance(exc, ApiError) else "ANNOTATION_LOOKUP_FAILED"
+                        )
+                        retryable = exc.retryable if isinstance(exc, ApiError) else True
+                        raise RecognitionError("matching", error, retryable) from None
+                    reason = product_match_reason(observed, product, ingredient_cache[code])
             reasons[reason] = reasons.get(reason, 0) + 1
             if reason == "MATCH":
                 code = str(product["ITEM_SEQ"])
@@ -242,13 +279,13 @@ def identify(cells, api, min_score=0.9, diagnostics=None):
                     raise RecognitionError("matching", "API_CONFLICTING_PRODUCT")
                 candidates[code] = product
         if diagnostics is not None:
-            diagnostics.matching(index, len(rows), len(candidates), reasons)
+            diagnostics.matching(index, len(rows), len(candidates), reasons, detail_checks)
         if len(candidates) != 1:
             raise RecognitionError(
                 "matching", "AMBIGUOUS_PRODUCT" if candidates else "PRODUCT_NOT_FOUND"
             )
         code, product = next(iter(candidates.items()))
-        fields = official_fields(product)
+        fields = official_fields(product, ingredient_cache.get(code, ()))
         if not fields["form"] or len(fields["strengths"]) > 1:
             raise RecognitionError("validation", "REQUIRED_PRODUCT_FIELDS_MISSING")
         form = fields["form"]
@@ -280,14 +317,9 @@ def identify(cells, api, min_score=0.9, diagnostics=None):
         )
     for code, medicine in medicines.items():
         try:
-            ingredients = api.ingredients(code)
-            if not isinstance(ingredients, list) or any(
-                not isinstance(row, dict)
-                or not isinstance(row.get("name"), str)
-                or not row["name"].strip()
-                for row in ingredients
-            ):
-                raise ApiError("API_INGREDIENT_SCHEMA_MISMATCH")
+            if code not in ingredient_cache:
+                ingredient_cache[code] = load_ingredients(api, code)
+            ingredients = ingredient_cache[code]
             medicine["ingredients"] = [
                 {key: row.get(key) for key in ("name", "amount", "unit", "basis")}
                 for row in ingredients

@@ -35,7 +35,7 @@ NOISE = re.compile(
     r"알레르기|두통|치통|근육통|생리통|관절|인후|가려움|해열|진통|효과|증상|완화|함유|증량|"
     r"제조|업체|수입|성명|환자|병원|약국|전화|처방|주소|사용|주의|보관|유통|제약|"
     r"녹십자|종근당|유한양행|알피바이오|celltrion|madein|since|neosol|빠른|강력한|부드러운|"
-    r"처음부터|뚝떨어",
+    r"처음부터|뚝떨어|^외용살균소독제$",
     re.I,
 )
 # 종근당 공식 제품 페이지 CKD0000525에서 확인한 상표와 허가명 표기 대응이다.
@@ -87,6 +87,8 @@ def fragment_kind(text):
     value = normalize_name(text)
     if re.fullmatch(FORM_PATTERN, value):
         return "form"
+    if re.fullmatch(r"\d+(?:\.\d+)?(?:ml|g)", value):
+        return "package_size"
     if STRENGTH.fullmatch(value):
         return "strength"
     if QUANTITY.fullmatch(value):
@@ -129,11 +131,18 @@ def extract_candidate(cell, min_score):
         raise RecognitionError("validation", "CONFLICTING_ATTRIBUTES")
     fields["score"] = Decimal(str(min(part["score"] for part in name_parts)))
     fields["manufacturer"] = None
+    fields["package_size"] = None
     for part in cell.get("metadata", []):
         # 이름 판별과 무관한 부가정보의 낮은 점수는 이름 점수를 낮추지 않는다.
         if not math.isfinite(part["score"]) or not min_score <= part["score"] <= 1:
             continue
-        if fragment_kind(part["text"]) == "quantity":
+        if fragment_kind(part["text"]) == "package_size":
+            match = re.fullmatch(r"(\d+(?:\.\d+)?)(ml|g)", normalize_name(part["text"]))
+            size = {"value": Decimal(match[1]), "unit": match[2]}
+            if fields["package_size"] and fields["package_size"] != size:
+                raise RecognitionError("validation", "CONFLICTING_ATTRIBUTES")
+            fields["package_size"] = size
+        elif fragment_kind(part["text"]) == "quantity":
             fields["quantities"].update(name_fields(part["text"])["quantities"])
         else:
             maker = re.split(r"[:：]", part["text"], maxsplit=1)[1]
@@ -156,15 +165,38 @@ def canonical_brand(name):
 def official_fields(product, details=()):
     name = product["ITEM_NAME"].strip()
     annotation = re.fullmatch(r"(.+)\(([^()]+)\)", name)
+    annotation_fields = None
     if annotation:
         ingredients = product.get("ITEM_INGR_NAME") or product.get("MAIN_ITEM_INGR") or ""
-        if normalize_name(annotation[2]) not in {
+        ingredient_names = {
             normalize_name(part)
             for part in re.split(r"[;,|]", ingredients) + [row["name"] for row in details]
-        }:
+        }
+        annotation_fields = name_fields(annotation[2])
+        if normalize_name(annotation[2]) not in ingredient_names and not (
+            annotation_fields["name"] in ingredient_names
+            and (annotation_fields["form"] or annotation_fields["strengths"])
+        ):
             return None
         name = annotation[1]
-    return name_fields(name)
+    fields = name_fields(name)
+    if annotation_fields:
+        # 공식 괄호에서 성분이 검증된 경우에만 명시적 제형·농도를 보존한다.
+        if (
+            fields["form"]
+            and annotation_fields["form"]
+            and fields["form"] != annotation_fields["form"]
+        ):
+            return None
+        if (
+            fields["strengths"]
+            and annotation_fields["strengths"]
+            and fields["strengths"] != annotation_fields["strengths"]
+        ):
+            return None
+        fields["form"] = fields["form"] or annotation_fields["form"]
+        fields["strengths"] = fields["strengths"] or annotation_fields["strengths"]
+    return fields
 
 
 # 이름·관측 함량·세부 제형·명시된 업체명을 함께 대조한다.
@@ -214,6 +246,89 @@ def reading_combinations(parts):
     return list(combinations(*choices))
 
 
+# 상표 사전 대신 같은 줄의 간격·높이로 두 이름 조각의 연결 가설을 제한한다.
+def tight_name_pair(left, right):
+    if left.get("evidence") == "row" or right.get("evidence") == "row":
+        return False
+    fields = name_fields("".join(part["text"] for part in left["lines"]))
+    if fields["form"] or fields["strengths"] or fields["quantities"]:
+        return False
+    x1, y1, x2, y2 = left["box"]
+    a1, b1, a2, b2 = right["box"]
+    h, k = y2 - y1, b2 - b1
+    return (
+        min(h, k) > 0
+        and max(h, k) <= min(h, k) * 4
+        and a1 > x1
+        and a2 > x2
+        and -min(x2 - x1, a2 - a1) * 0.2 <= a1 - x2 <= min(h, k) * 0.5
+        and min(y2, b2) - max(y1, b1) >= min(h, k) * 0.7
+    )
+
+
+# 독립 후보와 인접 결합을 모두 공식 품목에 대조하며 원래 영역 번호를 보존한다.
+def candidate_observations(cells, index, min_score):
+    cell = cells[index]
+    options = [([index], cell)]
+    for other_index, other in enumerate(cells):
+        if other_index == index:
+            continue
+        indices = (
+            [other_index, index]
+            if tight_name_pair(other, cell)
+            else [index, other_index]
+            if tight_name_pair(cell, other)
+            else None
+        )
+        if indices is None or any(
+            part["score"] < min_score for i in indices for part in cells[i]["lines"]
+        ):
+            continue
+        left, right = [cells[i] for i in indices]
+        options.append(
+            (
+                indices,
+                {
+                    "lines": left["lines"] + right["lines"],
+                    "metadata": left.get("metadata", []) + right.get("metadata", []),
+                    "box": [
+                        min(left["box"][0], right["box"][0]),
+                        min(left["box"][1], right["box"][1]),
+                        max(left["box"][2], right["box"][2]),
+                        max(left["box"][3], right["box"][3]),
+                    ],
+                },
+            )
+        )
+    observations = []
+    for indices, option in options:
+        for parts in reading_combinations(option["lines"]):
+            observed = extract_candidate({**option, "lines": list(parts)}, min_score)
+            observed["_indices"], observed["_box"] = indices, option["box"]
+            observations.append(observed)
+            if len(observations) > 8:
+                raise RecognitionError("extraction", "TOO_MANY_OCR_ALTERNATIVES")
+    return observations
+
+
+# 유일하게 식별된 큰 제목에 밀착한 작은 부가 문구만 같은 포장의 문맥으로 분류한다.
+def nearby_context(cell, owner):
+    fields = name_fields("".join(part["text"] for part in cell["lines"]))
+    if cell.get("evidence") == "row" or fields["form"] or fields["strengths"]:
+        return False
+    x1, y1, x2, y2 = cell["box"]
+    a1, b1, a2, b2 = owner["box"]
+    height = max(min(p["box"][3] - p["box"][1], p["box"][2] - p["box"][0]) for p in cell["lines"])
+    other = max(min(p["box"][3] - p["box"][1], p["box"][2] - p["box"][0]) for p in owner["lines"])
+    if height >= other * 0.85:
+        return False
+    horizontal = min(x2, a2) - max(x1, a1)
+    vertical = min(y2, b2) - max(y1, b1)
+    return (
+        horizontal >= min(x2 - x1, a2 - a1) * 0.5 and max(b1 - y2, y1 - b2, 0) <= other * 0.75
+    ) or (vertical >= min(y2 - y1, b2 - b1) * 0.7 and max(a1 - x2, x1 - a2, 0) <= other * 0.5)
+
+
 # 한 판독 대안을 공식 품목과 대조하며 검색·성분 결과를 이벤트 안에서 재사용한다.
 def lookup_candidate(observed, api, ingredient_cache, search_cache, index, diagnostics):
     try:
@@ -243,9 +358,10 @@ def lookup_candidate(observed, api, ingredient_cache, search_cache, index, diagn
         code = str(product["ITEM_SEQ"])
         if reason == "ANNOTATION_UNVERIFIED":
             annotation = re.fullmatch(r"(.+)\(([^()]+)\)", product["ITEM_NAME"].strip())
-            # 이름 본문·함량·제형이 먼저 일치할 때만 같은 품목의 공식 성분으로 괄호를 검증한다.
+            # 이름 본문·업체가 맞으면 성분 괄호를 확인하고 제형·함량까지 다시 대조한다.
             bare = {**product, "ITEM_NAME": annotation[1]} if annotation else product
-            if annotation and product_match_reason(observed, bare) == "MATCH":
+            base_observed = {**observed, "form": None, "strengths": set()}
+            if annotation and product_match_reason(base_observed, bare) == "MATCH":
                 plausible = True
                 detail_checks += 1
                 try:
@@ -286,13 +402,13 @@ def identify(cells, api, min_score=0.9, diagnostics=None):
     if len(cells) > 25:
         raise RecognitionError("extraction", "TOO_MANY_PRODUCTS")
     medicines, items, ingredient_cache, ignored, search_cache = {}, [], {}, [], {}
+    consumed, deferred, owners = set(), [], []
     for index, cell in enumerate(cells):
+        if index in consumed:
+            continue
         required = cell.get("required", True)
         try:
-            observations = [
-                extract_candidate({**cell, "lines": list(parts)}, min_score)
-                for parts in reading_combinations(cell["lines"])
-            ]
+            observations = candidate_observations(cells, index, min_score)
         except RecognitionError as exc:
             # 제목·제형·약품 행 근거 없는 저신뢰 문구는 등록 후보로 승격하지 않는다.
             if not required and exc.code == "LOW_OCR_CONFIDENCE":
@@ -333,11 +449,37 @@ def identify(cells, api, min_score=0.9, diagnostics=None):
             ignored.append({"candidate_index": index, "reason": "NO_CATALOG_MATCH"})
             continue
         if len(candidates) != 1:
+            if not candidates and not plausible and cell.get("evidence") == "title":
+                deferred.append((index, cell))
+                continue
             raise RecognitionError(
                 "matching", "AMBIGUOUS_PRODUCT" if candidates else "PRODUCT_NOT_FOUND"
             )
         code, product = next(iter(candidates.items()))
         observed = witnesses[code]
+        # 결합한 조각이 독립된 다른 약품과도 일치하면 결합으로 숨기지 않는다.
+        for used_index in observed["_indices"]:
+            if used_index == index:
+                continue
+            for parts in reading_combinations(cells[used_index]["lines"]):
+                independent = extract_candidate(
+                    {**cells[used_index], "lines": list(parts)}, min_score
+                )
+                separate, possible, _, _, _ = lookup_candidate(
+                    independent, api, ingredient_cache, search_cache, used_index, diagnostics
+                )
+                if any(other_code != code for other_code in separate):
+                    raise RecognitionError("matching", "AMBIGUOUS_PRODUCT")
+                # 별도 약품의 근거가 있지만 상세 검증이 끝나지 않았다면 결합으로 숨기지 않는다.
+                if possible and not separate:
+                    raise RecognitionError("matching", "PRODUCT_NOT_FOUND")
+        consumed.update(observed["_indices"])
+        owners.append(
+            {
+                "box": observed["_box"],
+                "lines": [part for i in observed["_indices"] for part in cells[i]["lines"]],
+            }
+        )
         fields = official_fields(product, ingredient_cache.get(code, ()))
         if not fields["form"] or len(fields["strengths"]) > 1:
             raise RecognitionError("validation", "REQUIRED_PRODUCT_FIELDS_MISSING")
@@ -358,7 +500,7 @@ def identify(cells, api, min_score=0.9, diagnostics=None):
         items.append(
             {
                 "cell_index": index,
-                "box": cell["box"],
+                "box": observed["_box"],
                 "recognition_status": "SUCCEEDED",
                 "product_code": code,
                 "name_score": observed["score"],
@@ -366,8 +508,15 @@ def identify(cells, api, min_score=0.9, diagnostics=None):
                 "package_quantity": {"value": quantity[0], "unit": quantity[1]}
                 if quantity
                 else None,
+                "package_size": observed["package_size"],
             }
         )
+    for index, cell in deferred:
+        if index in consumed:
+            continue
+        if sum(nearby_context(cell, owner) for owner in owners) != 1:
+            raise RecognitionError("matching", "PRODUCT_NOT_FOUND")
+        ignored.append({"candidate_index": index, "reason": "VERIFIED_PRODUCT_CONTEXT"})
     if diagnostics is not None:
         diagnostics.selection([item["cell_index"] for item in items], ignored)
     if not items:

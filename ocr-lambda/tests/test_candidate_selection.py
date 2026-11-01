@@ -21,6 +21,101 @@ from backend.lambda_function import process_records
 from backend.recognition import ApiError, RecognitionError, identify, lookup_candidate
 
 
+# 사전에 없는 접두 이름·상표도 위치와 공식 품목이 일치하면 결합한다.
+@pytest.mark.parametrize("prefix,brand", [("가상", "새봄"), ("새빛", "하늘"), ("초록", "바다")])
+def test_unseen_brand_fragments_are_catalog_validated(prefix, brand):
+    cells = group_lines([line(prefix, (10, 10, 40, 25)), line(brand, (41, 10, 105, 42))])
+    result = identify(cells, catalog_api(product(prefix + brand + "액")))
+    assert len(result["items"]) == 1
+    assert result["items"][0]["box"] == [10, 10, 105, 42]
+
+
+# 가까운 두 조각이 각각 다른 품목으로도 확인되면 결합해 숨기지 않는다.
+def test_join_cannot_hide_independent_medicine():
+    cells = group_lines([line("가상", (10, 10, 40, 25)), line("새봄", (41, 10, 105, 42))])
+    with pytest.raises(RecognitionError, match="AMBIGUOUS_PRODUCT"):
+        identify(cells, catalog_api(product("가상새봄액"), product("새봄정", "900000002")))
+
+
+# 결합 조각의 별도 품목이 성분 검증에 실패해도 미확인 약품을 숨기지 않는다.
+def test_join_cannot_hide_unverified_independent_medicine():
+    cells = group_lines([line("가상", (10, 10, 40, 25)), line("새봄", (41, 10, 105, 42))])
+    api = catalog_api(product("가상새봄액"), product("새봄정(미확인성분)", "900000002"))
+    api.ingredients.return_value = [{"name": "다른성분"}]
+    with pytest.raises(RecognitionError, match="PRODUCT_NOT_FOUND"):
+        identify(cells, api)
+
+
+# 떨어진 상표 조각은 공식 이름을 만들 수 있어도 억지로 연결하지 않는다.
+def test_unseen_fragments_far_apart_do_not_join():
+    cells = group_lines([line("가상", (10, 10, 40, 25)), line("새봄", (200, 10, 264, 42))])
+    with pytest.raises(RecognitionError, match="PRODUCT_NOT_FOUND"):
+        identify(cells, catalog_api(product("가상새봄액")))
+
+
+# 큰 제품명에 밀착한 작은 안내 문구는 공식 무결과를 확인한 뒤에만 제외한다.
+def test_verified_context_not_required_product(caplog):
+    cells = group_lines(
+        [line("가상연고", (100, 220, 230, 250)), line("새빛상표", (170, 195, 250, 218))]
+    )
+    result = identify(cells, catalog_api(product("가상연고")), diagnostics=Diagnostics("synthetic"))
+    assert len(result["items"]) == 1
+    assert "VERIFIED_PRODUCT_CONTEXT" in caplog.text
+
+
+# 안내 위치에 있어도 실제 제형이나 별도 품목 근거가 있으면 무시하지 않는다.
+@pytest.mark.parametrize("caption", ["미확인정", "또다른약"])
+def test_context_with_product_evidence_is_not_suppressed(caption):
+    cells = group_lines(
+        [line("가상연고", (100, 220, 230, 250)), line(caption, (170, 195, 250, 218))]
+    )
+    api = catalog_api(product("가상연고"), product("또다른약정", "900000002"))
+    if caption == "미확인정":
+        with pytest.raises(RecognitionError):
+            identify(cells, api)
+    else:
+        assert len(identify(cells, api)["medicines"]) == 2
+
+
+# 영문 로고는 강제 제품이 아니지만 영문 상표가 실제 품목이면 포함한다.
+def test_latin_title_requires_catalog_evidence():
+    cells = group_lines([line("가상연고", (10, 10, 140, 40)), line("ACME", (200, 100, 350, 180))])
+    assert len(identify(cells, catalog_api(product("가상연고")))["medicines"]) == 1
+    assert (
+        len(
+            identify(cells, catalog_api(product("가상연고"), product("ACME정", "900000002")))[
+                "medicines"
+            ]
+        )
+        == 2
+    )
+
+
+# 본문에 제형이 없더라도 공식 괄호의 성분·제형·농도가 확인되면 보존한다.
+def test_validated_annotation_supplies_form_and_concentration():
+    cells = group_lines([line("가상포비딘")])
+    official = product("가상포비딘(포비돈요오드액10%)", ITEM_INGR_NAME="포비돈요오드")
+    medicine = identify(cells, catalog_api(official))["medicines"][0]
+    assert medicine["dosage_form"] == "액" and medicine["strength"] == "10%"
+
+
+# 괄호에 단위가 있어도 성분 근거가 없으면 제형과 농도를 채우지 않는다.
+def test_annotation_concentration_requires_ingredient_proof():
+    with pytest.raises(RecognitionError):
+        identify(
+            group_lines([line("가상포비딘")]), catalog_api(product("가상포비딘(미확인성분액10%)"))
+        )
+
+
+# 별도의 포장 용량을 주성분 함량으로 매칭하지 않는다.
+@pytest.mark.parametrize("size", ["25ml", "5g"])
+def test_pack_size_is_not_active_strength(size):
+    cells = group_lines([line("가상연고", (10, 10, 140, 40)), line(size, (15, 44, 65, 60))])
+    result = identify(cells, catalog_api(product("가상연고")))
+    assert result["medicines"][0]["strength"] is None
+    assert result["items"][0]["package_size"]["unit"] == ("ml" if size.endswith("ml") else "g")
+
+
 # 식약처 응답을 이름별로 달리해 무관한 문구가 항상 성공하는 Mock을 방지한다.
 def catalog_api(*products):
     api = api_for(*products)

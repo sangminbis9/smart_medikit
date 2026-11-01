@@ -34,6 +34,35 @@ def read_image(data):
     return image
 
 
+# 균일한 외곽 배경에서만 모든 유의미한 전경을 포함하는 확대 영역을 구한다.
+def foreground_region(image):
+    import cv2
+    import numpy as np
+
+    height, width = image.shape[:2]
+    scale = min(1.0, 960 / max(height, width))
+    sample = cv2.resize(image, None, fx=scale, fy=scale) if scale < 1 else image
+    edges = np.concatenate([sample[0], sample[-1], sample[:, 0], sample[:, -1]]).astype(np.float32)
+    background = np.median(edges, axis=0)
+    if np.percentile(np.linalg.norm(edges - background, axis=1), 90) > 20:
+        return None
+    mask = np.linalg.norm(sample.astype(np.float32) - background, axis=2) > 35
+    ys, xs = np.nonzero(mask)
+    if len(xs) < 16:
+        return None
+    x1, y1, x2, y2 = (
+        int(xs.min() / scale),
+        int(ys.min() / scale),
+        int((xs.max() + 1) / scale),
+        int((ys.max() + 1) / scale),
+    )
+    pad = max(8, round(max(x2 - x1, y2 - y1) * 0.05))
+    box = [max(0, x1 - pad), max(0, y1 - pad), min(width, x2 + pad), min(height, y2 + pad)]
+    if (box[2] - box[0]) * (box[3] - box[1]) > height * width * 0.65:
+        return None
+    return box
+
+
 # 높이·수평 거리·겹침을 함께 검사하여 가까운 조각만 연결한다.
 def adjacent(left, right, *, below=False):
     x1, y1, x2, y2 = left["box"]
@@ -65,7 +94,7 @@ def can_join(left, right):
         return False
     if fragment_kind(right["text"]) in {"form", "strength"}:
         return True
-    # 자유로운 단어 연결 대신 사진에서 분리될 수 있는 제품명 구성만 허용한다.
+    # 기존 검증된 조각은 유지하고 새 이름의 결합 가설은 공식 품목 대조 단계에서 다룬다.
     pairs = {
         "모드": {"코", "코s", "코에스"},
         "모드코": {"s", "에스"},
@@ -266,8 +295,12 @@ def group_lines(lines):
         )
         cell["evidence"] = evidence
         cell["required"] = evidence != "lexical"
+        text = normalize_name("".join(part["text"] for part in cell["lines"]))
+        if product_rows is None and re.fullmatch(r"[a-z]+", text):
+            # 영문 로고와 영문 상표는 공식 품목에 일치할 때만 제품으로 승격한다.
+            cell.update(evidence="lexical", required=False)
     for line in rows:
-        if fragment_kind(line["text"]) not in {"quantity", "manufacturer"}:
+        if fragment_kind(line["text"]) not in {"quantity", "manufacturer", "package_size"}:
             continue
         owners = [
             candidate
@@ -287,7 +320,7 @@ def group_lines(lines):
 def name_height(cell):
     return max(
         (
-            part["box"][3] - part["box"][1]
+            min(part["box"][3] - part["box"][1], part["box"][2] - part["box"][0])
             for part in cell["lines"]
             if fragment_kind(part["text"]) == "name"
         ),
@@ -323,6 +356,10 @@ def reconcile_regions(original, refined):
             retained.append(old)
             continue
         children = [new for _, new in overlaps]
+        if len(children) == 1 and old["score"] < 0.9 <= children[0]["score"]:
+            intersection, old_area, new_area = box_overlap(old, children[0])
+            if intersection / new_area >= 0.9 and new_area / old_area >= 0.3:
+                continue
         old_height = old["box"][3] - old["box"][1]
         # 큰 검출 상자 안에서 둘 이상의 겹치지 않는 작은 줄이 확인되면 줄 분리를 우선한다.
         split = (
@@ -565,6 +602,70 @@ class PaddleReader:
             diagnostics.upright(summaries)
         return cells
 
+    # 작은 제형이 큰 제품명 상자에 겹치면 실제 경계로 나눠 기존 인식기로 재검증한다.
+    def _refine_word_boundaries(self, image, lines):
+        import cv2
+
+        targets, crops = [], []
+        forms = [
+            row for row in lines if fragment_kind(row["text"]) == "form" and row["score"] >= 0.9
+        ]
+        for index, line in enumerate(lines):
+            if fragment_kind(line["text"]) != "name":
+                continue
+            x1, y1, x2, y2 = line["box"]
+            height = y2 - y1
+            neighbors = [
+                form
+                for form in forms
+                if x1 + height < form["box"][0] < x2 < form["box"][2]
+                and 0.3 * height <= form["box"][3] - form["box"][1] <= 0.85 * height
+                and min(y2, form["box"][3]) - max(y1, form["box"][1])
+                >= (form["box"][3] - form["box"][1]) * 0.8
+            ]
+            if len(neighbors) != 1 or len(targets) >= 4:
+                continue
+            boundary = neighbors[0]["box"][0]
+            pad = max(2, round(height * 0.1))
+            crop = image[
+                max(0, y1 - pad) : min(image.shape[0], y2 + pad),
+                max(0, x1 - pad) : min(image.shape[1], boundary + pad),
+            ]
+            if max(crop.shape[:2]) > 960:
+                scale = 960 / max(crop.shape[:2])
+                crop = cv2.resize(crop, None, fx=scale, fy=scale)
+            gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
+            binary = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)[1]
+            crops.extend([crop, cv2.cvtColor(binary, cv2.COLOR_GRAY2BGR)])
+            targets.append((index, [x1, y1, boundary, y2]))
+        if not targets:
+            return lines
+        pipeline = getattr(self._engine(), "paddlex_pipeline", None)
+        recognizer = getattr(getattr(pipeline, "_pipeline", pipeline), "text_rec_model", None)
+        if not callable(recognizer):
+            raise ImageError("OCR_RUNTIME_INCOMPATIBLE")
+        predictions = list(recognizer(crops))
+        if len(predictions) != len(crops):
+            raise ImageError("OCR_OUTPUT_INVALID")
+        refined = list(lines)
+        for offset, (index, box) in enumerate(targets):
+            readings = []
+            for output in predictions[offset * 2 : offset * 2 + 2]:
+                try:
+                    text, score = output["rec_text"], float(output["rec_score"])
+                    if not isinstance(text, str) or not math.isfinite(score) or not 0 <= score <= 1:
+                        raise ImageError("OCR_OUTPUT_INVALID")
+                except (KeyError, ValueError, TypeError):
+                    raise ImageError("OCR_OUTPUT_INVALID") from None
+                if score >= 0.9 and candidate_name(text) and not name_fields(text)["form"]:
+                    readings.append({"text": text, "score": score, "box": box})
+            if readings:
+                selected = readings[0]
+                for other in readings[1:]:
+                    selected = choose_reading(selected, other)
+                refined[index] = selected
+        return refined
+
     # 전체 OCR 뒤 저해상도·큰 상표 영역을 같은 모델로 최대 세 번 더 검출한다.
     def __call__(self, data, diagnostics=None):
         image = read_image(data)
@@ -574,10 +675,12 @@ class PaddleReader:
         if diagnostics is not None:
             diagnostics.regions(lines, image.shape)
         regions = product_regions(lines, image.shape)
+        foreground = foreground_region(image)
         # 약봉투의 열 제한은 최종 후보 추출에서도 유지하며 임의의 문서 종류를 요구하지 않는다.
-        if max(height, width) < 960 or regions:
-            for index, box in enumerate([full_box] + regions, start=1):
+        if max(height, width) < 960 or regions or foreground:
+            for index, box in enumerate([foreground or full_box] + regions, start=1):
                 refined = self._predict(image, box, refined=True)
+                refined = self._refine_word_boundaries(image, refined)
                 if diagnostics is not None:
                     diagnostics.regions(refined, image.shape, pass_index=index, source_box=box)
                 lines = reconcile_regions(lines, refined)

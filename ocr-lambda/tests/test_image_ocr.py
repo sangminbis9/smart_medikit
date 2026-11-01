@@ -7,6 +7,7 @@ from unittest.mock import Mock
 import cv2
 import numpy as np
 import pytest
+from test_candidate_selection import catalog_api
 from test_recognition import PHOTO_CASES, api_for, product
 
 from backend.diagnostics import Diagnostics
@@ -109,6 +110,43 @@ def test_private_photo_live_ocr_mock_catalog(
     result = identify(cells, api_for(*products))
     assert len(result["medicines"]) == 1
     assert result["medicines"][0]["name"] == official
+    assert len(result["items"]) == 1
+    score = float(result["items"][0]["name_score"])
+    assert score >= 0.9
+    record_property("name_score", score)
+
+
+# 병·튜브 원본은 로컬에만 두고 실제 OCR과 합성 품목 대조를 분리해 검증한다.
+@pytest.mark.parametrize(
+    "filename,official,ingredient",
+    [
+        (
+            "codex-clipboard-0f7c1e28-2fca-4c63-92d3-d7771515a550.png",
+            "성광포비딘(포비돈요오드액10%)",
+            "포비돈요오드",
+        ),
+        (
+            "codex-clipboard-6b7b77e7-dcf7-4251-a2f1-4ec418784f9e.png",
+            "후시딘연고",
+            "퓨시드산나트륨",
+        ),
+    ],
+    ids=["bottle", "tube"],
+)
+def test_private_bottle_tube_live_ocr(filename, official, ingredient, live_reader, record_property):
+    directory = os.environ.get("OCR_EXTRA_TEST_IMAGE_DIR")
+    if not directory:
+        pytest.skip("병·튜브 원본 검증은 OCR_EXTRA_TEST_IMAGE_DIR을 지정할 때만 실행")
+    cells = live_reader((Path(directory) / filename).read_bytes())
+    products = [product(case[2], f"90000000{index + 1}") for index, case in enumerate(PHOTO_CASES)]
+    products += [
+        product("성광포비딘(포비돈요오드액10%)", "900000005", ITEM_INGR_NAME="포비돈요오드"),
+        product("후시딘연고", "900000006"),
+    ]
+    result = identify(cells, catalog_api(*products))
+    assert len(result["medicines"]) == 1
+    assert result["medicines"][0]["name"] == official
+    assert result["medicines"][0]["form"] == "OTHER"
     assert len(result["items"]) == 1
     score = float(result["items"][0]["name_score"])
     assert score >= 0.9

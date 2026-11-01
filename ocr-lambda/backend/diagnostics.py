@@ -144,7 +144,8 @@ class Diagnostics:
                         "reason": row.get("reason"),
                     }
                     for row in ignored[:25]
-                    if row.get("reason") in {"LOW_LEXICAL_CONFIDENCE", "NO_CATALOG_MATCH"}
+                    if row.get("reason")
+                    in {"LOW_LEXICAL_CONFIDENCE", "NO_CATALOG_MATCH", "VERIFIED_PRODUCT_CONTEXT"}
                 ],
             },
         )

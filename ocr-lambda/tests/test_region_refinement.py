@@ -15,12 +15,68 @@ from backend.diagnostics import Diagnostics
 from backend.image_ocr import (
     ImageError,
     PaddleReader,
+    foreground_region,
     group_lines,
     product_regions,
     reconcile_regions,
 )
 from backend.lambda_function import process_records
 from backend.recognition import RecognitionError, identify
+
+
+# 배경색과 무관하게 떨어진 전경 둘을 모두 포함하고 원본 좌표를 유지한다.
+@pytest.mark.parametrize("background", [255, 120])
+def test_foreground_roi_keeps_all_objects(background):
+    image = np.full((600, 1000, 3), background, np.uint8)
+    image[200:350, 300:400] = 0
+    image[280:380, 600:700] = 0
+    box = foreground_region(image)
+    assert box[0] <= 300 and box[1] <= 200 and box[2] >= 700 and box[3] >= 380
+    assert box != [0, 0, 1000, 600]
+
+
+# 균일한 빈 이미지나 복잡한 가장자리는 전경을 임의로 잘라내지 않는다.
+def test_foreground_roi_rejects_blank_and_complex_border():
+    assert foreground_region(np.full((100, 100, 3), 255, np.uint8)) is None
+    image = np.full((100, 100, 3), 255, np.uint8)
+    image[:50] = 0
+    assert foreground_region(image) is None
+
+
+# 제품명과 겹친 작은 제형의 실제 위치를 경계로 사용하고 임의 비율로 자르지 않는다.
+def test_word_boundary_uses_form_geometry():
+    from types import SimpleNamespace
+
+    lines = [line("가상오독", (116, 219, 205, 249), 0.88), line("연고", (195, 229, 227, 246), 0.99)]
+    recognizer = Mock(
+        return_value=[
+            {"rec_text": "새로운약", "rec_score": 0.94},
+            {"rec_text": "다른판독", "rec_score": 0.95},
+        ]
+    )
+    reader = PaddleReader()
+    reader.engine = SimpleNamespace(
+        paddlex_pipeline=SimpleNamespace(_pipeline=SimpleNamespace(text_rec_model=recognizer))
+    )
+    result = reader._refine_word_boundaries(np.zeros((500, 500, 3), np.uint8), lines)
+    assert result[0]["box"] == [116, 219, 195, 249]
+    assert {result[0]["text"], result[0]["alternatives"][0]["text"]} == {"새로운약", "다른판독"}
+    assert len(recognizer.call_args.args[0]) == 2
+
+
+# 경계 보정도 신뢰도가 부족하면 원래 판독을 임의 승격하지 않는다.
+def test_word_boundary_low_scores_are_not_promoted():
+    from types import SimpleNamespace
+
+    lines = [line("가상오독", (116, 219, 205, 249), 0.88), line("연고", (195, 229, 227, 246), 0.99)]
+    recognizer = Mock(return_value=[{"rec_text": "새로운약", "rec_score": 0.89}] * 2)
+    reader = PaddleReader()
+    reader.engine = SimpleNamespace(
+        paddlex_pipeline=SimpleNamespace(_pipeline=SimpleNamespace(text_rec_model=recognizer))
+    )
+    result = reader._refine_word_boundaries(np.zeros((500, 500, 3), np.uint8), lines)
+    assert result == lines
+
 
 # 로그에 기록되지 않은 OCR 원문은 추정하지 않고 실패 형태를 합성한다.
 CASES = [

@@ -22,7 +22,7 @@
 
 - 필수 제품 필드: 9자리 품목기준코드, 코드에 연결된 `medicine_id`, 공식 제품명, 공식 제품명의 검증 가능한 제형, 일치한 OCR 근거. 함량은 명시적 단위가 확인될 때만 저장하며 `탁센400`의 숫자만 보고 400mg을 만들어 내지 않는다. 제조사·포장 수량·함량이 확인되지 않으면 `null`이다.
 - `Medicine`은 기존 필드를 유지하고 `dosage_form`, `manufacturer`를 추가한다. `RecognitionEvent.items`의 `name_score`, `package_quantity`는 이미지에서 관측한 근거다. 포장 수량은 실제 잔여량이 아니며 동일 제품의 다른 포장에 적용하지 않는다.
-- 내부 성공 단계는 `ocr_status`, `extraction_status`, `matching_status`로 구분한다. 선택적 성분 조회는 `ingredients_status=SUCCEEDED | NO_DATA | UNAVAILABLE`로 구분하며 제품 대조 성공을 OCR 실패로 바꾸지 않는다. 기존 성분 캐시는 장애 시 지우지 않으며 최근 조회 상태와 `ingredients_last_success_at`을 함께 해석해야 한다. 안전성 검사 완료를 뜻하지 않는다.
+- 내부 성공 단계는 `ocr_status`, `extraction_status`, `matching_status`로 구분한다. 선택적 성분 조회는 `ingredients_status=SUCCEEDED | PARTIAL | NO_DATA | UNAVAILABLE`로 구분하며 제품 대조 성공을 OCR 실패로 바꾸지 않는다. 기존 성분 캐시는 장애 시 지우지 않으며 최근 조회 상태와 `ingredients_last_success_at`을 함께 해석해야 한다. 안전성 검사 완료를 뜻하지 않는다.
 - 필수 단계 실패는 `processing_status=FAILED`, `failure_stage`, `failure_code`, `retryable`, 처리 시각, 재처리용 S3 참조를 이벤트에 저장한다. 제품 후보·OCR 원문·환자 정보를 실패 레코드나 CloudWatch 로그에 넣지 않는다. 오류 로그는 원본 이벤트 ID 대신 SHA-256 `event_ref`, `stage`, `error_code`를 포함한다. 추가 진단 로그 범위는 아래 진단 절을 따른다. S3 객체 키와 event_id에도 개인정보를 사용하지 않아야 한다.
 - 신규 `PENDING`/`PROCESSING`/`REVIEW_REQUIRED` 레코드는 만들지 않는다. 실패 레코드는 같은 ID에서 성공으로 교체 가능하다. 기존 ZIP이 남긴 `FAILED`/`REVIEW_REQUIRED`/`PENDING`과 임대가 만료된 `PROCESSING`도 재처리할 수 있다. 기존에 잘못 저장된 제품을 자동 삭제하거나 정정하지는 않는다.
 - 성공 이벤트의 조건부 기록이 제품 갱신과 같은 트랜잭션에 있으므로 중복 완료가 제품을 다시 갱신하지 않는다. 응답 유실 뒤 재시도에서도 완료 기록을 읽어 건너뛴다. 같은 성공 ID의 다른 S3 입력은 `EVENT_SOURCE_CONFLICT`다. 메타데이터 ID가 없으면 재업로드가 다른 S3 이벤트로 취급될 수 있으므로 호출자가 안정된 ID를 제공해야 한다.
@@ -31,6 +31,40 @@
 - 성공/실패 이미지 모두 이 코드에서 삭제하지 않는다. 기존 S3 보존 정책을 따른다. 이 입력 경로는 웹 처방 보완용 임시 업로드 경로와 분리해야 하며 그 경로의 삭제 계약을 대체하지 않는다.
 
 ## 실행과 통합 경계
+
+### API 정보 보완 (2026-11-01)
+
+API 전송·응답 해석은 `backend/mfds.py`로 분리했다. 기존 식약처 08 허가정보 API와 서버의 `MFDS_API_KEY`를 그대로 사용하며 새 서비스나 새 인증키는 요구하지 않는다. 같은 품목의 상세 응답은 한 호출 내에서 재사용한다.
+
+첨부 CSV에서는 네 품목 식별은 완료되었지만 화이투벤의 여섯 `ingredients[].amount`가 비었고 `basis`가 단위 없는 `11,130`이었다. 기존 코드는 `QNT`만 읽고 `TOTAL_CONTENT`를 무조건 기준으로 복사했으며, 성분명만 있으면 `SUCCEEDED`로 처리했다. [공식 API 명세](https://www.data.go.kr/data/15095677/openapi.do)는 `QNT`(분량), `MATERIAL_NAME`(원료성분), `TOTAL_CONTENT`(총량)를 구분한다. [식약처 공개 품목정보](https://nedrug.mfds.go.kr/pbp/CCBBB01/getItemDetail?itemSeq=202300071)에는 각 성분의 함량이 존재한다. **실제 인증 API 원본을 재조회하지 않았으므로 공급 응답에서 QNT가 비었던 이유나 현재 MATERIAL_NAME의 실제 값까지 확인한 것은 아니다.**
+
+- 주성분 상세의 품목코드·성분명을 검증하고, 같은 품목 상세 `MATERIAL_NAME`의 `총량/성분명/분량/단위`가 명시된 행과 일대일 대응할 때 누락값을 보완한다. 여러 총량의 동명 성분·상충 함량·알 수 없는 형식은 임의 선택하지 않는다. 주성분 응답에 없는 첨가제를 추가하지 않는다. 테스트용 여섯 함량을 실행 코드에 하드코딩하지 않았다.
+- 성분 배열은 `name`, `amount`, `unit`, `basis`, `source`를 저장한다. 숫자만 있는 총량은 기준으로 인정하지 않는다. 미지원 단위나 누락 함량·기준은 `PARTIAL`과 `ingredients_missing_fields`로 표시한다. 복합제 함량은 성분별로 유지하고 기존 제품명 기반 `strength`에 하나의 숫자로 합치지 않는다.
+- `product_info`는 아래 다섯 공식 문구와 `source`, `source_updated_at`, `field_errors`를 보관한다. 문서는 XML 제목·CDATA 본문·표 순서를 유지한 평문으로 저장한다. 문서를 요약하거나 처방 지시로 변환하지 않는다.
+
+| 저장 필드 | 공식 상세 응답 |
+|---|---|
+| `product_info.indications` | `EE_DOC_DATA` 효능효과 |
+| `product_info.dosage` | `UD_DOC_DATA` 용법용량 |
+| `product_info.precautions` | `NB_DOC_DATA` 및 `PN_DOC_DATA` 주의사항 |
+| `product_info.storage_method` | `STORAGE_METHOD` 저장방법 |
+| `product_info.shelf_life` | `VALID_TERM` 사용기간 원문 |
+
+- `product_info_status=SUCCEEDED | PARTIAL | NO_DATA | UNAVAILABLE`, `product_info_missing_fields`, `product_info_error_code`로 정보 조회 상태를 구분한다. **성분과 다섯 문구가 모두 완전할 때만 `enrichment_status=SUCCEEDED`**, 나머지는 `INCOMPLETE`다. `COMPLETED`는 제품 식별 결과 저장 완료이며 모든 정보 조회 성공을 대신하지 않는다.
+- `product_info_checked_at`과 `product_info_last_success_at`을 기록한다. 성분·허가정보별로 완전한 새 결과는 갱신하고 불완전한 결과는 기존 캐시가 없는 경우에만 저장한다. 따라서 기존 캐시와 최신 조회 상태가 다를 수 있으며, 이벤트 스냅샷은 이번 조회 결과를 보여준다. 부족한 최신 조회가 과거 정상 값을 지우지 않는다.
+- `shelf_life`는 제조일 기준 사용기간 등 공식 문구이며 **해당 포장의 실제 만료일·개봉 후 사용기간을 계산하지 않는다**. 효능·용법·주의사항 조회는 DUR 검사나 개인별 복용 판단 완료를 뜻하지 않는다.
+- 한 필드 180KB 또는 저장 요청의 보수적 항목/트랜잭션 한도를 넘으면 조용히 잘라 성공 처리하지 않는다. 긴 문서/다약품 이미지의 저장 한도는 운영 검증 대상이다.
+- `api_enrichment` 진단은 원문·품목코드 없이 `primary_amount_missing`, `material_row_count`, `component_text_present`, `amounts_recovered`, 상태와 누락 필드 수만 기록한다. `component_text_present`는 원인 추적용이며 `CPNT_CTNT_CONT`의 임의 문자열에서 숫자를 뽑아 함량으로 쓰지 않는다.
+- 이미 완료된 이벤트는 멱등성 때문에 다시 조회하지 않는다. ZIP 교체 후 **새 event_id의 새 촬영/업로드**로 재처리하면 같은 `MEDICINE#<코드>`가 갱신된다. 기존 성공 이벤트를 삭제하거나 같은 ID에 다른 이미지를 넣지 않는다. 과거 실패 이벤트의 재처리 정책은 유지한다.
+
+실제 API 검증은 서버 전용 키를 로컬 환경에 안전하게 설정한 뒤 아래 opt-in 테스트로 수행할 수 있다. 키를 명령행·Git·채팅에 넣지 않는다. 원본 API 응답은 로그에 저장하지 않는다.
+
+```powershell
+$env:MFDS_LIVE_TEST='1'
+python -m pytest tests/test_enrichment.py -k live_mfds -q --tb=short
+```
+
+API가 권한 오류·누락·불명확한 값을 반환하면 이 검증은 실패한다. API에 없는 값을 임의 생성하여 통과시키지 않는다.
 
 기존 자원·권한·S3 알림·배포 형식은 이 변경에서 수정하지 않았다.
 
@@ -67,6 +101,8 @@ python -m pytest -q
 | test-4.jpg | 지르텍정, 10정, 증상 문구 | 실제 모델 추론 + Mock 품목 대조, 이름 점수 0.9999 |
 
 2026-10-31 로컬 검증: **150개 테스트 통과**(실제 사진 4개 디코딩 및 실제 모델 추론 4건 포함), Ruff 검사·포맷 확인·Python 컴파일 확인 통과. 단위 테스트는 기존 가상환경에서 실행하고, 실제 모델 테스트는 `private_data/ocr-work/.venv`에 분리한 Windows CPU 환경(PaddleOCR 3.3.2, PaddleX 3.3.13, PaddlePaddle 3.2.2)에서 실행했다. 실제 식약처 API·AWS는 호출하지 않았으며 네 사진의 통과를 일반적인 인식 성공률로 환산하지 않았다.
+
+2026-11-01 정보 보완 검증: **178개 통과, 실제 API 검증 4개 생략**. 네 실제 사진의 로컬 모델 추론·디코딩과 새 API/저장 회귀 테스트를 포함한다. 함량 보완·세 API 경로→원자 저장 연결·상충 응답·불완전 정보 표시·문서 파싱·저장 한도를 Mock으로 검증했다. 공식 명세는 온라인 확인했지만 사용자가 로컬 키 없이 Mock 검증을 선택했으므로 실제 인증 API 및 AWS 호출은 수행하지 않았다. 실환경 완료를 주장하지 않는다.
 
 ## 실환경 검증 필요 항목
 

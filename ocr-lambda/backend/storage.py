@@ -9,6 +9,8 @@ from decimal import Decimal
 from boto3.dynamodb.types import TypeDeserializer, TypeSerializer
 from botocore.exceptions import ClientError
 
+from backend.mfds import ingredient_gaps, validate_product_info
+
 
 # 저수준 DynamoDB 클라이언트에 필요한 속성 타입을 직렬화한다.
 def attributes(values):
@@ -52,10 +54,33 @@ def validate_result(result):
             or not medicine["name"].strip()
             or medicine.get("form") not in {"TABLET", "CAPSULE", "OTHER"}
             or not medicine.get("dosage_form")
-            or medicine.get("ingredients_status") not in {"SUCCEEDED", "NO_DATA", "UNAVAILABLE"}
+            or medicine.get("ingredients_status")
+            not in {"SUCCEEDED", "PARTIAL", "NO_DATA", "UNAVAILABLE"}
             or not isinstance(medicine.get("ingredients"), list)
         ):
             raise ValueError("REQUIRED_PRODUCT_FIELDS_MISSING")
+        if medicine["ingredients_status"] == "SUCCEEDED" and (
+            not medicine["ingredients"] or ingredient_gaps(medicine["ingredients"])
+        ):
+            raise ValueError("INCOMPLETE_INGREDIENT_SUCCESS")
+        if medicine.get("product_info_status") == "SUCCEEDED" and validate_product_info(
+            medicine.get("product_info")
+        ):
+            raise ValueError("INCOMPLETE_PRODUCT_INFO_SUCCESS")
+        if medicine.get("product_info_status") not in {
+            "SUCCEEDED",
+            "PARTIAL",
+            "NO_DATA",
+            "UNAVAILABLE",
+        }:
+            raise ValueError("PRODUCT_INFO_STATUS_REQUIRED")
+        expected = (
+            "SUCCEEDED"
+            if medicine["ingredients_status"] == medicine["product_info_status"] == "SUCCEEDED"
+            else "INCOMPLETE"
+        )
+        if medicine.get("enrichment_status") != expected:
+            raise ValueError("ENRICHMENT_STATUS_MISMATCH")
         codes.add(code)
     item_codes = set()
     for item in result["items"]:
@@ -114,9 +139,18 @@ class DynamoStore:
                     "manufacturer",
                     "ingredients_status",
                     "ingredients_error_code",
+                    "ingredients_missing_fields",
+                    "product_info_status",
+                    "product_info_error_code",
+                    "product_info_missing_fields",
+                    "enrichment_status",
                 )
             }
-            fields.update(entity_type="Medicine", ingredients_checked_at=checked_at)
+            fields.update(
+                entity_type="Medicine",
+                ingredients_checked_at=checked_at,
+                product_info_checked_at=checked_at,
+            )
             names, values, expressions = {}, {}, []
             for index, (name, value) in enumerate(fields.items()):
                 alias, token = "#m" + str(index), ":m" + str(index)
@@ -131,7 +165,17 @@ class DynamoStore:
             else:
                 # 선택 API 장애가 과거에 검증된 정상 성분을 빈 목록으로 덮어쓰지 않는다.
                 expressions.append("#ingredients=if_not_exists(#ingredients,:empty)")
-                values[":empty"] = []
+                values[":empty"] = (
+                    medicine["ingredients"] if medicine["ingredients_status"] == "PARTIAL" else []
+                )
+            # 불완전한 새 조회는 기존 완전한 허가정보 캐시를 덮어쓰지 않는다.
+            names["#info"] = "product_info"
+            values[":info"] = medicine["product_info"]
+            if medicine["product_info_status"] == "SUCCEEDED":
+                expressions.extend(["#info=:info", "product_info_last_success_at=:info_checked"])
+                values[":info_checked"] = checked_at
+            else:
+                expressions.append("#info=if_not_exists(#info,:info)")
             writes.append(
                 {
                     "Update": {
@@ -175,6 +219,15 @@ class DynamoStore:
                 }
             }
         )
+        # 상세 문서를 잘라 의미를 바꾸지 않고 DynamoDB 단일 항목·트랜잭션 한도를 먼저 검사한다.
+        if (
+            any(
+                len(json.dumps(write, ensure_ascii=False).encode("utf-8")) > 350_000
+                for write in writes
+            )
+            or len(json.dumps(writes, ensure_ascii=False).encode("utf-8")) > 3_500_000
+        ):
+            raise ValueError("PRODUCT_INFO_STORAGE_LIMIT")
         try:
             self.client.transact_write_items(TransactItems=writes)
             return True

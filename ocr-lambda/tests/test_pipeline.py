@@ -310,7 +310,10 @@ def test_lost_commit_ack_is_idempotent():
 def test_ingredient_outage_preserves_previous_ingredients():
     client, store, result, source = storage_case()
     result["medicines"][0].update(
-        ingredients_status="UNAVAILABLE", ingredients=[], ingredients_error_code="API_TIMEOUT"
+        ingredients_status="UNAVAILABLE",
+        ingredients=[],
+        ingredients_error_code="API_TIMEOUT",
+        enrichment_status="INCOMPLETE",
     )
     store.finish("event-01", source, result, "now")
     update = client.transactions[0]["TransactItems"][0]["Update"]

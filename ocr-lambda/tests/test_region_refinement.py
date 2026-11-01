@@ -104,7 +104,11 @@ def test_three_packaging_regressions(shape, initial, refined, official, caplog):
     retry = next(row for row in entries if row.get("pass_index") == 1)
     assert retry["source_box"] == [0, 0, width, height]
     assert retry["regions"][0]["box"] == refined[0]["box"]
-    assert all(part["text"] not in caplog.text for part in initial + refined)
+    # 한 글자 S가 상태 SUCCEEDED에 포함된 경우를 원문 유출로 오판하지 않는다.
+    assert all(
+        json.dumps(part["text"], ensure_ascii=False) not in caplog.text
+        for part in initial + refined
+    )
 
 
 # 0.8953은 반복 판독만으로 신뢰도가 올라가지 않으며 기존 기준에서 계속 실패한다.

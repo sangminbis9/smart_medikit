@@ -1,15 +1,12 @@
 """위치별 OCR 근거와 식약처 제품 정보를 대조하고 검증된 제품만 반환한다."""
 
-import json
 import math
 import re
 import unicodedata
 from decimal import Decimal
 from itertools import product as combinations
-from urllib.error import HTTPError, URLError
-from urllib.parse import urlencode, urlparse
-from urllib.request import urlopen
-from xml.etree import ElementTree
+
+from backend.mfds import ApiError, MfdsClient, ingredient_gaps, validate_product_info
 
 FORMS = (
     "연질캡슐",
@@ -45,14 +42,6 @@ NOISE = re.compile(
 BRAND_ALIASES = {"모드코s": "모드코에스"}
 # 탁센 공식 설명서의 전체 제품명만 대응하며 다른 탁센 제품으로 확장하지 않는다.
 BRAND_ALIASES["탁센400"] = "탁센400이부프로펜"
-
-
-class ApiError(Exception):
-    # 인증키·응답 원문 없이 호출 실패 사유와 재시도 가능 여부를 보존한다.
-    def __init__(self, code, retryable=False):
-        super().__init__(code)
-        self.code = code
-        self.retryable = retryable
 
 
 class RecognitionError(Exception):
@@ -383,21 +372,56 @@ def identify(cells, api, min_score=0.9, diagnostics=None):
         diagnostics.selection([item["cell_index"] for item in items], ignored)
     if not items:
         raise RecognitionError("matching", "PRODUCT_NOT_FOUND")
-    for code, medicine in medicines.items():
+    for index, (code, medicine) in enumerate(medicines.items()):
         try:
             if code not in ingredient_cache:
                 ingredient_cache[code] = load_ingredients(api, code)
             ingredients = ingredient_cache[code]
             medicine["ingredients"] = [
-                {key: row.get(key) for key in ("name", "amount", "unit", "basis")}
+                {key: row.get(key) for key in ("name", "amount", "unit", "basis", "source")}
                 for row in ingredients
             ]
-            medicine["ingredients_status"] = "SUCCEEDED" if ingredients else "NO_DATA"
+            gaps = ingredient_gaps(ingredients)
+            medicine["ingredients_missing_fields"] = gaps
+            medicine["ingredients_status"] = (
+                "PARTIAL" if gaps else "SUCCEEDED" if ingredients else "NO_DATA"
+            )
+            medicine["ingredients_error_code"] = "API_INGREDIENT_FIELDS_MISSING" if gaps else None
         except Exception as exc:
             medicine["ingredients_status"] = "UNAVAILABLE"
+            medicine["ingredients_missing_fields"] = []
             medicine["ingredients_error_code"] = (
                 exc.code if isinstance(exc, ApiError) else "INGREDIENT_SYSTEM_ERROR"
             )
+        # 제품 식별과 공식 정보의 완전성을 분리하여 외부 조회 장애가 OCR 실패가 되지 않게 한다.
+        try:
+            info = api.product_info(code)
+            missing = validate_product_info(info)
+            medicine["product_info"] = info
+            medicine["product_info_missing_fields"] = missing
+            medicine["product_info_status"] = (
+                "NO_DATA" if len(missing) == 5 else "PARTIAL" if missing else "SUCCEEDED"
+            )
+            medicine["product_info_error_code"] = (
+                "API_PRODUCT_INFO_FIELDS_MISSING" if missing else None
+            )
+        except Exception as exc:
+            medicine["product_info"] = {}
+            medicine["product_info_missing_fields"] = []
+            medicine["product_info_status"] = "UNAVAILABLE"
+            medicine["product_info_error_code"] = (
+                exc.code if isinstance(exc, ApiError) else "PRODUCT_INFO_SYSTEM_ERROR"
+            )
+        medicine["enrichment_status"] = (
+            "SUCCEEDED"
+            if medicine["ingredients_status"] == medicine["product_info_status"] == "SUCCEEDED"
+            else "INCOMPLETE"
+        )
+        if diagnostics is not None:
+            observations = (
+                api.ingredient_observations.get(code, {}) if isinstance(api, MfdsClient) else {}
+            )
+            diagnostics.enrichment(index, medicine, observations)
     return {
         "processing_status": "COMPLETED",
         "recognition_status": "SUCCEEDED",
@@ -409,144 +433,3 @@ def identify(cells, api, min_score=0.9, diagnostics=None):
         "medicines": list(medicines.values()),
         "retryable": False,
     }
-
-
-class MfdsClient:
-    # 공식 포털의 08 오퍼레이션을 사용하며 인증키는 실행 환경에서만 받는다.
-    def __init__(
-        self,
-        service_key,
-        transport=None,
-        page_size=100,
-        max_pages=5,
-        version="08",
-        timeout=8,
-    ):
-        if not service_key or not re.fullmatch(r"\d{2}", version):
-            raise ApiError("API_CONFIGURATION_ERROR")
-        self.service_key = service_key
-        self.transport = transport or self._download
-        self.page_size = page_size
-        self.max_pages = max_pages
-        self.version = version
-        self.timeout = timeout
-
-    # 제한 시간·응답 크기를 지켜 HTTPS로 공식 API만 읽는다.
-    def _download(self, url):
-        try:
-            with urlopen(url, timeout=self.timeout) as response:
-                if urlparse(response.url).hostname != "apis.data.go.kr":
-                    raise ApiError("API_UNEXPECTED_REDIRECT")
-                data = response.read(4_000_001)
-                if len(data) > 4_000_000:
-                    raise ApiError("API_RESPONSE_TOO_LARGE")
-                return data
-        except HTTPError as exc:
-            raise ApiError(
-                "API_HTTP_" + str(exc.code), exc.code == 429 or exc.code >= 500
-            ) from None
-        except (URLError, TimeoutError):
-            raise ApiError("API_TIMEOUT", True) from None
-
-    # JSON/XML 게이트웨이 오류와 공식 items.item/배열 응답을 검증한다.
-    def _page(self, operation, params, page):
-        query = urlencode(
-            {
-                "serviceKey": self.service_key,
-                "type": "json",
-                "pageNo": page,
-                "numOfRows": self.page_size,
-                **params,
-            }
-        )
-        raw = self.transport(
-            f"https://apis.data.go.kr/1471000/DrugPrdtPrmsnInfoService{self.version}/{operation}{self.version}?{query}"
-        )
-        try:
-            data = json.loads(raw)
-        except (ValueError, UnicodeDecodeError):
-            # 인증 오류가 XML로 반환되더라도 원문이나 키를 예외에 포함하지 않는다.
-            try:
-                xml = ElementTree.fromstring(raw)
-                code = xml.findtext(".//returnReasonCode") or xml.findtext(".//resultCode")
-            except ElementTree.ParseError:
-                code = None
-            if not code or not re.fullmatch(r"\d{2,4}", code):
-                code = None
-            raise ApiError(
-                "API_" + code if code else "API_INVALID_RESPONSE",
-                code in {"05", "22", "23"},
-            ) from None
-        if not isinstance(data, dict):
-            raise ApiError("API_INVALID_RESPONSE")
-        data = data.get("response", data)
-        if not isinstance(data, dict) or not isinstance(data.get("header"), dict):
-            raise ApiError("API_INVALID_RESPONSE")
-        code = str(data.get("header", {}).get("resultCode", ""))
-        if code not in {"00", "0000"}:
-            raise ApiError(
-                "API_" + code if code.isdigit() else "API_INVALID_RESPONSE",
-                code in {"01", "04", "05", "22", "23"},
-            )
-        body = data.get("body")
-        if not isinstance(body, dict):
-            raise ApiError("API_INVALID_RESPONSE")
-        items = body.get("items", [])
-        if isinstance(items, dict) and "item" in items:
-            items = items["item"]
-        if items in (None, ""):
-            items = []
-        if isinstance(items, dict):
-            items = [items] if items else []
-        if not isinstance(items, list) or not all(isinstance(item, dict) for item in items):
-            raise ApiError("API_INVALID_RESPONSE")
-        try:
-            total = int(body["totalCount"]) if "totalCount" in body else None
-            if total is not None and total < 0:
-                raise ValueError
-        except (TypeError, ValueError):
-            raise ApiError("API_INVALID_RESPONSE") from None
-        return items, total
-
-    # 결과를 잘라서 유일한 후보라고 오판하지 않도록 페이지 한도 초과를 실패로 둔다.
-    def _items(self, operation, params):
-        rows = []
-        for page in range(1, self.max_pages + 1):
-            items, total = self._page(operation, params, page)
-            rows.extend(items)
-            if total is not None and len(rows) > total:
-                raise ApiError("API_INCOMPLETE_RESPONSE")
-            if (total is not None and len(rows) == total) or (
-                total is None and len(items) < self.page_size
-            ):
-                return rows
-            if not items:
-                raise ApiError("API_INCOMPLETE_RESPONSE")
-        raise ApiError("API_RESULT_LIMIT")
-
-    # OCR 제품명으로 후보를 조회하고 최종 대조는 도메인 로직에 맡긴다.
-    def search(self, name):
-        # API의 단위 표기 차이로 검색이 누락되지 않게 줄기로 조회하고 전체 후보를 정밀 대조한다.
-        stem = re.split(r"\d+(?:\.\d+)?\s*(?:mg|ug|g|ml|%)", normalize_name(name), maxsplit=1)[0]
-        return self._items("getDrugPrdtPrmsnInq", {"item_name": stem or name})
-
-    # 공식 품목코드를 재검증하고 주성분 상세만 성분 배열로 변환한다.
-    def ingredients(self, code):
-        details = self._items("getDrugPrdtPrmsnDtlInq", {"item_seq": code})
-        if len(details) != 1 or str(details[0].get("ITEM_SEQ", "")) != code:
-            raise ApiError("API_PRODUCT_CODE_MISMATCH")
-        # 주성분 상세의 품목 필터는 공식 명세상 첫 글자가 대문자다.
-        rows = self._items("getDrugPrdtMcpnDtlInq", {"Item_seq": code})
-        result = []
-        for row in rows:
-            if str(row.get("ITEM_SEQ", "")) != code or not row.get("MTRAL_NM"):
-                raise ApiError("API_INGREDIENT_SCHEMA_MISMATCH")
-            result.append(
-                {
-                    "name": str(row["MTRAL_NM"]),
-                    "amount": str(row["QNT"]) if row.get("QNT") not in (None, "") else None,
-                    "unit": str(row["INGD_UNIT_CD"]) if row.get("INGD_UNIT_CD") else None,
-                    "basis": details[0].get("TOTAL_CONTENT") or None,
-                }
-            )
-        return result

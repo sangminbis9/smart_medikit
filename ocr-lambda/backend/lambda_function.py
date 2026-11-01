@@ -118,6 +118,8 @@ def process_records(
             for medicine in result["medicines"]:
                 if medicine["ingredients_error_code"]:
                     log_failure(event_id, "ingredients", medicine["ingredients_error_code"])
+                if medicine["product_info_error_code"]:
+                    log_failure(event_id, "product_info", medicine["product_info_error_code"])
             stage = "storage"
             saved = store.finish(event_id, source, result, datetime.now(timezone.utc).isoformat())
             processed += int(saved)

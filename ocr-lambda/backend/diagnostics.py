@@ -181,3 +181,27 @@ class Diagnostics:
                 "rejections": {key: value for key, value in reasons.items() if key in REJECTIONS},
             },
         )
+
+    # 공식 응답 원문 없이 함량 누락·보완 수와 조회 완전성만 기록한다.
+    def enrichment(self, index, medicine, observations):
+        states = {"SUCCEEDED", "PARTIAL", "NO_DATA", "UNAVAILABLE", "INCOMPLETE"}
+        payload = {"medicine_index": safe_number(index)}
+        for key in ("ingredients_status", "product_info_status", "enrichment_status"):
+            payload[key] = medicine.get(key) if medicine.get(key) in states else None
+        for key in (
+            "primary_row_count",
+            "primary_amount_missing",
+            "material_row_count",
+            "component_text_present",
+            "amounts_recovered",
+        ):
+            payload[key] = safe_number(observations.get(key))
+        payload["missing_ingredient_field_count"] = len(
+            medicine.get("ingredients_missing_fields", [])
+        )
+        payload["missing_info_fields"] = [
+            field
+            for field in medicine.get("product_info_missing_fields", [])
+            if field in {"indications", "dosage", "precautions", "storage_method", "shelf_life"}
+        ]
+        self._write("api_enrichment", payload)

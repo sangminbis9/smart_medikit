@@ -25,6 +25,14 @@ def api_for(*products):
     api.ingredients.return_value = [
         {"name": "테스트성분", "amount": "10", "unit": "mg", "basis": "1정"}
     ]
+    api.product_info.return_value = {
+        "indications": "합성 효능 문구",
+        "dosage": "합성 용법 문구",
+        "precautions": "합성 주의 문구",
+        "storage_method": "합성 보관 문구",
+        "shelf_life": "제조일로부터 36개월",
+        "source": "MFDS_PERMIT_DETAIL",
+    }
     return api
 
 
@@ -281,7 +289,9 @@ def test_multiple_distinct_products_success():
 # 목록에서 빠진 성분 근거는 같은 품목의 공식 상세로 확인하고 재조회 없이 재사용한다.
 def test_annotation_verified_by_same_product_details():
     api = api_for(product("지르텍정(세티리진염산염)"))
-    api.ingredients.return_value = [{"name": "세티리진염산염", "amount": "10", "unit": "mg"}]
+    api.ingredients.return_value = [
+        {"name": "세티리진염산염", "amount": "10", "unit": "mg", "basis": "1정"}
+    ]
     result = identify(group_lines([line("지르텍정", score=0.9703)]), api)
     assert result["processing_status"] == "COMPLETED"
     api.ingredients.assert_called_once_with("900000001")

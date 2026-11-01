@@ -360,3 +360,23 @@ def test_search_budget_blocks_additional_query():
     with pytest.raises(RecognitionError, match="TOO_MANY_SEARCH_QUERIES"):
         lookup_candidate({"name": "새가상약품"}, api, {}, cache, 0, None)
     api.search.assert_not_called()
+
+
+# 같은 상자의 기호 섞인 대체 판독은 제품명 검증을 통과하지 못해 API로 보내지 않는다.
+def test_invalid_alternative_never_reaches_api():
+    row = line("가상새봄", score=0.96)
+    row["alternatives"] = [line("가상새봄'", score=0.98)]
+    cells = group_lines([row])
+    api = catalog_api(product("가상새봄액"))
+    assert identify(cells, api)["medicines"][0]["name"] == "가상새봄액"
+    assert [call.args[0] for call in api.search.call_args_list] == ["가상새봄"]
+
+
+# 독립 조각을 검증할 때도 같은 이름 형식 검사를 적용한다.
+def test_invalid_joined_alternative_never_reaches_api():
+    row = line("새봄", (41, 10, 105, 42), 0.96)
+    row["alternatives"] = [line("새봄'", (41, 10, 105, 42), 0.98)]
+    cells = group_lines([line("가상", (10, 10, 40, 25)), row])
+    api = catalog_api(product("가상새봄액"))
+    assert identify(cells, api)["medicines"][0]["name"] == "가상새봄액"
+    assert all("'" not in call.args[0] for call in api.search.call_args_list)

@@ -303,11 +303,16 @@ def candidate_observations(cells, index, min_score):
     observations = []
     for indices, option in options:
         for parts in reading_combinations(option["lines"]):
+            # 기호가 섞인 대체 판독은 유효한 이름 가설이 아니므로 공식 API에 보내지 않는다.
+            if candidate_name("".join(part["text"] for part in parts)) is None:
+                continue
             observed = extract_candidate({**option, "lines": list(parts)}, min_score)
             observed["_indices"], observed["_box"] = indices, option["box"]
             observations.append(observed)
             if len(observations) > 8:
                 raise RecognitionError("extraction", "TOO_MANY_OCR_ALTERNATIVES")
+    if not observations:
+        raise RecognitionError("extraction", "NO_PRODUCT_NAME")
     return observations
 
 
@@ -462,6 +467,8 @@ def identify(cells, api, min_score=0.9, diagnostics=None):
             if used_index == index:
                 continue
             for parts in reading_combinations(cells[used_index]["lines"]):
+                if candidate_name("".join(part["text"] for part in parts)) is None:
+                    continue
                 independent = extract_candidate(
                     {**cells[used_index], "lines": list(parts)}, min_score
                 )
@@ -521,56 +528,7 @@ def identify(cells, api, min_score=0.9, diagnostics=None):
         diagnostics.selection([item["cell_index"] for item in items], ignored)
     if not items:
         raise RecognitionError("matching", "PRODUCT_NOT_FOUND")
-    for index, (code, medicine) in enumerate(medicines.items()):
-        try:
-            if code not in ingredient_cache:
-                ingredient_cache[code] = load_ingredients(api, code)
-            ingredients = ingredient_cache[code]
-            medicine["ingredients"] = [
-                {key: row.get(key) for key in ("name", "amount", "unit", "basis", "source")}
-                for row in ingredients
-            ]
-            gaps = ingredient_gaps(ingredients)
-            medicine["ingredients_missing_fields"] = gaps
-            medicine["ingredients_status"] = (
-                "PARTIAL" if gaps else "SUCCEEDED" if ingredients else "NO_DATA"
-            )
-            medicine["ingredients_error_code"] = "API_INGREDIENT_FIELDS_MISSING" if gaps else None
-        except Exception as exc:
-            medicine["ingredients_status"] = "UNAVAILABLE"
-            medicine["ingredients_missing_fields"] = []
-            medicine["ingredients_error_code"] = (
-                exc.code if isinstance(exc, ApiError) else "INGREDIENT_SYSTEM_ERROR"
-            )
-        # 제품 식별과 공식 정보의 완전성을 분리하여 외부 조회 장애가 OCR 실패가 되지 않게 한다.
-        try:
-            info = api.product_info(code)
-            missing = validate_product_info(info)
-            medicine["product_info"] = info
-            medicine["product_info_missing_fields"] = missing
-            medicine["product_info_status"] = (
-                "NO_DATA" if len(missing) == 5 else "PARTIAL" if missing else "SUCCEEDED"
-            )
-            medicine["product_info_error_code"] = (
-                "API_PRODUCT_INFO_FIELDS_MISSING" if missing else None
-            )
-        except Exception as exc:
-            medicine["product_info"] = {}
-            medicine["product_info_missing_fields"] = []
-            medicine["product_info_status"] = "UNAVAILABLE"
-            medicine["product_info_error_code"] = (
-                exc.code if isinstance(exc, ApiError) else "PRODUCT_INFO_SYSTEM_ERROR"
-            )
-        medicine["enrichment_status"] = (
-            "SUCCEEDED"
-            if medicine["ingredients_status"] == medicine["product_info_status"] == "SUCCEEDED"
-            else "INCOMPLETE"
-        )
-        if diagnostics is not None:
-            observations = (
-                api.ingredient_observations.get(code, {}) if isinstance(api, MfdsClient) else {}
-            )
-            diagnostics.enrichment(index, medicine, observations)
+    enrich_medicines(list(medicines.values()), api, ingredient_cache, diagnostics)
     return {
         "processing_status": "COMPLETED",
         "recognition_status": "SUCCEEDED",
@@ -582,3 +540,87 @@ def identify(cells, api, min_score=0.9, diagnostics=None):
         "medicines": list(medicines.values()),
         "retryable": False,
     }
+
+
+# 검증된 제품의 공식 정보만 보완하며 재시도에서는 이미 완전한 필드를 유지한다.
+def enrich_medicines(medicines, api, ingredient_cache=None, diagnostics=None, missing_only=False):
+    ingredient_cache = ingredient_cache if ingredient_cache is not None else {}
+    for index, medicine in enumerate(medicines):
+        code = medicine["product_code"]
+        if not missing_only or medicine.get("ingredients_status") != "SUCCEEDED":
+            medicine["ingredients_retryable"] = False
+            try:
+                if code not in ingredient_cache:
+                    ingredient_cache[code] = load_ingredients(api, code)
+                ingredients = ingredient_cache[code]
+                medicine["ingredients"] = [
+                    {key: row.get(key) for key in ("name", "amount", "unit", "basis", "source")}
+                    for row in ingredients
+                ]
+                gaps = ingredient_gaps(ingredients)
+                medicine["ingredients_missing_fields"] = gaps
+                medicine["ingredients_status"] = (
+                    "PARTIAL" if gaps else "SUCCEEDED" if ingredients else "NO_DATA"
+                )
+                medicine["ingredients_error_code"] = (
+                    "API_INGREDIENT_FIELDS_MISSING" if gaps else None
+                )
+            except Exception as exc:
+                medicine["ingredients_retryable"] = isinstance(exc, ApiError) and exc.retryable
+                medicine["ingredients_status"] = "UNAVAILABLE"
+                medicine["ingredients_missing_fields"] = []
+                medicine["ingredients_error_code"] = (
+                    exc.code if isinstance(exc, ApiError) else "INGREDIENT_SYSTEM_ERROR"
+                )
+        # 제품 식별과 공식 정보의 완전성을 분리하여 외부 조회 장애가 OCR 실패가 되지 않게 한다.
+        if not missing_only or medicine.get("product_info_status") != "SUCCEEDED":
+            medicine["product_info_retryable"] = False
+            try:
+                info = api.product_info(code)
+                missing = validate_product_info(info)
+                medicine["product_info"] = info
+                medicine["product_info_missing_fields"] = missing
+                medicine["product_info_status"] = (
+                    "NO_DATA" if len(missing) == 5 else "PARTIAL" if missing else "SUCCEEDED"
+                )
+                medicine["product_info_error_code"] = (
+                    "API_PRODUCT_INFO_FIELDS_MISSING" if missing else None
+                )
+            except Exception as exc:
+                medicine["product_info_retryable"] = isinstance(exc, ApiError) and exc.retryable
+                medicine["product_info"] = {}
+                medicine["product_info_missing_fields"] = []
+                medicine["product_info_status"] = "UNAVAILABLE"
+                medicine["product_info_error_code"] = (
+                    exc.code if isinstance(exc, ApiError) else "PRODUCT_INFO_SYSTEM_ERROR"
+                )
+        medicine["enrichment_status"] = (
+            "SUCCEEDED"
+            if medicine["ingredients_status"] == medicine["product_info_status"] == "SUCCEEDED"
+            else "INCOMPLETE"
+        )
+        if diagnostics is not None:
+            observations = (
+                api.ingredient_observations.get(code, {}) if isinstance(api, MfdsClient) else {}
+            )
+            diagnostics.enrichment(index, medicine, observations)
+
+
+# 일시적인 정보 조회 장애만 재시도하고 영구 누락이나 모호한 제품은 반복하지 않는다.
+def needs_enrichment_retry(result):
+    transient = {
+        "API_TIMEOUT",
+        "API_DNS_ERROR",
+        "API_CONNECTION_ERROR",
+        "API_TIME_BUDGET_EXHAUSTED",
+        "API_HTTP_429",
+    }
+    for medicine in result.get("medicines", []):
+        for field in ("ingredients", "product_info"):
+            error = medicine.get(field + "_error_code") or ""
+            retryable = medicine.get(
+                field + "_retryable", error in transient or error.startswith("API_HTTP_5")
+            )
+            if medicine.get(field + "_status") == "UNAVAILABLE" and retryable:
+                return True
+    return False

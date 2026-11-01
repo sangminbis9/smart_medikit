@@ -106,7 +106,7 @@ class DynamoStore:
         self.client, self.table_name = client, table_name
 
     # 완료 기록을 강한 일관성으로 조회하고 입력 충돌을 거부한다.
-    def completed(self, event_id, source):
+    def load_completed(self, event_id, source):
         raw = self.client.get_item(
             TableName=self.table_name,
             Key=attributes({"pk": "RECOGNITION#" + event_id, "sk": "META"}),
@@ -114,16 +114,20 @@ class DynamoStore:
         ).get("Item", {})
         existing = {key: TypeDeserializer().deserialize(value) for key, value in raw.items()}
         if existing.get("processing_status") != "COMPLETED":
-            return False
+            return None
         previous = existing.get("source_fingerprint")
         if previous is None and existing.get("source_image"):
             previous = source_fingerprint(existing["source_image"])
         if previous != source_fingerprint(source):
             raise ValueError("EVENT_SOURCE_CONFLICT")
-        return True
+        return existing
+
+    # 기존 중복 방지 호출부에는 완료 여부만 반환한다.
+    def completed(self, event_id, source):
+        return self.load_completed(event_id, source) is not None
 
     # 제품 갱신과 완료 이벤트를 한 트랜잭션으로 저장하고 중복 완료를 차단한다.
-    def finish(self, event_id, source, result, checked_at):
+    def finish(self, event_id, source, result, checked_at, previous=None):
         validate_result(result)
         writes = []
         for medicine in result["medicines"]:
@@ -219,6 +223,48 @@ class DynamoStore:
                 }
             }
         )
+        if previous is not None:
+            # 식별 근거는 불변으로 두고 같은 버전의 정보 보완만 제품과 원자 갱신한다.
+            identity_fields = (
+                "product_code",
+                "medicine_id",
+                "name",
+                "strength",
+                "form",
+                "dosage_form",
+                "manufacturer",
+            )
+            if result["items"] != previous["items"] or [
+                tuple(m.get(k) for k in identity_fields) for m in result["medicines"]
+            ] != [tuple(m.get(k) for k in identity_fields) for m in previous["medicines"]]:
+                raise ValueError("ENRICHMENT_IDENTITY_CHANGED")
+            revision = int(previous.get("enrichment_attempts", 0))
+            if revision >= 2:
+                return False
+            writes[-1] = {
+                "Update": {
+                    "TableName": self.table_name,
+                    "Key": attributes({"pk": "RECOGNITION#" + event_id, "sk": "META"}),
+                    "UpdateExpression": "SET medicines=:medicines, enrichment_attempts=:next, enrichment_checked_at=:checked",
+                    "ConditionExpression": "#state=:completed AND source_fingerprint=:source AND "
+                    + (
+                        "(enrichment_attempts=:revision OR attribute_not_exists(enrichment_attempts))"
+                        if revision == 0
+                        else "enrichment_attempts=:revision"
+                    ),
+                    "ExpressionAttributeNames": {"#state": "processing_status"},
+                    "ExpressionAttributeValues": attributes(
+                        {
+                            ":medicines": result["medicines"],
+                            ":next": revision + 1,
+                            ":checked": checked_at,
+                            ":completed": "COMPLETED",
+                            ":source": source_fingerprint(source),
+                            ":revision": revision,
+                        }
+                    ),
+                }
+            }
         # 상세 문서를 잘라 의미를 바꾸지 않고 DynamoDB 단일 항목·트랜잭션 한도를 먼저 검사한다.
         if (
             any(
@@ -232,6 +278,14 @@ class DynamoStore:
             self.client.transact_write_items(TransactItems=writes)
             return True
         except ClientError as exc:
+            if (
+                previous is not None
+                and exc.response["Error"]["Code"] == "TransactionCanceledException"
+            ):
+                latest = self.load_completed(event_id, source)
+                if latest and int(latest.get("enrichment_attempts", 0)) > revision:
+                    return False
+                raise
             if exc.response["Error"]["Code"] == "TransactionCanceledException" and self.completed(
                 event_id, source
             ):

@@ -1,7 +1,11 @@
 """식약처 공식 API 응답을 품목코드로 검증하고 성분·허가정보를 정규화한다."""
 
 import json
+import random
 import re
+import socket
+import ssl
+import time
 import unicodedata
 from decimal import Decimal, InvalidOperation
 from html import unescape
@@ -211,6 +215,9 @@ class MfdsClient:
         max_pages=5,
         version="08",
         timeout=8,
+        max_attempts=3,
+        sleep=time.sleep,
+        clock=time.monotonic,
     ):
         if not service_key or not re.fullmatch(r"\d{2}", version):
             raise ApiError("API_CONFIGURATION_ERROR")
@@ -220,13 +227,32 @@ class MfdsClient:
         self.max_pages = max_pages
         self.version = version
         self.timeout = timeout
+        if not 1 <= max_attempts <= 3 or not 1 <= timeout <= 30:
+            raise ApiError("API_CONFIGURATION_ERROR")
+        self.max_attempts, self.sleep, self.clock = max_attempts, sleep, clock
+        self.remaining_ms, self.diagnostics = None, None
+        self.request_count = 0
+        self.page_cache = {}
         self.detail_cache = {}
         self.ingredient_observations = {}
+
+    # 이벤트별 시간 예산·안전한 진단을 연결하고 요청 횟수를 초기화한다.
+    def begin_event(self, context=None, diagnostics=None):
+        self.remaining_ms = getattr(context, "get_remaining_time_in_millis", None)
+        self.diagnostics = diagnostics
+        self.request_count = 0
+
+    # DB 저장 시간을 남겨 외부 API 때문에 Lambda가 강제 종료되지 않게 한다.
+    def request_timeout(self):
+        available = self.remaining_ms() / 1000 - 15 if self.remaining_ms else self.timeout
+        if available < 1:
+            raise ApiError("API_TIME_BUDGET_EXHAUSTED", True)
+        return min(self.timeout, available)
 
     # 제한 시간·응답 크기를 지켜 HTTPS로 공식 API만 읽는다.
     def _download(self, url):
         try:
-            with urlopen(url, timeout=self.timeout) as response:
+            with urlopen(url, timeout=self.request_timeout()) as response:
                 if urlparse(response.url).hostname != "apis.data.go.kr":
                     raise ApiError("API_UNEXPECTED_REDIRECT")
                 data = response.read(4_000_001)
@@ -237,11 +263,56 @@ class MfdsClient:
             raise ApiError(
                 "API_HTTP_" + str(exc.code), exc.code == 429 or exc.code >= 500
             ) from None
-        except (URLError, TimeoutError):
+        except TimeoutError:
             raise ApiError("API_TIMEOUT", True) from None
+        except ssl.SSLError:
+            raise ApiError("API_TLS_ERROR") from None
+        except URLError as exc:
+            reason = exc.reason
+            if isinstance(reason, TimeoutError):
+                code, retryable = "API_TIMEOUT", True
+            elif isinstance(reason, socket.gaierror):
+                code, retryable = "API_DNS_ERROR", True
+            elif isinstance(reason, ssl.SSLError):
+                code, retryable = "API_TLS_ERROR", False
+            else:
+                code, retryable = "API_CONNECTION_ERROR", True
+            raise ApiError(code, retryable) from None
+        except (ConnectionError, OSError):
+            raise ApiError("API_CONNECTION_ERROR", True) from None
+
+    # 같은 응답을 호출 안에서 재사용하고 일시 장애만 제한적으로 재시도한다.
+    def _page(self, operation, params, page):
+        cache_key = (operation, tuple(sorted(params.items())), page)
+        if cache_key in self.page_cache:
+            return self.page_cache[cache_key]
+        for attempt in range(1, self.max_attempts + 1):
+            self.request_timeout()
+            if self.request_count >= 64:
+                raise ApiError("API_REQUEST_LIMIT")
+            self.request_count += 1
+            started = self.clock()
+            code = "SUCCEEDED"
+            try:
+                result = self._page_once(operation, params, page)
+                # 큰 허가문서의 중복 캐시로 기존 Lambda 메모리를 압박하지 않는다.
+                if len(self.page_cache) < 16 and len(json.dumps(result).encode()) <= 65_536:
+                    self.page_cache[cache_key] = result
+                return result
+            except ApiError as exc:
+                code = exc.code
+                if not exc.retryable or attempt == self.max_attempts:
+                    raise
+                delay = min(2, 0.4 * 2 ** (attempt - 1)) + random.uniform(0, 0.2)
+                if self.remaining_ms and self.remaining_ms() / 1000 < 16 + delay:
+                    raise ApiError("API_TIME_BUDGET_EXHAUSTED", True) from None
+                self.sleep(delay)
+            finally:
+                if self.diagnostics is not None:
+                    self.diagnostics.api_request(operation, attempt, self.clock() - started, code)
 
     # JSON/XML 게이트웨이 오류와 공식 items.item/배열 응답을 검증한다.
-    def _page(self, operation, params, page):
+    def _page_once(self, operation, params, page):
         query = urlencode(
             {
                 "serviceKey": self.service_key,
@@ -267,7 +338,7 @@ class MfdsClient:
                 code = None
             raise ApiError(
                 "API_" + code if code else "API_INVALID_RESPONSE",
-                code in {"05", "22", "23"},
+                code in {"01", "04", "05", "22", "23"},
             ) from None
         if not isinstance(data, dict):
             raise ApiError("API_INVALID_RESPONSE")

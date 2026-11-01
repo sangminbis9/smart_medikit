@@ -4,6 +4,7 @@ import hashlib
 import json
 import logging
 import math
+import re
 import uuid
 
 from backend.recognition import fragment_kind
@@ -75,6 +76,41 @@ class Diagnostics:
     # 모델 초기화 전에도 새 진단 코드 실행 여부를 확인할 수 있게 한다.
     def started(self, threshold):
         self._write("pipeline_started", {"threshold": safe_number(threshold)})
+
+    # API 주소·검색어·인증키 없이 허용된 작업 종류와 시도·시간·상태만 남긴다.
+    def api_request(self, operation, attempt, elapsed, code):
+        operations = {
+            "getDrugPrdtPrmsnInq": "search",
+            "getDrugPrdtPrmsnDtlInq": "permit_detail",
+            "getDrugPrdtMcpnDtlInq": "ingredients",
+        }
+        allowed = {
+            "SUCCEEDED",
+            "API_TIMEOUT",
+            "API_DNS_ERROR",
+            "API_TLS_ERROR",
+            "API_CONNECTION_ERROR",
+            "API_TIME_BUDGET_EXHAUSTED",
+            "API_REQUEST_LIMIT",
+            "API_UNEXPECTED_REDIRECT",
+            "API_RESPONSE_TOO_LARGE",
+            "API_INVALID_RESPONSE",
+        }
+        safe_code = (
+            code
+            if code in allowed
+            or (isinstance(code, str) and re.fullmatch(r"API_(?:HTTP_\d{3}|\d{2,4})", code))
+            else "API_ERROR"
+        )
+        self._write(
+            "api_request",
+            {
+                "operation": operations.get(operation, "unknown"),
+                "attempt": safe_number(attempt),
+                "elapsed_ms": safe_number(elapsed * 1000),
+                "status": safe_code,
+            },
+        )
 
     # 검출 영역은 최대 120개만 기록하고 잘린 개수를 명시한다.
     def regions(self, lines, shape, pass_index=0, source_box=None):

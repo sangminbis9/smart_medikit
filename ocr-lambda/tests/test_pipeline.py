@@ -47,7 +47,7 @@ def dependencies(metadata=None):
         "Metadata": metadata or {},
         "ContentLength": 5,
     }
-    store.completed.return_value = False
+    store.load_completed.return_value = None
     store.finish.return_value = True
     return {
         "s3": s3,
@@ -119,7 +119,8 @@ def test_failure_saves_only_safe_event(failure, expected_stage, expected_code, c
 def test_optional_api_failure_stores_success(caplog):
     deps = dependencies()
     deps["api"].ingredients.side_effect = ApiError("API_TIMEOUT", True)
-    process_records(event(), **deps)
+    with pytest.raises(RuntimeError, match="RECOGNITION_BATCH_FAILED"):
+        process_records(event(), **deps)
     result = deps["store"].finish.call_args.args[2]
     assert result["processing_status"] == "COMPLETED"
     assert result["medicines"][0]["ingredients_status"] == "UNAVAILABLE"
@@ -130,7 +131,7 @@ def test_optional_api_failure_stores_success(caplog):
 # 중복 성공은 본문·OCR·제품 저장을 생략하고 S3 스트림을 닫는다.
 def test_duplicate_skips_recognition_and_closes_body():
     deps = dependencies()
-    deps["store"].completed.return_value = True
+    deps["store"].load_completed.return_value = {"processing_status": "COMPLETED", "medicines": []}
     assert process_records(event(), **deps) == {"processed": 0, "skipped": 1}
     deps["ocr"].assert_not_called()
     deps["store"].finish.assert_not_called()

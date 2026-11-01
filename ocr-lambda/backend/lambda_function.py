@@ -1,5 +1,6 @@
 """S3 이미지의 공통 OCR을 실행하고 성공 제품 또는 안전한 실패 이벤트를 기록한다."""
 
+import copy
 import hashlib
 import json
 import logging
@@ -11,7 +12,13 @@ from urllib.parse import unquote_plus
 
 from backend.diagnostics import Diagnostics, event_reference
 from backend.image_ocr import ImageError, PaddleReader
-from backend.recognition import MfdsClient, RecognitionError, identify
+from backend.recognition import (
+    MfdsClient,
+    RecognitionError,
+    enrich_medicines,
+    identify,
+    needs_enrichment_retry,
+)
 from backend.storage import DynamoStore
 
 LOGGER = logging.getLogger(__name__)
@@ -96,8 +103,36 @@ def process_records(
                         raise RecognitionError(stage, "EVENT_ID_INVALID")
                     event_id = explicit_id
                 stage = "deduplication"
-                if store.completed(event_id, source):
-                    skipped += 1
+                previous = store.load_completed(event_id, source)
+                if previous:
+                    if int(previous.get("enrichment_attempts", 0)) < 2 and needs_enrichment_retry(
+                        previous
+                    ):
+                        # 중복 촬영은 재등록하지 않고 검증된 품목의 누락 정보만 최대 두 번 복구한다.
+                        stage = "enrichment"
+                        diagnostics = Diagnostics(event_id, enabled=diagnostics_enabled)
+                        if isinstance(api, MfdsClient):
+                            api.begin_event(context, diagnostics)
+                        result = copy.deepcopy(previous)
+                        enrich_medicines(
+                            result["medicines"], api, diagnostics=diagnostics, missing_only=True
+                        )
+                        saved = store.finish(
+                            event_id,
+                            source,
+                            result,
+                            datetime.now(timezone.utc).isoformat(),
+                            previous=previous,
+                        )
+                        processed += int(saved)
+                        skipped += int(not saved)
+                        failed = failed or (
+                            saved
+                            and int(previous.get("enrichment_attempts", 0)) < 1
+                            and needs_enrichment_retry(result)
+                        )
+                    else:
+                        skipped += 1
                     continue
                 stage = "input"
                 if response.get("ContentLength", 0) > 10_000_000:
@@ -110,6 +145,8 @@ def process_records(
             stage = "ocr"
             diagnostics = Diagnostics(event_id, enabled=diagnostics_enabled)
             diagnostics.started(min_score)
+            if isinstance(api, MfdsClient):
+                api.begin_event(context, diagnostics)
             cells = (
                 ocr(data, diagnostics=diagnostics) if isinstance(ocr, PaddleReader) else ocr(data)
             )
@@ -124,6 +161,8 @@ def process_records(
             saved = store.finish(event_id, source, result, datetime.now(timezone.utc).isoformat())
             processed += int(saved)
             skipped += int(not saved)
+            # 성공 식별은 보존한 채 S3 비동기 재호출에서 정보 조회만 이어서 처리한다.
+            failed = failed or (saved and needs_enrichment_retry(result))
         except Exception as exc:
             failed = True
             if isinstance(exc, RecognitionError):

@@ -6,6 +6,7 @@ import unittest
 from unittest.mock import patch
 
 from backend import read_api
+from backend.deploy_read_api import school_role
 
 
 # 실제 약품·환자정보와 구분되는 합성 제품을 만든다.
@@ -32,6 +33,21 @@ class FakeTable:
 
 
 class ReadApiTests(unittest.TestCase):
+    # 학교 역할 선택도 고정 계정과 Lambda 신뢰를 검증하고 IAM 변경을 호출하지 않는다.
+    def test_school_role_boundary(self):
+        from unittest.mock import Mock
+        iam = Mock()
+        role = {"Arn": "arn:aws:iam::123456789012:role/SafeRole-inha-capstone-02",
+                "AssumeRolePolicyDocument": {"Statement": [{"Effect": "Allow", "Principal": {"Service": ["lambda.amazonaws.com"]}}]}}
+        iam.get_role.return_value = {"Role": role}
+        self.assertEqual(school_role(iam, "123456789012"), role)
+        self.assertEqual(len(iam.mock_calls), 1)
+        with self.assertRaises(RuntimeError):
+            school_role(iam, "999999999999")
+        role["AssumeRolePolicyDocument"]["Statement"] = []
+        with self.assertRaises(RuntimeError):
+            school_role(iam, "123456789012")
+
     # 실행 PC의 시연 허용 설정이 테스트 권한 경계에 영향을 주지 않게 한다.
     def setUp(self):
         self.env = patch.dict(os.environ, {"MEDKIT_DEMO_PUBLIC_READ": "false"})

@@ -18,6 +18,10 @@
 
 ## 배포 시 필요한 변경과 승인 범위
 
+2026-11-02 실제 배포 시도에서 학교 계정의 `SafePowerUser`가 `iam:CreateRole`을 명시적으로 거부했다. 전용 역할 생성 전 중단되어 새 Lambda/API나 Amplify 연결 변수는 아직 생성·변경되지 않았다. 학교 제공 `SafeRole-inha-capstone-02`는 Lambda 신뢰가 있지만 `SafeBaseRolePolicy` 내용 조회도 `iam:GetRolePolicy` 권한 부족으로 거부되어 읽기 전용 역할이라고 보증할 수 없다.
+
+`deploy_read_api.py --account <승인된 계정 ID> --app <Amplify 앱 ID> --apply-public-demo`는 전용 역할 방식이다. 학교 제공 역할을 쓰기로 **별도 승인한 경우에만** `--use-school-role`을 추가한다. 이 모드는 IAM 정책을 변경하지 않고 기존 역할을 새 Lambda에 연결하므로, 코드/API는 읽기 전용이어도 실행 역할 권한은 읽기 전용으로 제한되지 않는다. 두 파일을 같은 디렉터리에 놓고 boto3가 있는 승인된 AWS 세션에서 실행한다. 로컬 장기 키를 만들 필요는 없다.
+
 AGENTS.md 5절의 **“IAM 권한 변경, 서비스 공개 설정은 팀 승인 없이 실행하지 않는다”**에 따라 다음 변경은 승인 후 진행한다. 새 DynamoDB 테이블·인덱스·OCR 변경은 필요 없다.
 
 1. 별도 소형 Lambda에 이 파일을 배포한다. Python 런타임의 boto3를 사용하며 핸들러는 ZIP 루트에 넣은 경우 `read_api.lambda_handler`. 권장 초기 설정: 메모리 128 MB, 제한 시간 10초, 예약 동시 실행 최대 2. 실제 계정 할당량을 먼저 확인한다.

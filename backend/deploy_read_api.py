@@ -20,8 +20,25 @@ def require_owned(tags):
         raise RuntimeError("동명 리소스의 소유 태그가 달라 배포를 중단합니다.")
 
 
-# 승인된 계정·앱을 검증한 뒤 이름과 권한이 한정된 리소스만 배포한다.
-def deploy(account, app_id):
+# 별도 승인을 받은 학교 제공 역할만 읽어서 사용하며 정책을 수정하지 않는다.
+def school_role(iam, account):
+    role = iam.get_role(RoleName="SafeRole-inha-capstone-02")["Role"]
+    if role["Arn"] != f"arn:aws:iam::{account}:role/SafeRole-inha-capstone-02":
+        raise RuntimeError("학교 제공 역할의 계정이나 이름이 다릅니다.")
+    trusted = False
+    for statement in role["AssumeRolePolicyDocument"].get("Statement", []):
+        services = statement.get("Principal", {}).get("Service", [])
+        if isinstance(services, str):
+            services = [services]
+        if statement.get("Effect") == "Allow" and "lambda.amazonaws.com" in services:
+            trusted = True
+    if not trusted:
+        raise RuntimeError("학교 역할이 Lambda 실행을 신뢰하지 않습니다.")
+    return role
+
+
+# 승인된 계정·앱을 검증한 뒤 선택한 실행 역할 방식으로 별도 조회 API를 배포한다.
+def deploy(account, app_id, use_school_role=False):
     import boto3
     from botocore.exceptions import ClientError
 
@@ -40,13 +57,16 @@ def deploy(account, app_id):
 
     iam = session.client("iam")
     role_name = f"{NAME}-role"
-    try:
-        role = iam.get_role(RoleName=role_name)["Role"]
-        require_owned({tag["Key"]: tag["Value"] for tag in role.get("Tags", [])})
-    except iam.exceptions.NoSuchEntityException:
-        role = iam.create_role(RoleName=role_name,
-            AssumeRolePolicyDocument=json.dumps({"Version": "2012-10-17", "Statement": [{"Effect": "Allow", "Principal": {"Service": "lambda.amazonaws.com"}, "Action": "sts:AssumeRole"}]}),
-            Tags=[{"Key": "ManagedBy", "Value": NAME}])["Role"]
+    if use_school_role:
+        role = school_role(iam, account)
+    else:
+        try:
+            role = iam.get_role(RoleName=role_name)["Role"]
+            require_owned({tag["Key"]: tag["Value"] for tag in role.get("Tags", [])})
+        except iam.exceptions.NoSuchEntityException:
+            role = iam.create_role(RoleName=role_name,
+                AssumeRolePolicyDocument=json.dumps({"Version": "2012-10-17", "Statement": [{"Effect": "Allow", "Principal": {"Service": "lambda.amazonaws.com"}, "Action": "sts:AssumeRole"}]}),
+                Tags=[{"Key": "ManagedBy", "Value": NAME}])["Role"]
     log_group = f"/aws/lambda/{NAME}"
     logs = session.client("logs")
     try:
@@ -54,12 +74,15 @@ def deploy(account, app_id):
     except logs.exceptions.ResourceAlreadyExistsException:
         require_owned(logs.list_tags_log_group(logGroupName=log_group).get("tags", {}))
     logs.put_retention_policy(logGroupName=log_group, retentionInDays=7)
-    iam.put_role_policy(RoleName=role_name, PolicyName="ReadMedkitCatalog", PolicyDocument=json.dumps({
-        "Version": "2012-10-17", "Statement": [
-            {"Effect": "Allow", "Action": "dynamodb:Scan", "Resource": table["TableArn"]},
-            {"Effect": "Allow", "Action": ["logs:CreateLogStream", "logs:PutLogEvents"], "Resource": f"arn:aws:logs:{REGION}:{account}:log-group:{log_group}:*"},
-        ]}))
-    print("ROLE_READY: Scan only on the approved table", flush=True)
+    if use_school_role:
+        print("ROLE_READY: existing school role; IAM permissions not narrowed by this deployment", flush=True)
+    else:
+        iam.put_role_policy(RoleName=role_name, PolicyName="ReadMedkitCatalog", PolicyDocument=json.dumps({
+            "Version": "2012-10-17", "Statement": [
+                {"Effect": "Allow", "Action": "dynamodb:Scan", "Resource": table["TableArn"]},
+                {"Effect": "Allow", "Action": ["logs:CreateLogStream", "logs:PutLogEvents"], "Resource": f"arn:aws:logs:{REGION}:{account}:log-group:{log_group}:*"},
+            ]}))
+        print("ROLE_READY: Scan only on the approved table", flush=True)
 
     buffer = io.BytesIO()
     with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as archive:
@@ -159,10 +182,11 @@ def main():
     parser.add_argument("--account", required=True)
     parser.add_argument("--app", required=True)
     parser.add_argument("--apply-public-demo", action="store_true")
+    parser.add_argument("--use-school-role", action="store_true", help="학교 역할의 넓은 권한 가능성을 별도 승인한 경우에만 사용")
     args = parser.parse_args()
     if not args.apply_public_demo:
         parser.error("팀 승인 후 --apply-public-demo를 지정하세요.")
-    deploy(args.account, args.app)
+    deploy(args.account, args.app, args.use_school_role)
 
 
 if __name__ == "__main__":

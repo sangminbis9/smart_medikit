@@ -22,7 +22,17 @@ def require_owned(tags):
 
 # 별도 승인을 받은 학교 제공 역할만 읽어서 사용하며 정책을 수정하지 않는다.
 def school_role(iam, account):
-    role = iam.get_role(RoleName="SafeRole-inha-capstone-02")["Role"]
+    # 학교 콘솔의 역할 선택과 동일한 허용된 목록 메타데이터만 사용한다.
+    role = None
+    for page in iam.get_paginator("list_roles").paginate():
+        for candidate in page["Roles"]:
+            if candidate["RoleName"] == "SafeRole-inha-capstone-02":
+                role = candidate
+                break
+        if role:
+            break
+    if role is None:
+        raise RuntimeError("승인한 학교 제공 역할을 찾지 못했습니다.")
     if role["Arn"] != f"arn:aws:iam::{account}:role/SafeRole-inha-capstone-02":
         raise RuntimeError("학교 제공 역할의 계정이나 이름이 다릅니다.")
     trusted = False

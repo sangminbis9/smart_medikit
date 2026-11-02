@@ -37,11 +37,11 @@ class ReadApiTests(unittest.TestCase):
     def test_school_role_boundary(self):
         from unittest.mock import Mock
         iam = Mock()
-        role = {"Arn": "arn:aws:iam::123456789012:role/SafeRole-inha-capstone-02",
+        role = {"RoleName": "SafeRole-inha-capstone-02", "Arn": "arn:aws:iam::123456789012:role/SafeRole-inha-capstone-02",
                 "AssumeRolePolicyDocument": {"Statement": [{"Effect": "Allow", "Principal": {"Service": ["lambda.amazonaws.com"]}}]}}
-        iam.get_role.return_value = {"Role": role}
+        iam.get_paginator.return_value.paginate.return_value = [{"Roles": [role]}]
         self.assertEqual(school_role(iam, "123456789012"), role)
-        self.assertEqual(len(iam.mock_calls), 1)
+        self.assertEqual(len(iam.mock_calls), 2)
         with self.assertRaises(RuntimeError):
             school_role(iam, "999999999999")
         role["AssumeRolePolicyDocument"]["Statement"] = []

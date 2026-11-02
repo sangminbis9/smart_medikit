@@ -108,6 +108,8 @@ export function matchCareMedicines(
       reasons.push('확인된 유효기간이 지났어요');
     }
     if (item.safety_status !== 'CHECKED') reasons.push('안전정보 확인 필요');
+    if (data.alerts_status === 'UNAVAILABLE')
+      reasons.push('주의정보 이력 확인 필요');
     if (item.inventory?.stock_enabled && item.inventory.estimated_qty === 0)
       reasons.push('예상 잔여량이 0이에요. 실제 포장을 확인하세요');
     for (const alert of data.alerts) {

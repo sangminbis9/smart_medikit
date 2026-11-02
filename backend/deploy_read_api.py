@@ -11,7 +11,7 @@ REGION = "ap-northeast-2"
 NAME = "smart-medikit-read-api"
 TABLE = "inha-capstone-02-medkit-data"
 BOX = "inha-capstone-02-medkit"
-TAGS = {"ManagedBy": NAME}
+TAGS = {"ManagedBy": NAME, "username": "inha-capstone-02", "group": "inha-capstone"}
 
 
 # 다른 작업자가 만든 동명 리소스에 덮어쓰기를 시도하지 않는다.
@@ -99,14 +99,18 @@ def deploy(account, app_id, use_school_role=False):
         archive.write(Path(__file__).with_name("read_api.py"), "read_api.py")
     lambdas = session.client("lambda")
     environment = {"Variables": {"MEDKIT_BOX_ID": BOX, "MEDKIT_DEMO_PUBLIC_READ": "true"}}
-    try:
+    # 미생성 함수에는 소유 태그가 없어 개별 조회가 거부되므로 목록에서 존재를 확인한다.
+    exists = any(function["FunctionName"] == NAME
+                 for page in lambdas.get_paginator("list_functions").paginate()
+                 for function in page["Functions"])
+    if exists:
         function = lambdas.get_function(FunctionName=NAME)
         require_owned(function.get("Tags", {}))
         lambdas.update_function_code(FunctionName=NAME, ZipFile=buffer.getvalue())
         lambdas.get_waiter("function_updated_v2").wait(FunctionName=NAME)
         lambdas.update_function_configuration(FunctionName=NAME, Role=role["Arn"], Runtime="python3.12", Handler="read_api.lambda_handler", Timeout=10, MemorySize=128, Environment=environment)
         lambdas.get_waiter("function_updated_v2").wait(FunctionName=NAME)
-    except lambdas.exceptions.ResourceNotFoundException:
+    else:
         # IAM 전파 지연만 한정 재시도하며 권한 거부를 우회하지 않는다.
         for attempt in range(6):
             try:

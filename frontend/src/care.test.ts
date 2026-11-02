@@ -169,6 +169,19 @@ describe('제품 연결 안전 경계', function matching() {
     const pending = reviewedPackage();
     pending.safety_status = 'SAFETY_CHECK_PENDING';
     expect(result([pending]).status).toBe('확인 필요');
+    expect(
+      matchCareMedicines(
+        {
+          ...emptyData(),
+          packages: [reviewedPackage()],
+          alerts_status: 'UNAVAILABLE',
+        },
+        'headache',
+        'PAIN_RELIEF',
+        true,
+        now,
+      ).status,
+    ).toBe('확인 필요');
   });
   // 만료나 경고는 정보 확인 여부와 관계없이 보존한다.
   it('실제 만료와 DUR·동일성분 경고는 사용 주의', function warnings() {

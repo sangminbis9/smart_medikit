@@ -11,7 +11,8 @@ REGION = "ap-northeast-2"
 NAME = "smart-medikit-read-api"
 TABLE = "inha-capstone-02-medkit-data"
 BOX = "inha-capstone-02-medkit"
-TAGS = {"ManagedBy": NAME, "username": "inha-capstone-02", "group": "inha-capstone"}
+# 학교 소유 태그는 자동 태깅 정책이 관리하므로 배포에서 임의 변경하지 않는다.
+TAGS = {"ManagedBy": NAME}
 
 
 # 다른 작업자가 만든 동명 리소스에 덮어쓰기를 시도하지 않는다.

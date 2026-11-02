@@ -4,7 +4,7 @@
 
 기존 투명 보관함에 카메라·조명·개폐 센서를 부착하여 일반의약품과 처방약 포장을 **카메라에 보여주는 것만으로 신규 등록**하고, 입출고·복약 기록·예상 재고·DUR 주의정보·3D 보관함을 통합 관리한다.
 
-기존 Figma 디자인을 기준으로 PC·Android·iPhone을 지원한다. Three.js를 React에 직접 연동하고, 웹은 **GitHub 연동 AWS Amplify Hosting**에서 HTTPS로 배포하도록 준비했다. [`frontend/`](frontend/README.md)에 실행 가능한 초기 웹/PWA가 있으며 API·약품 DB·보관함 치수가 없어도 빈 화면과 선택형 시연 모드로 실행된다. 실제 Pi/AWS 백엔드와 배포 환경은 아직 연결하지 않았다.
+기존 Figma 디자인을 기준으로 PC·Android·iPhone을 지원한다. Three.js를 React에 직접 연동하고, 웹은 **GitHub 연동 AWS Amplify Hosting**에서 HTTPS로 배포한다. [`frontend/`](frontend/README.md)에 웹/PWA와 32개 증상의 케어 가이드가 있으며 API·보관함 치수가 없어도 빈 화면과 선택형 시연 모드로 실행된다. [`backend/`](backend/README.md)의 별도 조회 API로 기존 DynamoDB 제품 캐시를 연결했다. 실제 보관 재고·유효기간·Pi 세션 통합이 완료됐다는 뜻은 아니다.
 
 **빠른 실행:** `cd frontend` → `npm ci` → `npm run dev` (Node.js 22.12 이상). 사용자가 채울 공개 설정, Amplify 연결 절차와 현재 구현 범위는 [프론트엔드 안내](frontend/README.md)에 정리했다.
 
@@ -35,7 +35,7 @@ PC 웹캠 실시간 객체 탐지는 `Raspberry_Pi`에서 `python -m medikit_pi 
 hardware/    # PC 카메라 탐지·품질 검사·수동/자동 저장 실험
 Raspberry_Pi/ # Raspberry Pi 자동 촬영·YOLOE·센서·LED·오프라인 큐
 ocr-lambda/  # 공통 OCR·제품 대조·DynamoDB 인식 이벤트 (첨부 Lambda 소스)
-backend/     # 이후 AWS API·세션·재고 및 이벤트 통합 처리
+backend/     # 기존 DynamoDB 제품 캐시 조회 API·배포·검증
 frontend/    # React·TypeScript·Tailwind CSS·PWA·Three.js 반응형 웹
 ```
 

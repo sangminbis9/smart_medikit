@@ -164,7 +164,7 @@ WebSocket은 **상태 변경 사실과 버전 정보**를 알리고, 웹앱은 �
 - `care_assessment`는 **향후 서버의 검토 결과를 받기 위한 선택 계약**이다. 현재 테이블에 존재한다고 가정하거나 자동 생성하지 않는다. `{product_code, review_status:"APPROVED", scope:"CARE_GUIDE_32_V1", source_url, reviewed_at, valid_until, indications, ingredient_names, matches:[{symptom_id, medicine_categories, evidence, conditions}]}` 형태다. 시간은 시간대 포함 ISO 8601, `conditions`는 비어 있지 않은 적용 조건 목록이다. `scope`는 이번 32개 증상 전체를 검토했다는 뜻이며, 부분 검토 결과를 이 값으로 보내면 안 된다. 제품별 `APPROVED`를 발행할 사람 검토 절차와 유효기간 정책은 별도 팀 합의 대상이다.
 - 프론트엔드는 출처 HTTPS 허용 호스트(`nedrug.mfds.go.kr`, `data.mfds.go.kr`, `apis.data.go.kr`), 품목 코드·성분 집합·효능 원문 일치, 허가 사용법/주의사항 존재, 검토 유효기간, 원문 내 직접 근거, 정확한 증상 ID·역할을 검사한다. 제품명·효능 키워드 부분 일치로 효능 매칭을 만들지 않는다. 조건을 노출하되 개인별 적합성을 자동 판단하지 않는다.
 - `STORED` 일반의약품만 연결한다. 처방·반출·등록·소진·폐기 포장은 제외한다. 실제 유효기간/안전정보가 부족하면 **확인 필요**, 만료 또는 확인된 DUR/동일성분/기한 경고는 **사용 주의**, 모든 조회 근거가 있는 관련 제품은 **보유**다. 주의사항 확인 버튼을 눌렀다고 위험 근거를 지우지 않는다. 검토가 불완전한 보관 품목이 남으면 미보유로 단정하지 않는다.
-- [별도 읽기 API](../backend/README.md)는 현재 제품만 존재하는 기존 테이블을 조회해 `inventory_status=UNAVAILABLE`, `packages=[]`, `catalog_medicines`를 반환한다. 새 테이블이나 저장 구조 변경 없이 연결 가능하지만 실제 배포·IAM·공개 시연 접근은 팀 승인 후 진행한다. 기본은 접근 거부이며 허가된 authorizer 문맥 또는 명시적인 `MEDKIT_DEMO_PUBLIC_READ=true` 배포만 허용한다.
+- [별도 읽기 API](../backend/README.md)는 기존 테이블을 조회해 `inventory_status=UNAVAILABLE`, `packages=[]`, `catalog_medicines`를 반환한다. 2026-11-02 사용자 승인 후 학교 제공 역할을 재사용해 공개 시연 조회를 배포했다. 새 테이블·저장 구조·OCR·Pi는 변경하지 않았다. 기본 코드는 접근 거부이며 허가된 authorizer 문맥 또는 명시적인 `MEDKIT_DEMO_PUBLIC_READ=true` 배포만 허용한다. 실제 역할의 권한 범위와 주소·현재 데이터 한계는 백엔드 안내를 따른다.
 
 ## 11. 공통 제품 OCR Lambda 저장 계약 (2026-10-31)
 

@@ -21,7 +21,7 @@
 
 ## 개발 영역
 
-[`ocr-lambda/`](ocr-lambda/README.md)는 첨부 Lambda 소스를 바탕으로 전체 이미지 공통 OCR·식약처 제품 대조·성공 제품 원자 저장·실패 이벤트 기록을 구현한다. 실제 OCR 모델/API/AWS 배포와 Pi 세션·웹 조회 연결은 아직 검증하지 않았다.
+[`ocr-lambda/`](ocr-lambda/README.md)는 첨부 Lambda 소스를 바탕으로 전체 이미지 공통 OCR·식약처 제품 대조·성공 제품 원자 저장·실패 이벤트 기록을 구현한다. 기존 DynamoDB의 웹 조회는 별도 `backend/` API로 연결했으며, Pi 세션부터 OCR·재고·웹까지의 전체 흐름은 별도 통합 검증이 필요하다.
 
 [`Raspberry_Pi/`](Raspberry_Pi/README.md)는 YOLOE-26n 후보 감지, Picamera2 자동 촬영, GPIO 및 영속 순차 큐를 구현한다. 요청에 따라 Pi 제어 소스는 이 폴더에 두며, 기존 `hardware/`의 PC 카메라 촬영 실험은 유지한다. AWS는 배포 계약 미확정으로 기본 비활성화되어 있다.
 

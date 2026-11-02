@@ -1,0 +1,3 @@
+# Bookworm의 apt Picamera2/simplejpeg와 NumPy 1.x ABI를 유지한다.
+numpy==1.26.4
+opencv-python==4.11.0.86

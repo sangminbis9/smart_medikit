@@ -57,3 +57,7 @@ Raspberry_Pi/*.ts
 Raspberry_Pi/models/
 Raspberry_Pi/config.toml
 Raspberry_Pi/Ultralytics/
+hardware/pi/*.ts
+hardware/pi/models/
+hardware/pi/config.toml
+hardware/pi/Ultralytics/

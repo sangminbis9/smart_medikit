@@ -1,0 +1,7 @@
+# OpenCV는 영상 차이·선명도 검사와 JPEG 저장, NumPy는 프레임 계산에 사용한다.
+numpy>=1.26,<3
+opencv-python>=4.10,<6
+# YOLOE-26 지원 버전이며 모델은 prepare-model 명령에서 별도로 준비한다.
+ultralytics>=8.4.0,<9
+# AWS를 활성화한 배포에서만 단기 세션 자격증명으로 사용한다.
+boto3>=1.35,<2

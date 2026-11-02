@@ -1,4 +1,4 @@
-"""포장 후보의 품질 유지 시간을 확인하고 한 번 제시한 대상의 중복 저장을 막는다."""
+"""포장 후보의 촬영 조건 유지 시간을 확인하고 한 번 제시한 대상의 중복 저장을 막는다."""
 
 import math
 from typing import TYPE_CHECKING
@@ -39,7 +39,7 @@ class AutoCaptureGate:
         self._locked = False
         self.reset_pending()
 
-    # 새 프레임에서 같은 위치의 단일 양호 후보가 충분히 유지됐는지 판정한다.
+    # 새 프레임에서 같은 위치의 단일 후보가 촬영 조건을 충분히 유지했는지 판정한다.
     def update(
         self,
         detections: list["PackageDetection"],
@@ -75,7 +75,8 @@ class AutoCaptureGate:
                 self.status = "waiting"
             return False
 
-        if len(detections) != 1 or qualities[0].warnings:
+        # 크기는 실험용 주의로 남기고, 다른 품질 경고가 있을 때만 촬영을 막는다.
+        if len(detections) != 1 or any(warning != "small" for warning in qualities[0].warnings):
             self._clear_pending()
             self.status = "multiple" if len(detections) > 1 else "quality" if detections else "waiting"
             return False

@@ -228,7 +228,7 @@ class PackageDetector:
                     "waiting": "자동: 촬영할 대상 대기",
                     "multiple": "자동: 포장을 하나만 보여주세요.",
                     "quality": "자동: 품질 개선 대기 · 위의 주의 사유를 확인하세요.",
-                    "holding": f"자동: 양호 유지 {auto_capture.held_seconds:.1f} / {auto_capture.hold_seconds:.1f}초",
+                    "holding": f"자동: 촬영 조건 유지 {auto_capture.held_seconds:.1f} / {auto_capture.hold_seconds:.1f}초",
                     "ready": "자동: 저장 준비 중",
                     "locked": "자동: 저장 완료 · 포장을 화면 밖으로 치워주세요.",
                     "absent": f"자동: 다음 촬영 준비 {auto_capture.absent_seconds:.1f} / {auto_capture.rearm_seconds:.1f}초 (대상 없음)",
@@ -239,13 +239,17 @@ class PackageDetector:
                     "waiting": "Auto: waiting for a target",
                     "multiple": "Auto: show only one package.",
                     "quality": "Auto: waiting for better quality; check warnings above.",
-                    "holding": f"Auto: quality held {auto_capture.held_seconds:.1f} / {auto_capture.hold_seconds:.1f}s",
+                    "holding": f"Auto: conditions held {auto_capture.held_seconds:.1f} / {auto_capture.hold_seconds:.1f}s",
                     "ready": "Auto: ready to save",
                     "locked": "Auto: saved; remove the package from view.",
                     "absent": f"Auto: rearming {auto_capture.absent_seconds:.1f} / {auto_capture.rearm_seconds:.1f}s (no target)",
                 }
                 footer = "S: manual save | Saving does not confirm medicine identity"
-            draw.text((12, 190), messages[auto_capture.status], font=self.font, fill=text_color, anchor="lt")
+            message = messages[auto_capture.status]
+            # 크기 주의 표시와 자동 촬영 진행이 함께 나오는 이유를 알린다.
+            if report is not None and report.warnings == ("small",) and auto_capture.status in {"holding", "ready"}:
+                message += " · 크기 주의 허용" if self.use_korean_labels else " | small warning allowed"
+            draw.text((12, 190), message, font=self.font, fill=text_color, anchor="lt")
             draw.text((12, 222), footer, font=self.font, fill=(170, 180, 195), anchor="lt")
         else:
             draw.text((12, 190), footer, font=self.font, fill=(170, 180, 195), anchor="lt")

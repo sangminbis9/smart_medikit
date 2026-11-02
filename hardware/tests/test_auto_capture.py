@@ -34,16 +34,42 @@ class AutoCaptureTests(unittest.TestCase):
         self.assertFalse(self.observe(2))
         self.assertTrue(self.observe(2.1))
 
-    # 품질 주의가 한 번이라도 나오면 회복한 첫 프레임부터 시간을 다시 센다.
+    # 크기 경고만 있으면 경고를 유지하면서 시간과 최소 관측 수를 모두 적용한다.
+    def test_small_warning_allows_capture_after_required_observations(self):
+        small = replace(self.good, width=120, height=100, warnings=("small",))
+        for timestamps in ((0, 1, 1.9, 2), (0, 2, 2.1)):
+            with self.subTest(timestamps=timestamps):
+                self.gate = AutoCaptureGate()
+                for now in timestamps[:-1]:
+                    self.assertFalse(self.observe(now, quality=small))
+                    self.assertEqual(self.gate.status, "holding")
+                self.assertTrue(self.observe(timestamps[-1], quality=small))
+                self.assertEqual(self.gate.status, "ready")
+                self.assertEqual(small.warnings, ("small",))
+
+    # 크기 경고가 생기거나 사라져도 같은 후보의 촬영 조건 유지 시간을 이어간다.
+    def test_size_warning_changes_do_not_restart_hold(self):
+        small = replace(self.good, warnings=("small",))
+        self.assertFalse(self.observe(0, quality=small))
+        self.assertFalse(self.observe(1, quality=self.good))
+        self.assertTrue(self.observe(2, quality=small))
+        self.assertEqual(self.gate.held_seconds, 2)
+
+    # 크기 외 경고는 단독이거나 크기 경고와 함께 있어도 유지 시간을 초기화한다.
     def test_quality_warning_restarts_hold(self):
-        self.observe(0)
-        self.observe(1)
-        self.assertFalse(self.observe(1.5, quality=replace(self.good, warnings=("blur",))))
-        self.assertEqual(self.gate.status, "quality")
-        self.assertEqual(self.gate.held_seconds, 0)
-        self.assertFalse(self.observe(2))
-        self.assertFalse(self.observe(3))
-        self.assertTrue(self.observe(4))
+        small = replace(self.good, warnings=("small",))
+        for reason in ("blur", "dark", "bright", "edge", "unknown"):
+            for warnings in ((reason,), ("small", reason)):
+                with self.subTest(warnings=warnings):
+                    self.gate = AutoCaptureGate()
+                    self.observe(0, quality=small)
+                    self.observe(1, quality=small)
+                    self.assertFalse(self.observe(1.5, quality=replace(self.good, warnings=warnings)))
+                    self.assertEqual(self.gate.status, "quality")
+                    self.assertEqual(self.gate.held_seconds, 0)
+                    self.assertFalse(self.observe(2, quality=small))
+                    self.assertFalse(self.observe(3, quality=small))
+                    self.assertTrue(self.observe(4, quality=small))
 
     # 후보 소실이나 복수 후보가 나타난 구간을 양호 유지 시간에서 제외한다.
     def test_missing_and_multiple_candidates_restart_hold(self):

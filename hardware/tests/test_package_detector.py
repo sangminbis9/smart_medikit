@@ -279,7 +279,7 @@ class PackageDetectorTests(unittest.TestCase):
             "waiting": "Auto: waiting for a target",
             "multiple": "Auto: show only one package.",
             "quality": "Auto: waiting for better quality; check warnings above.",
-            "holding": "Auto: quality held 1.2 / 3.5s",
+            "holding": "Auto: conditions held 1.2 / 3.5s",
             "ready": "Auto: ready to save",
             "locked": "Auto: saved; remove the package from view.",
             "absent": "Auto: rearming 0.7 / 2.2s (no target)",
@@ -305,6 +305,31 @@ class PackageDetectorTests(unittest.TestCase):
                 self.assertLessEqual(x + bounds[2], 800)
                 self.assertLessEqual(y + bounds[3], 260)
         self.model.predict.assert_not_called()
+
+    # 작은 영역의 품질 주의와 자동 촬영 허용 안내를 두 언어에서 함께 유지한다.
+    def test_small_warning_panel_explains_allowed_auto_capture(self):
+        detector = package_detector.PackageDetector()
+        report = package_detector.PhotoQuality(120, 100, 120, 100, 600, 120, 0, 0, ("small",))
+        for korean in (False, True):
+            detector.use_korean_labels = korean
+            for status in ("holding", "ready"):
+                gate = SimpleNamespace(
+                    status=status, held_seconds=1.0, hold_seconds=2.0,
+                    absent_seconds=0.0, rearm_seconds=1.5,
+                )
+                with self.subTest(korean=korean, status=status), patch.object(detector._image_draw.ImageDraw, "text") as draw_text:
+                    panel = detector.make_quality_panel(report, candidate_number=1, auto_capture=gate)
+                messages = "\n".join(call.args[1] for call in draw_text.call_args_list)
+                self.assertIn("품질: 주의" if korean else "Experimental: CAUTION", messages)
+                self.assertIn("촬영 영역이 작음" if korean else "Small capture area", messages)
+                self.assertIn("크기 주의 허용" if korean else "small warning allowed", messages)
+                self.assertEqual(report.warnings, ("small",))
+                self.assertEqual(panel.shape, (260, 800, 3))
+                for call in draw_text.call_args_list:
+                    x, y = call.args[0]
+                    bounds = detector.font.getbbox(call.args[1], anchor="lt")
+                    self.assertLessEqual(x + bounds[2], 800)
+                    self.assertLessEqual(y + bounds[3], 260)
 
     # 자동 모드의 다중 후보와 미감지 상태에서 양호로 오해하거나 자동 선택을 안내하지 않는다.
     def test_auto_panel_explains_ambiguous_and_missing_targets(self):

@@ -62,10 +62,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="품질 검사의 선명도 최소값 (기본값: %(default)g, --detect/--auto-capture에 적용)",
     )
     parser.add_argument(
-        "--auto-capture", action="store_true", help="품질 양호가 유지되면 한 번 자동 저장한다 (--detect 포함)"
+        "--auto-capture", action="store_true", help="촬영 조건이 유지되면 한 번 자동 저장한다 (--detect 포함, 크기 경고 허용)"
     )
     parser.add_argument(
-        "--hold-seconds", type=float, default=2.0, help="자동 저장 전 양호 유지 시간 (기본값: 2초)"
+        "--hold-seconds", type=float, default=2.0, help="자동 저장 전 촬영 조건 유지 시간 (기본값: 2초)"
     )
     parser.add_argument(
         "--rearm-seconds", type=float, default=1.5, help="다음 자동 촬영을 허용할 연속 미감지 시간 (기본값: 1.5초)"
@@ -226,9 +226,10 @@ def run_preview(
             print("화면 아래에 사진 품질을 표시합니다. 실험 기준의 주의 표시이며 S 저장을 차단하지 않습니다.")
         if auto_capture is not None:
             print(
-                f"자동 촬영: 후보 하나의 품질이 {auto_capture.hold_seconds:g}초 양호하면 한 번 저장합니다. "
+                f"자동 촬영: 후보 하나가 {auto_capture.hold_seconds:g}초 촬영 조건을 유지하면 한 번 저장합니다. "
                 f"모든 후보가 {auto_capture.rearm_seconds:g}초 감지되지 않아야 다음 촬영을 허용합니다."
             )
+            print("크기 경고만 있으면 자동 저장을 허용합니다. 다른 품질 경고는 자동 저장을 막습니다.")
             print("각 조건은 최소 3개 프레임에서 확인합니다. S 수동 저장도 성공하면 자동 중복 저장을 막습니다.")
 
         while True:

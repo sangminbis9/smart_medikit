@@ -126,6 +126,23 @@ class PreviewTests(unittest.TestCase):
         self.assertEqual(detector.make_quality_panel.call_args.kwargs["auto_capture"].status, "locked")
         self.assertIn("자동 촬영 저장 완료", self.output.getvalue())
 
+    # 작은 원본 영역도 크기 경고를 유지하며 로컬에 한 번만 자동 저장한다.
+    def test_small_area_auto_saves_locally_once_without_removing_warning(self):
+        detector = self.make_auto_detector([0, 1, 2, 3, 4, 5])
+        detector.detect.return_value = [PackageDetection(0, 0.8, (20, 20, 140, 120))]
+        self.keys.side_effect = [-1] * 5 + [ord("q")]
+        gate = AutoCaptureGate()
+        self.assertEqual(camera_preview.run_preview(0, "msmf", detector=detector, auto_capture=gate), 0)
+        self.save.assert_called_once()
+        np.testing.assert_array_equal(self.save.call_args.args[0], self.frame[20:120, 20:140])
+        self.assertEqual(self.save.call_args.args[1], camera_preview.CAPTURE_DIRECTORY)
+        self.assertEqual(self.save.call_args.kwargs, {"prefix": "auto_crop"})
+        report = detector.make_quality_panel.call_args.args[0]
+        self.assertEqual((report.width, report.height), (120, 100))
+        self.assertEqual(report.warnings, ("small",))
+        self.assertIn("촬영 영역이 작음", self.output.getvalue())
+        self.assertEqual(gate.status, "locked")
+
     # 옵션의 유지 시간을 적용하되 준비된 프레임에서 종료를 누르면 저장하지 않는다.
     def test_custom_hold_and_quit_take_priority_over_auto_save(self):
         detector = self.make_auto_detector([0, 1, 2, 3])

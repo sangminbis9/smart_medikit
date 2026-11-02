@@ -154,6 +154,18 @@ WebSocket은 **상태 변경 사실과 버전 정보**를 알리고, 웹앱은 �
 - 현재 실제 API 쓰기·사진 업로드·Web Push 구독은 실행하지 않는다. 시연 편집은 메모리에만 반영되고 서버 성공 문구를 표시하지 않는다. 구독 소유권·서버 쓰기 계약이 합의되면 기존 경로와 연결한다.
 - Service Worker는 정적 산출물만 캐시한다. `push`의 `notification_id`를 알림 tag로 사용하고 일반 문구만 표시한다. 알림 클릭은 같은 출처 `/alerts`를 열고 상태를 재조회할 뿐 확인/복용 API를 호출하지 않는다. 실제 서버 발송·구독은 아직 미연동이다.
 
+### 10.1 증상별 케어 조회 확장 (2026-11-02)
+
+`/care`, `/care/:symptomId`는 8개 카테고리·32개 증상의 일반 건강정보를 표시한다. `careGuides.ts`의 버전·출처 확인일·원문 링크와 증상별 대처/위험 신호를 사용한다. 의료 전문가 검토 완료나 개인별 사용 적합성을 뜻하지 않는다. 기존 `useMedkit.ts` 조회·취소·오프라인·복귀 재조회 경로를 재사용하며 쓰기·OCR·Pi 이벤트 계약은 바꾸지 않는다.
+
+- `GET /inventory`의 선택 응답 확장: `inventory_status: CONFIRMED | PARTIAL | UNAVAILABLE`(없으면 `UNAVAILABLE`), `catalog_medicines: Medicine[]`(없으면 `[]`), `catalog_complete: boolean`(없으면 `false`). 기존 필드는 유지한다. 케어의 보유·미보유 확정에는 최신 성공 응답과 `inventory_status=CONFIRMED`가 필요하다. 시연·오프라인·조회 실패·미완성 재고는 확인 필요다.
+- `catalog_medicines`는 기존 `MEDICINE#<ITEM_SEQ>/META` 제품 캐시다. 포장 상태·실제 보유·유효기간을 의미하지 않으므로 `packages`로 변환하지 않는다. UI에서 **인식된 제품 정보 · 보유 여부 미확인**으로 분리한다. `GET /alerts`에 `alerts_status=UNAVAILABLE`이 있으면 알림 미연결을 안내한다.
+- `Medicine` 선택 필드: `product_code`(9자리 품목기준코드), `product_info: {source:"MFDS_PERMIT_DETAIL", indications, dosage, precautions}`(각 문구 `string|null`), `product_info_status`, `care_assessment`. 없거나 잘못된 선택 허가·검토 구조는 `null`로 처리하고 기존 목록은 유지한다. 원문을 HTML로 실행하지 않고 텍스트로 표시한다. 사진 근거가 없으면 기본 아이콘을 사용한다.
+- `care_assessment`는 **향후 서버의 검토 결과를 받기 위한 선택 계약**이다. 현재 테이블에 존재한다고 가정하거나 자동 생성하지 않는다. `{product_code, review_status:"APPROVED", scope:"CARE_GUIDE_32_V1", source_url, reviewed_at, valid_until, indications, ingredient_names, matches:[{symptom_id, medicine_categories, evidence, conditions}]}` 형태다. 시간은 시간대 포함 ISO 8601, `conditions`는 비어 있지 않은 적용 조건 목록이다. `scope`는 이번 32개 증상 전체를 검토했다는 뜻이며, 부분 검토 결과를 이 값으로 보내면 안 된다. 제품별 `APPROVED`를 발행할 사람 검토 절차와 유효기간 정책은 별도 팀 합의 대상이다.
+- 프론트엔드는 출처 HTTPS 허용 호스트(`nedrug.mfds.go.kr`, `data.mfds.go.kr`, `apis.data.go.kr`), 품목 코드·성분 집합·효능 원문 일치, 허가 사용법/주의사항 존재, 검토 유효기간, 원문 내 직접 근거, 정확한 증상 ID·역할을 검사한다. 제품명·효능 키워드 부분 일치로 효능 매칭을 만들지 않는다. 조건을 노출하되 개인별 적합성을 자동 판단하지 않는다.
+- `STORED` 일반의약품만 연결한다. 처방·반출·등록·소진·폐기 포장은 제외한다. 실제 유효기간/안전정보가 부족하면 **확인 필요**, 만료 또는 확인된 DUR/동일성분/기한 경고는 **사용 주의**, 모든 조회 근거가 있는 관련 제품은 **보유**다. 주의사항 확인 버튼을 눌렀다고 위험 근거를 지우지 않는다. 검토가 불완전한 보관 품목이 남으면 미보유로 단정하지 않는다.
+- [별도 읽기 API](../backend/README.md)는 현재 제품만 존재하는 기존 테이블을 조회해 `inventory_status=UNAVAILABLE`, `packages=[]`, `catalog_medicines`를 반환한다. 새 테이블이나 저장 구조 변경 없이 연결 가능하지만 실제 배포·IAM·공개 시연 접근은 팀 승인 후 진행한다. 기본은 접근 거부이며 허가된 authorizer 문맥 또는 명시적인 `MEDKIT_DEMO_PUBLIC_READ=true` 배포만 허용한다.
+
 ## 11. 공통 제품 OCR Lambda 저장 계약 (2026-10-31)
 
 `ocr-lambda/`는 첨부 ZIP의 제품 식별 계층을 가져온 구현이다. 이 절은 해당 코드의 입출력과 저장 계약을 설명하며, 위 Pi 세션·웹 API 초안의 배포 완료를 뜻하지 않는다.

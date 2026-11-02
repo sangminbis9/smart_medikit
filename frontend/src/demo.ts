@@ -63,6 +63,9 @@ export function makeDemo(): Data {
     }),
   ];
   return {
+    inventory_status: 'UNAVAILABLE',
+    catalog_medicines: [],
+    catalog_complete: false,
     box: {
       box_id: 'demo-box',
       dimensions: { width: 300, depth: 240, height: 120 },

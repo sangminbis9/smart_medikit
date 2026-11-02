@@ -46,6 +46,12 @@ export default function Alerts({ kit }: { kit: Medkit }) {
           알림·설치 안내
         </Link>
       </div>
+      {kit.data.alerts_status === 'UNAVAILABLE' && !kit.demo && (
+        <Note>
+          알림 이력이 아직 연결되지 않았어요. 빈 목록이 주의정보가 없다는 뜻은
+          아니에요.
+        </Note>
+      )}
       <div className="chips section-gap">
         {['전체', '주의정보', '등록·기한 확인'].map(
           /* 알림 분류 필터를 표시한다. */ function chip(value) {

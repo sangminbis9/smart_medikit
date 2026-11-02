@@ -4,6 +4,7 @@ import { expiryLabel, hasStock, stockLabel, type Package } from './data';
 import { stateLabels } from './Home';
 import type { Medkit } from './useMedkit';
 import { Badge, Dialog, EmptyState, Icon, Note } from './ui';
+import MedicineUsage from './MedicineUsage';
 
 // 직접 링크로 열린 포장도 현재 목록에서 안전하게 조회한다.
 export default function PackageDetail({ kit }: { kit: Medkit }) {
@@ -125,6 +126,46 @@ export default function PackageDetail({ kit }: { kit: Medkit }) {
               </dd>
             </div>
           </dl>
+          <section
+            className="medicine-usage"
+            aria-labelledby="medicine-usage-title"
+          >
+            <h2 id="medicine-usage-title">사용법 상세</h2>
+            <p>
+              허가된 의약품 정보이며 개인별 복용 지시가 아니에요.
+              어린이·임산부·기저질환자·다른 약을 복용 중인 분은 의사 또는 약사와
+              상담하세요.
+            </p>
+            {!item.medicines.length && <Note>의약품 사용정보 확인 필요</Note>}
+            {item.medicines.map(
+              // 출처가 확인된 허가 문구만 표시하고 없는 내용은 추측하지 않는다.
+              function usage(medicine) {
+                return (
+                  <MedicineUsage
+                    key={medicine.medicine_id}
+                    medicine={medicine}
+                  />
+                );
+              },
+            )}
+            <dl className="detail-fields">
+              <div>
+                <dt>유효기간 확인 상태</dt>
+                <dd>{expiryLabel(item)}</dd>
+              </div>
+              <div>
+                <dt>보관함 보유 정보</dt>
+                <dd>
+                  {stateLabels[item.state]}
+                  {kit.demo
+                    ? ' · 시연 정보'
+                    : kit.status !== 'ready' || !kit.online
+                      ? ' · 최신 상태 확인 필요'
+                      : ''}
+                </dd>
+              </div>
+            </dl>
+          </section>
           <Note>
             {hasStock(item)
               ? '잔여량은 사용 기록에 따른 예상값이에요. 실제 남은 수량과 다르면 수정해주세요.'

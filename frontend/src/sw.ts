@@ -23,6 +23,7 @@ registerRoute(
       /^\/$/,
       /^\/(schedule|alerts|device)\/?$/,
       /^\/packages\/[^/.]+\/?$/,
+      /^\/care(?:\/[a-z-]+)?\/?$/,
     ],
   }),
 );

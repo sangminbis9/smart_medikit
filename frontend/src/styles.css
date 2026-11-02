@@ -11,6 +11,458 @@
     'Noto Sans KR Variable', 'Apple SD Gothic Neo', 'Malgun Gothic', sans-serif;
 }
 
+/* 케어 가이드는 기존 민트 색상과 둥근 카드·버튼을 재사용한다. */
+.care-page {
+  max-width: 1180px;
+  margin: 0 auto;
+  padding-bottom: 40px;
+}
+.care-intro {
+  padding: 32px;
+  border: 1px solid #dbe8df;
+  border-radius: 24px;
+  background: #e5f0e9;
+}
+.care-eyebrow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: #206d5c;
+  margin-bottom: 16px;
+}
+.care-eyebrow .icon img {
+  width: 20px;
+  height: 20px;
+}
+.care-intro p,
+.care-detail-heading p {
+  color: #63736c;
+  margin-top: 12px;
+  line-height: 1.8;
+}
+.care-counts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 16px;
+  margin-top: 24px;
+  font-size: 12px;
+  color: #426e60;
+}
+.care-search {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 24px 0 16px;
+  padding: 16px 20px;
+  border: 1px solid #dfe6e0;
+  border-radius: 16px;
+  background: white;
+}
+.care-search input {
+  width: 100%;
+  min-width: 0;
+  border: none;
+  background: transparent;
+  font-size: 14px;
+}
+.care-filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.care-filters a {
+  padding: 10px 16px;
+  border: 1px solid #dfe6e0;
+  border-radius: 24px;
+  background: white;
+  font-size: 13px;
+}
+.care-filters a[aria-current] {
+  background: #206d5c;
+  border-color: #206d5c;
+  color: white;
+}
+.care-result-count {
+  margin: 24px 0 16px;
+  font-size: 13px;
+  color: #63736c;
+}
+.care-result-count strong {
+  color: #206d5c;
+  margin-left: 8px;
+}
+.care-category-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 20px;
+  margin-bottom: 24px;
+}
+.care-category-card {
+  border: 1px solid #dfe6e0;
+  border-radius: 20px;
+  background: white;
+  padding: 24px;
+}
+.care-category-heading {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+.care-category-heading small {
+  margin-left: auto;
+}
+.care-category-number {
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  border-radius: 12px;
+  background: #eff5f1;
+  color: #206d5c;
+  font-size: 12px;
+  font-weight: 700;
+}
+.care-symptom-list {
+  display: grid;
+  gap: 2px;
+}
+.care-symptom-link {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 13px 4px;
+  gap: 12px;
+  font-size: 14px;
+  border-bottom: 1px solid #f0f3f0;
+}
+.care-symptom-link:last-child {
+  border-bottom: 0;
+}
+.care-symptom-link:hover {
+  color: #206d5c;
+  background: #f5f8f5;
+  border-radius: 8px;
+}
+.care-symptom-link .icon img {
+  width: 16px;
+  height: 16px;
+}
+.care-back {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: #63736c;
+  margin-bottom: 28px;
+}
+.care-detail-heading h1 {
+  margin-top: 14px;
+}
+.care-urgent {
+  padding: 18px 22px;
+  border-radius: 16px;
+  background: #fff1ed;
+  border: 1px solid #f0d7cf;
+  color: #903c32;
+  margin-top: 24px;
+  font-size: 14px;
+  line-height: 1.8;
+}
+.care-health-notice {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  background: white;
+  border: 1px solid #dfe6e0;
+  border-radius: 16px;
+  padding: 18px 22px;
+  margin: 16px 0 32px;
+  font-size: 13px;
+  color: #63736c;
+  line-height: 1.8;
+}
+.care-detail-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 260px;
+  gap: 28px;
+  align-items: start;
+}
+.care-section-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 20px;
+}
+.care-section-heading span {
+  font-size: 13px;
+  color: #63736c;
+}
+.care-steps {
+  display: grid;
+  gap: 16px;
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+.care-step {
+  display: flex;
+  gap: 18px;
+  border-radius: 22px;
+  padding: 26px;
+}
+.care-step-0 {
+  background: #e8f2ec;
+}
+.care-step-1 {
+  background: #eaf2f8;
+}
+.care-step-2 {
+  background: #eff1ee;
+}
+.care-step-number {
+  width: 42px;
+  height: 42px;
+  flex: none;
+  display: grid;
+  place-items: center;
+  background: white;
+  border-radius: 50%;
+  color: #206d5c;
+  font-weight: 700;
+  font-size: 14px;
+}
+.care-step-content {
+  min-width: 0;
+  flex: 1;
+}
+.care-step h3 {
+  font-weight: 700;
+  padding-top: 8px;
+  margin-bottom: 12px;
+}
+.care-step p {
+  font-size: 14px;
+  line-height: 1.85;
+  color: #4b655c;
+  overflow-wrap: anywhere;
+}
+.care-medicines {
+  background: #ffffffbd;
+  padding: 18px;
+  border: 1px solid #ffffff;
+  border-radius: 16px;
+  margin-top: 20px;
+}
+.care-medicine-heading {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 14px;
+}
+.care-medicines .care-match-reason {
+  font-size: 12px;
+  margin-top: 10px;
+}
+.care-product {
+  display: flex;
+  align-items: flex-start;
+  gap: 14px;
+  border-top: 1px solid #dfe6e0;
+  padding-top: 16px;
+  margin-top: 16px;
+}
+.care-product > div {
+  min-width: 0;
+}
+.care-product h4 {
+  margin: 0 0 8px;
+  font-size: 14px;
+  overflow-wrap: anywhere;
+}
+.care-product p,
+.care-product details {
+  font-size: 12px;
+}
+.care-product details {
+  margin: 10px 0;
+  line-height: 1.8;
+}
+.care-product-icon {
+  display: grid;
+  place-items: center;
+  width: 44px;
+  height: 52px;
+  flex: none;
+  background: #e5f0e9;
+  border-radius: 12px;
+}
+.care-product .secondary-button {
+  margin-top: 12px;
+  font-size: 12px;
+  min-height: 38px;
+}
+.care-side-note {
+  background: white;
+  border: 1px solid #dfe6e0;
+  border-radius: 20px;
+  padding: 24px;
+  display: grid;
+  gap: 16px;
+}
+.care-side-note p {
+  font-size: 13px;
+  line-height: 1.85;
+  color: #63736c;
+}
+.care-side-note .care-data-notice {
+  padding-top: 16px;
+  border-top: 1px solid #dfe6e0;
+}
+.care-unverified {
+  margin-top: 24px;
+  padding: 20px;
+  border: 1px solid #dfe6e0;
+  background: white;
+  border-radius: 16px;
+  font-size: 13px;
+  line-height: 1.9;
+}
+.care-unverified summary {
+  font-weight: 600;
+  cursor: pointer;
+}
+.care-unverified p {
+  color: #63736c;
+  margin-top: 12px;
+}
+.care-unverified a {
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+.care-warnings {
+  margin-top: 32px;
+  padding: 24px;
+  background: #fff7ed;
+  border: 1px solid #efdfc9;
+  border-radius: 20px;
+}
+.care-warnings h2 {
+  color: #885522;
+}
+.care-warnings ul {
+  padding-left: 20px;
+  margin-bottom: 0;
+  font-size: 14px;
+  color: #775733;
+  line-height: 1.9;
+}
+.care-warnings li + li {
+  margin-top: 8px;
+}
+.care-sources {
+  padding: 24px 0 0;
+  margin-top: 24px;
+  border-top: 1px solid #dfe6e0;
+}
+.care-sources h2 {
+  font-size: 14px;
+}
+.care-sources p,
+.care-sources ul {
+  color: #63736c;
+  font-size: 12px;
+  line-height: 1.9;
+}
+.care-sources ul {
+  padding-left: 18px;
+}
+.care-sources a {
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+.medicine-usage {
+  border-top: 1px solid #dfe6e0;
+  padding-top: 24px;
+}
+.medicine-usage > p {
+  color: #63736c;
+  font-size: 13px;
+  line-height: 1.9;
+  margin: 12px 0;
+}
+.medicine-usage article {
+  margin: 20px 0;
+}
+.medicine-usage h3 {
+  margin-bottom: 12px;
+  font-weight: 700;
+}
+.medicine-usage dd {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+@media (max-width: 1000px) {
+  .care-detail-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+@media (max-width: 767px) {
+  .care-page {
+    padding-bottom: 24px;
+  }
+  .care-intro {
+    padding: 24px 20px;
+    border-radius: 20px;
+  }
+  .care-intro h1 {
+    font-size: 25px;
+  }
+  .care-intro p {
+    font-size: 14px;
+  }
+  .care-category-grid {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 16px;
+  }
+  .care-category-card {
+    padding: 20px;
+  }
+  .care-filters a {
+    padding: 8px 12px;
+    font-size: 12px;
+  }
+  .care-step {
+    padding: 20px 16px;
+    gap: 12px;
+  }
+  .care-step-number {
+    width: 32px;
+    height: 32px;
+    font-size: 12px;
+  }
+  .care-step h3 {
+    padding-top: 4px;
+  }
+  .care-step p {
+    font-size: 13px;
+  }
+  .care-medicines {
+    padding: 12px;
+  }
+  .care-product {
+    flex-wrap: wrap;
+  }
+  .care-health-notice,
+  .care-urgent {
+    padding: 16px;
+  }
+}
+
 :root {
   font-family: var(--font-sans);
   color: #163c34;
@@ -1371,7 +1823,7 @@ input[type='radio'] {
   }
   .bottom-navigation nav {
     display: grid;
-    grid-template-columns: repeat(3, 1fr);
+    grid-template-columns: repeat(4, 1fr);
   }
   .bottom-navigation .nav-item {
     min-height: 52px;

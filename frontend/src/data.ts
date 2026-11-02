@@ -10,12 +10,48 @@ export const dimensionsSchema = z.object({
   height: z.number().positive(),
 });
 
+const productInfoSchema = z.object({
+  source: z.literal('MFDS_PERMIT_DETAIL'),
+  indications: text,
+  dosage: text,
+  precautions: text,
+});
+
+// 선택 확장 필드는 불완전해도 기존 재고 조회를 중단시키지 않는다.
+const careAssessmentSchema = z.object({
+  product_code: z.string().regex(/^\d{9}$/),
+  review_status: z.literal('APPROVED'),
+  scope: z.literal('CARE_GUIDE_32_V1'),
+  source_url: z.url(),
+  reviewed_at: z.iso.datetime({ offset: true }),
+  valid_until: z.iso.datetime({ offset: true }),
+  indications: z.string().trim().min(1),
+  ingredient_names: z.array(z.string().trim().min(1)).min(1),
+  matches: z.array(
+    z.object({
+      symptom_id: z.string().min(1),
+      medicine_categories: z.array(z.string().min(1)).min(1),
+      evidence: z.string().trim().min(1),
+      conditions: z.array(z.string().trim().min(1)).min(1),
+    }),
+  ),
+});
+
 const medicineSchema = z.object({
   medicine_id: z.string().min(1),
   name: z.string().min(1),
   form: z.enum(['TABLET', 'CAPSULE', 'OTHER', 'UNKNOWN']).default('UNKNOWN'),
   ingredients: z.array(z.string()).default([]),
   indications: z.array(z.string()).default([]),
+  product_code: z
+    .string()
+    .regex(/^\d{9}$/)
+    .nullable()
+    .default(null)
+    .catch(null),
+  product_info: productInfoSchema.nullable().default(null).catch(null),
+  product_info_status: text,
+  care_assessment: careAssessmentSchema.nullable().default(null).catch(null),
 });
 
 export const packageSchema = z.object({
@@ -98,6 +134,11 @@ export const alertSchema = z.object({
 });
 
 export const snapshotSchema = z.object({
+  inventory_status: z
+    .enum(['CONFIRMED', 'PARTIAL', 'UNAVAILABLE'])
+    .default('UNAVAILABLE'),
+  catalog_medicines: z.array(medicineSchema).default([]),
+  catalog_complete: z.boolean().default(false),
   box: z
     .object({
       box_id: text,
@@ -113,11 +154,15 @@ export const snapshotSchema = z.object({
 });
 
 export type Package = z.infer<typeof packageSchema>;
+export type Medicine = z.infer<typeof medicineSchema>;
 export type Dose = z.infer<typeof doseSchema>;
 export type Alert = z.infer<typeof alertSchema>;
 export type Snapshot = z.infer<typeof snapshotSchema>;
 export type Dimensions = z.infer<typeof dimensionsSchema>;
-export type Data = Snapshot & { alerts: Alert[] };
+export type Data = Snapshot & {
+  alerts: Alert[];
+  alerts_status?: 'CONFIRMED' | 'UNAVAILABLE';
+};
 
 // 입력되지 않은 정보는 수량·날짜를 추측하지 않고 빈 상태로 시작한다.
 export function emptyData(): Data {
@@ -235,7 +280,10 @@ export function parseData(
 ): Data {
   const snapshot = snapshotSchema.parse(inventory);
   const notices = z
-    .object({ alerts: z.array(alertSchema).default([]) })
+    .object({
+      alerts: z.array(alertSchema).default([]),
+      alerts_status: z.enum(['CONFIRMED', 'UNAVAILABLE']).optional(),
+    })
     .parse(alerts);
   if (snapshot.box.box_id && snapshot.box.box_id !== boxId)
     throw new Error('보관함 정보가 일치하지 않습니다.');

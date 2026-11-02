@@ -41,6 +41,8 @@ npm run preview
 ## 현재 동작하는 기능
 
 - 홈: 빈 상태, 시연 전환, 약 이름·제공된 효능 검색, 카드 독립 스크롤과 3D 선택 연동, 포장 상세 링크.
+- 케어 가이드: `/care`의 8개 분류·32개 증상 검색과 `/care/:symptomId`의 3~4단계 대처, 위험 신호, 건강 안내, 출처 링크. PC·태블릿·모바일 공통 메뉴로 접근하며 검색 조건을 주소에 유지합니다. NHS 원문을 2026-11-02 확인해 요약했고 의료 전문가 검토 완료를 뜻하지 않습니다.
+- 케어 제품 연결: 최신 확인 재고·검토된 식약처 효능 근거가 있을 때만 관련 포장을 표시합니다. 미연결·불완전 효능·미확인 유효기간은 확인 필요, 경고/만료는 사용 주의입니다. 제품명 검색으로 효능을 확정하지 않습니다. 제품 인식 캐시는 보유 재고와 분리하며 허가정보가 없으면 사용법을 생성하지 않습니다. [조회 확장 계약](../docs/CONTRACTS.md#101-증상별-케어-조회-확장-2026-11-02)과 [기존 테이블 읽기 API](../backend/README.md)를 참고하세요.
 - 3D: 마우스·터치 회전/확대, 키보드 좌우 회전·`+`/`-` 확대·`Home` 초기화, 선택 핀, 다른 포장의 반투명 처리, 주황 동일성분/빨강 병용금기 테두리. WebGL 실패 시 목록 이용 가능.
 - 상세: 정제·캡슐의 예상 수량, 처방약의 예상 회분, 비정제 잔여량 미표시, 실제 만료일/임시 기준일/미확인 구분.
 - 복약: 한국 날짜 기준 달력, 사용자 확인/복용 추정/예정 등의 구분. 시연에서만 확인 상태 변경.
@@ -63,12 +65,12 @@ npm run preview
 1. `main`에서 변경 내용을 검증·커밋하고 `git push origin main`으로 GitHub에 반영합니다. 별도 작업 브랜치나 PR은 사용자가 명시적으로 요청한 경우에만 사용합니다.
 2. Amplify Hosting에서 GitHub 저장소 `sangminbis9/smart_medikit`과 **`main`**을 선택합니다. **모노레포 경로를 `frontend`**로 지정합니다. `AMPLIFY_MONOREPO_APP_ROOT=frontend`도 확인합니다. 기존에 다른 브랜치를 연결했다면 배포 대상에 `main`을 추가로 연결합니다.
 3. 루트 [`amplify.yml`](../amplify.yml)을 사용합니다. Node 22 → `npm ci` → 타입·린트·단위 테스트 → 빌드, 산출물은 `frontend/dist`입니다. AWS 백엔드 생성 단계는 없습니다.
-4. **Rewrites and redirects**의 JSON 편집기에 [`amplify-rewrites.json`](../amplify-rewrites.json)을 적용합니다. 이 JSON은 자동 로딩되지 않습니다. `/schedule`, `/alerts`, `/device`, `/packages/…`만 앱 셸로 연결하며 `/sw.js`, Manifest, 아이콘, `/assets/…`, API 경로는 제외합니다.
+4. **Rewrites and redirects**의 JSON 편집기에 [`amplify-rewrites.json`](../amplify-rewrites.json)을 적용합니다. 이 JSON은 자동 로딩되지 않습니다. `/care`, `/care/…`, `/schedule`, `/alerts`, `/device`, `/packages/…`만 앱 셸로 연결하며 `/sw.js`, Manifest, 아이콘, `/assets/…`, API 경로는 제외합니다.
 5. 루트 [`customHttp.yml`](../customHttp.yml)의 응답 헤더가 Hosting에 반영됐는지 확인합니다. Service Worker는 재검증하고 HTML·Manifest를 무기한 캐시하지 않습니다.
 6. 빈 화면 배포라면 `VITE_` 값 없이 배포합니다. 실서버 연결 시에는 위 표를 입력하고 재빌드한 뒤 API/S3 CORS와 서버 접근 제어를 별도로 검증합니다.
 7. HTTPS 주소에서 직접 경로 새로고침, Manifest, 앱 설치, 오프라인 새로고침, 새 버전 안내를 확인합니다. iPhone 실기기 및 실제 푸시 수신은 후속 검증입니다.
 
-설정은 [AWS 모노레포 문서](https://docs.aws.amazon.com/amplify/latest/userguide/monorepo-configuration.html), [SPA rewrite 문서](https://docs.aws.amazon.com/amplify/latest/userguide/redirect-rewrite-examples.html), [모노레포 응답 헤더 문서](https://docs.aws.amazon.com/amplify/latest/userguide/custom-header-YAML-format.html)를 기준으로 작성했습니다. **현재 AWS 자원을 생성하거나 실제 배포하지 않았습니다.**
+설정은 [AWS 모노레포 문서](https://docs.aws.amazon.com/amplify/latest/userguide/monorepo-configuration.html), [SPA rewrite 문서](https://docs.aws.amazon.com/amplify/latest/userguide/redirect-rewrite-examples.html), [모노레포 응답 헤더 문서](https://docs.aws.amazon.com/amplify/latest/userguide/custom-header-YAML-format.html)를 기준으로 작성했습니다. 실제 조회 API 구성과 배포 범위는 [백엔드 안내](../backend/README.md)에 기록합니다.
 
 ## 파일과 검증
 
@@ -84,6 +86,8 @@ npm run test:e2e
 ```
 
 E2E는 설치된 **Google Chrome**의 별도 임시 프로필을 사용합니다. 실제 iPhone Safari 테스트를 대체하지 않습니다. 테스트 결과 임시 파일은 OS 임시 디렉터리의 `medikit-playwright`에 생성됩니다. 브라우저가 없다면 먼저 Chrome을 설치하거나 팀 환경에 맞게 `playwright.config.ts`의 `channel`을 조정합니다.
+
+케어 추가 검증(2026-11-02): 타입·린트·포맷·빌드 및 단위 테스트 25개 통과. `npm run test:e2e -- --workers=1`에서 13개 통과, 모바일에 해당하지 않는 PC 전용 검사 1개 제외. PowerShell에서 `$env:MEDKIT_E2E_API='1'; npm run test:e2e -- --workers=1`로 별도 로컬 서버의 합성 API 응답을 검증하며 PC·모바일 총 4개가 통과했습니다. 일반 검사로 돌아갈 때 `Remove-Item Env:MEDKIT_E2E_API`로 해제합니다. 32개 상세·검색 복귀·320/390/768/1440px·직접 링크·오프라인, 기존 3D·복약·알림, 정상/빈 재고/조회 오류/미확인/주의 색상/사용정보 누락을 확인했습니다. 동시 Chrome 4개 실행에서는 Service Worker 활성화 15초 제한에 걸려 순차 실행으로 재검증했습니다. Browser plugin not available: 저장소의 Playwright와 설치된 Chrome을 사용했습니다.
 
 초기 구현 검증(2026-10-15): 타입 검사·린트·포맷·배포 빌드 통과, 단위 테스트 14개와 Chrome E2E 8개 통과. 빈 시작 → 시연 → 검색 → 상세 수정, 3D와 카드 선택 유지, 복약·알림 확인 시연, 직접 링크·오프라인 재접속을 확인했습니다. 320/390/768/1199/1200/1440px 폭에서 검증했고, Chrome에서 PWA 새 버전 안내와 업데이트 적용도 직접 확인했습니다. Figma 기준으로 홈·복약·알림의 데스크톱 화면과 모바일 홈을 비교했습니다.
 

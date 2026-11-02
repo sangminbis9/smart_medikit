@@ -16,9 +16,11 @@ import Alerts from './Alerts';
 import PackageDetail from './PackageDetail';
 import Device from './Device';
 import PwaUpdate from './PwaUpdate';
+import { CareIndex, CareDetail } from './Care';
 
 const destinations = [
   { path: '/', label: '홈', icon: 'home', active: 'homeActive' },
+  { path: '/care', label: '케어 가이드', icon: 'memo', active: 'memo' },
   {
     path: '/schedule',
     label: '복약',
@@ -38,15 +40,17 @@ export default function App() {
   let unread = 0;
   for (const alert of kit.data.alerts)
     if (alert.ack_state === 'PENDING') unread++;
-  const title = location.pathname.startsWith('/schedule')
-    ? '복약'
-    : location.pathname.startsWith('/alerts')
-      ? '알림'
-      : location.pathname.startsWith('/device')
-        ? '보관함 연결'
-        : location.pathname.startsWith('/packages')
-          ? '약품 상세'
-          : '홈';
+  const title = location.pathname.startsWith('/care')
+    ? '증상별 케어 가이드'
+    : location.pathname.startsWith('/schedule')
+      ? '복약'
+      : location.pathname.startsWith('/alerts')
+        ? '알림'
+        : location.pathname.startsWith('/device')
+          ? '보관함 연결'
+          : location.pathname.startsWith('/packages')
+            ? '약품 상세'
+            : '홈';
   const date = new Intl.DateTimeFormat('ko-KR', {
     timeZone: 'Asia/Seoul',
     month: 'long',
@@ -148,6 +152,14 @@ export default function App() {
               최신 정보를 가져오고 있어요…
             </div>
           )}
+          {kit.status === 'ready' &&
+            !kit.demo &&
+            kit.data.inventory_status !== 'CONFIRMED' && (
+              <div className="connection-banner" role="status">
+                제품 조회는 연결되었지만 현재 보관 재고·유효기간은 확인되지
+                않았어요.
+              </div>
+            )}
           <Routes>
             <Route
               path="/"
@@ -162,6 +174,8 @@ export default function App() {
               }
             />
             <Route path="/schedule" element={<Schedule kit={kit} />} />
+            <Route path="/care" element={<CareIndex />} />
+            <Route path="/care/:symptomId" element={<CareDetail kit={kit} />} />
             <Route path="/alerts" element={<Alerts kit={kit} />} />
             <Route path="/packages/:id" element={<PackageDetail kit={kit} />} />
             <Route

@@ -33,7 +33,10 @@ BACKENDS = {"auto": cv2.CAP_ANY, "dshow": cv2.CAP_DSHOW, "msmf": cv2.CAP_MSMF}
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="DroidCam 등 PC 카메라의 실시간 영상을 확인한다.",
-        epilog="영상 창에서 R: 시계 방향 90도 회전, S: 저장, Q 또는 Esc: 종료.",
+        epilog=(
+            "일반 모드의 영상 창: R 회전, S 저장, Q/Esc 종료. "
+            "--simulate-lid: PowerShell에서 1 Enter 열림, 0 Enter 닫힘, q Enter 종료 (R/S 사용 안 함)."
+        ),
     )
     parser.add_argument("--camera", type=int, default=0, help="카메라 번호 (기본값: 0)")
     parser.add_argument(
@@ -65,21 +68,56 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--auto-capture", action="store_true", help="촬영 조건이 유지되면 한 번 자동 저장한다 (--detect 포함, 크기 경고 허용)"
     )
     parser.add_argument(
+        "--simulate-lid",
+        action="store_true",
+        help="터미널의 1/0 입력으로 열림 포장 촬영과 닫힘 전체 촬영을 한 세션으로 시험한다",
+    )
+    parser.add_argument(
         "--hold-seconds", type=float, default=2.0, help="자동 저장 전 촬영 조건 유지 시간 (기본값: 2초)"
     )
     parser.add_argument(
         "--rearm-seconds", type=float, default=1.5, help="다음 자동 촬영을 허용할 연속 미감지 시간 (기본값: 1.5초)"
+    )
+    parser.add_argument(
+        "--interior-hold-seconds",
+        type=float,
+        default=1.0,
+        help="닫힘 후 전체 영상의 안정 조건 유지 시간 (--simulate-lid, 기본값: 1초)",
+    )
+    parser.add_argument(
+        "--interior-min-sharpness",
+        type=float,
+        default=0.0,
+        help="내부 전체 사진의 선명도 최소값 (--simulate-lid, 기본값: 0으로 선명도 차단 안 함)",
+    )
+    parser.add_argument(
+        "--interior-timeout",
+        type=float,
+        default=15.0,
+        help="닫힘 후 내부 촬영 조건을 기다릴 최대 시간 (--simulate-lid, 기본값: 15초)",
     )
     args = parser.parse_args(argv)
     if args.camera < 0:
         parser.error("카메라 번호는 0 이상의 정수여야 합니다.")
     if not 0 < args.conf <= 1:
         parser.error("--conf는 0 초과 1 이하의 수여야 합니다.")
-    if not math.isfinite(args.min_sharpness) or args.min_sharpness < 0:
-        parser.error("--min-sharpness는 0 이상의 유한한 수여야 합니다.")
-    for option, value in (("--hold-seconds", args.hold_seconds), ("--rearm-seconds", args.rearm_seconds)):
+    for option, value in (
+        ("--min-sharpness", args.min_sharpness),
+        ("--interior-min-sharpness", args.interior_min_sharpness),
+    ):
+        if not math.isfinite(value) or value < 0:
+            parser.error(f"{option}는 0 이상의 유한한 수여야 합니다.")
+    for option, value in (
+        ("--hold-seconds", args.hold_seconds),
+        ("--rearm-seconds", args.rearm_seconds),
+        ("--interior-hold-seconds", args.interior_hold_seconds),
+        ("--interior-timeout", args.interior_timeout),
+    ):
         if not math.isfinite(value) or value <= 0:
             parser.error(f"{option}는 0보다 큰 유한한 수여야 합니다.")
+    if args.interior_timeout <= args.interior_hold_seconds:
+        parser.error("--interior-timeout은 --interior-hold-seconds보다 커야 합니다.")
+    args.auto_capture = args.auto_capture or args.simulate_lid
     args.detect = args.detect or args.auto_capture
     return args
 
@@ -373,6 +411,14 @@ def main(argv: list[str] | None = None) -> int:
                 file=sys.stderr,
             )
             return 1
+    if args.simulate_lid:
+        # 센서 실험은 개폐 세션마다 한 번만 저장하며 일반 반복 촬영과 분리한다.
+        if __package__:
+            from .lid_capture import run_lid_simulation
+        else:
+            from lid_capture import run_lid_simulation
+
+        return run_lid_simulation(args, detector)
     auto_capture = AutoCaptureGate(args.hold_seconds, args.rearm_seconds) if args.auto_capture else None
     thresholds = QualityThresholds(min_sharpness=args.min_sharpness)
     return run_preview(args.camera, args.backend, args.rotate, detector, auto_capture, thresholds)

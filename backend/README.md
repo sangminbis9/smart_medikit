@@ -19,7 +19,7 @@
 ## 응답의 의미
 
 - `/inventory`: `{box, packages, doses: [], inventory_status, catalog_medicines, catalog_complete, synced_at}`. `MEDICINE#<코드>/META` 제품 정보와 `PACKAGE#<포장 ID>/META` 보유 포장을 `product_codes`로 연결한다. 제품 정보만 추가하면 포장이 생기지 않는다. 날짜·수량·좌표·OTC 여부를 추측하지 않으며 쓰기 API는 없다.
-- `inventory_status=CONFIRMED`는 해당 보관함의 포장 레코드를 끝까지 읽었다는 뜻이다. 실물 재고·유효기간·안전성 검증 완료가 아니다. 빈 포장 목록도 전체 조회가 성공하면 `CONFIRMED`다. 페이지 한도, 잘못된 포장 또는 공개 대상에서 제외된 같은 보관함 포장이 있으면 `PARTIAL`이다. 구버전 제품 전용 API의 `UNAVAILABLE`도 프론트엔드에서 지원한다.
+- `inventory_status=CONFIRMED`는 해당 보관함의 포장 레코드를 끝까지 읽었다는 뜻이다. 실물 재고·유효기간·안전성 검증 완료가 아니다. 빈 포장 목록도 전체 조회가 성공하면 `CONFIRMED`다. 페이지 한도 또는 잘못된 포장이 있으면 `PARTIAL`이다. 구버전 제품 전용 API의 `UNAVAILABLE`도 프론트엔드에서 지원한다.
 - `/alerts`: `{alerts: [], alerts_status: "UNAVAILABLE"}`. 알림 저장 계층이 없으므로 주의정보가 없다고 확정하지 않는다.
 - 식약처 허가 출처 `MFDS_PERMIT_DETAIL`의 효능·용법·주의사항만 선택적으로 반환한다. 오래된 테이블 항목에 허가정보가 없으면 `null`이다. `care_assessment`는 자동 생성하지 않는다.
 - 한 요청에서 최대 100개 평가 항목 × 2페이지를 `ConsistentRead=true`로 읽는다. `LastEvaluatedKey`가 남으면 `catalog_complete=false`, `inventory_status=PARTIAL`이다. 여러 페이지를 읽는 동안의 변경까지 원자적으로 보장하지는 않는다. 테이블이 커지면 기존 조회 인덱스/접근 패턴을 팀과 합의해야 하며 무한 Scan으로 확대하지 않는다.
@@ -37,13 +37,12 @@
   "box_id": { "S": "inha-capstone-02-medkit" },
   "kind": { "S": "OTC" },
   "state": { "S": "STORED" },
-  "product_codes": { "L": [{ "S": "000000001" }] },
-  "demo_public": { "BOOL": true }
+  "product_codes": { "L": [{ "S": "000000001" }] }
 }
 ```
 
 - `package_id`는 영문·숫자·`_`·`-` 1~100자이며 `pk` 접미사와 같아야 한다. `state`는 `REGISTERED`, `STORED`, `OUT`, `DEPLETED`, `DISPOSED` 중 하나다. 케어 보관 목록에는 `STORED`만 표시한다.
-- 공개 시연에서는 **`demo_public=true`인 `OTC` 포장만** 공개한다. 이 값을 지정하면 제품명·보관 상태·입력한 수량/기한/추정 위치가 API 주소를 아는 사람에게 공개된다. 환자명·처방전·개인 건강정보를 넣지 않는다. 이 플래그는 인증 수단이 아니며 처방약 포장은 공개 시연에서 제외한다.
+- **`demo_public`을 지정할 필요가 없다.** 사용자 요청으로 항목별 공개 플래그와 일반약 제한을 제거했다. 같은 보관함의 `OTC`·`PRESCRIPTION` 포장을 모두 조회하며 기존 플래그가 `false`여도 포함한다. 무로그인 시연에서는 제품명·보관 상태·입력한 수량/회분·기한·추정 위치가 API 주소를 아는 사람에게 공개된다. 환자 식별정보·처방전 원문·자유 메모는 응답에서 제외한다.
 - 제품 레코드가 있으면 이름·성분·허가정보를 함께 표시한다. 연결이 빠지면 `name`(선택 문자열) 또는 미확인 이름으로 포장을 표시하고 효능을 추정하지 않는다. 이름만으로 실제 제품을 확정하지 않는다.
 - `expiry`(Map)의 `actual_expiry`(String, `YYYY-MM-DD`)와 `verified`(Bool)는 실물 기한을 확인한 경우에만 입력한다. `temporary_management_date`는 별도 임시 날짜다.
 - `inventory`(Map)의 `stock_enabled`(Bool), `initial_qty`·`estimated_qty`(Number)는 정제·캡슐 일반약의 예상 수량이다. 시럽·연고 등에는 반환하지 않는다. 누락된 날짜·수량·위치는 `null`, 안전정보는 기본 `SAFETY_CHECK_PENDING`이다.
@@ -70,7 +69,7 @@ AGENTS.md 5절의 **“IAM 권한 변경, 서비스 공개 설정은 팀 승인 
 2. 전용 역할 방식의 권장 권한은 기본 Lambda 로그 권한과 **해당 테이블 ARN의 `dynamodb:Scan`만**이다. 학교 역할 모드는 위의 예외를 따른다. 쓰기·삭제·S3·식약처 키·Bedrock 권한은 코드에 필요 없다. 원문 응답 로그는 사용하지 않는다.
 3. 별도 API Gateway HTTP API에 `GET /inventory`, `GET /alerts`만 연결한다. payload v2, 기본 스테이지, 최소 요청 제한(예: 초당 1건/버스트 3건)을 설정한다. 기존 `yakyeon-api`와 그 서버는 변경하지 않는다.
 4. 기본값은 비공개다. 기존 접근 제어를 연결할 경우 Lambda authorizer의 서버 검증 결과에 `{medkit_read:true, box_id:<일치하는 ID>}`를 제공한다. 클라이언트 헤더나 `box_id`만으로는 통과하지 않는다.
-5. **무로그인 시연 공개를 선택해 승인한 경우에만** `MEDKIT_DEMO_PUBLIC_READ=true`를 설정한다. 이 경우 URL을 아는 제3자도 인식된 제품명·성분·허가정보를 조회할 수 있다. CORS나 고정 `box_id`는 인증이 아니다. 개인별 재고나 건강정보를 연결하기 전 접근 정책을 다시 정해야 한다.
+5. **무로그인 시연 공개를 선택해 승인한 경우에만** 서버의 `MEDKIT_DEMO_PUBLIC_READ=true`를 설정한다. 이는 제거한 항목별 `demo_public`과 다른 API 접근 설정이다. URL을 아는 제3자도 제품명·성분·허가정보와 보관함의 일반약·처방약 포장 정보를 조회할 수 있다. CORS나 고정 `box_id`는 인증이 아니다. 개인별 건강정보를 연결하기 전 접근 정책을 다시 정해야 한다.
 6. 서버 환경변수 `MEDKIT_BOX_ID`를 팀이 정한 단일 보관함 ID로 설정한다. 이 값은 조회 범위 선택자이며 새로운 저장 키나 데이터 레코드를 생성하지 않는다. `MEDKIT_TABLE`은 생략하거나 위 테이블명과 같아야 한다.
 7. API CORS는 Amplify의 정확한 HTTPS origin, 메서드 GET/OPTIONS, `Accept`, credentials 허용으로 제한한다. 와일드카드 origin을 쓰지 않는다. authorizer를 쓰면 쿠키의 SameSite·Secure와 API Gateway 전달 정책도 검증한다.
 8. Amplify `main`에 공개 설정 `VITE_API_URL=<새 API 주소>`, `VITE_BOX_ID=<동일 ID>`를 입력하고 재빌드한다. 브라우저에서 제품 캐시 조회와 **보유 여부 미확인** 표시를 검증한다. 실제 보유 매칭에는 별도로 Package·실제 유효기간·안전정보·검토된 효능 데이터가 필요하다.
@@ -82,5 +81,7 @@ AGENTS.md 5절의 **“IAM 권한 변경, 서비스 공개 설정은 팀 승인 
 2026-11-02: Python 단위 테스트 9개와 구문 검사 통과. 프론트엔드의 합성 API 화면 검증 결과는 [프론트엔드 안내](../frontend/README.md)에 기록했다.
 
 2026-11-07: Python 단위 테스트 16개와 구문 검사 통과. 포장·제품의 페이지 간 연결, 다른 보관함·비공개·처방약 제외, 누락 정보·잘못된 날짜·수량, 빈 재고·부분 조회 및 기존 함수 코드만 교체하는 경로를 검증했다. 실제 환자 정보는 사용하지 않았다.
+
+전체 약품 조회 변경 검증(2026-11-07): `demo_public` 및 일반약 제한 제거 후 Python 단위 테스트 17개와 구문 검사 통과. 플래그 누락·거짓·참과 일반약·처방약의 모든 조합을 공개 API 진입점에서 검증했다. PC·모바일 합성 API E2E는 기존 6개와 새 전체 약품 검색 2개가 통과했고, 이름·성분 검색 및 두 케어 보관 목록의 처방약 표시를 확인했다. 타입·린트·테스트 파일 포맷과 diff 검사도 통과했다. 프론트 제품 코드는 변경하지 않았다.
 
 참고: [DynamoDB Scan과 페이지 처리](https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/Scan.html), [Lambda와 API Gateway](https://docs.aws.amazon.com/lambda/latest/dg/services-apigateway.html).

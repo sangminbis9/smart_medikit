@@ -27,7 +27,7 @@ def package():
     return {
         "pk": "PACKAGE#synthetic-package", "sk": "META", "package_id": "synthetic-package",
         "box_id": "test-box", "kind": "OTC", "state": "STORED",
-        "product_codes": ["000000001"], "demo_public": True,
+        "product_codes": ["000000001"],
         "note": "노출 금지 메모", "patient_name": "노출 금지 개인 정보",
     }
 
@@ -146,7 +146,7 @@ class ReadApiTests(unittest.TestCase):
     def test_package_join_across_pages(self):
         cursor = {"pk": "cursor", "sk": "META"}
         table = FakeTable([{"Items": [package()], "LastEvaluatedKey": cursor}, {"Items": [product()]}])
-        result = read_api.read_inventory(table, "test-box", public_demo=True)
+        result = read_api.read_inventory(table, "test-box")
         self.assertEqual(result["inventory_status"], "CONFIRMED")
         item = result["packages"][0]
         self.assertEqual(item["name"], "검증용 합성 제품")
@@ -159,28 +159,47 @@ class ReadApiTests(unittest.TestCase):
         self.assertEqual(item["safety_status"], "SAFETY_CHECK_PENDING")
         self.assertNotIn("노출 금지", json.dumps(result, ensure_ascii=False))
 
-    # 공개 시연 허용·보관함·일반약 조건이 없으면 포장 내용을 내보내지 않는다.
-    def test_public_and_box_boundaries(self):
-        for changes in ({"demo_public": False}, {"demo_public": "true"}, {"kind": "PRESCRIPTION"}):
-            item = {**package(), **changes}
-            result = read_api.read_inventory(FakeTable([{"Items": [product(), item]}]), "test-box", True)
-            self.assertEqual(result["packages"], [])
-            self.assertEqual(result["inventory_status"], "PARTIAL")
+    # 공개 플래그의 누락·거짓·참 여부와 약품 종류가 재고 조회를 제한하지 않는다.
+    def test_all_packages_without_public_flag_filter(self):
+        for changes in ({}, {"demo_public": False}, {"demo_public": True}, {"demo_public": "true"}):
+            for kind in ("OTC", "PRESCRIPTION"):
+                item = {**package(), **changes, "kind": kind}
+                table = FakeTable([{"Items": [product(), item]}])
+                with self.subTest(changes=changes, kind=kind), patch.dict(os.environ, {
+                    "MEDKIT_BOX_ID": "test-box", "MEDKIT_DEMO_PUBLIC_READ": "true",
+                }), patch.object(read_api, "get_table", return_value=table):
+                    event = self.event()
+                    event["requestContext"].pop("authorizer")
+                    response = read_api.lambda_handler(event, None)
+                    self.assertEqual(response["statusCode"], 200)
+                    result = json.loads(response["body"])
+                    self.assertEqual(result["packages"][0]["kind"], kind)
+                    self.assertEqual(result["inventory_status"], "CONFIRMED")
+                    self.assertNotIn("demo_public", table.calls[0]["ExpressionAttributeNames"].values())
+                    self.assertNotIn("노출 금지", response["body"])
+
+    # 공개 플래그를 제거해도 다른 보관함과 보관함 없는 레코드를 섞지 않는다.
+    def test_box_boundary(self):
         other = {**package(), "box_id": "other-box"}
-        result = read_api.read_inventory(FakeTable([{"Items": [other]}]), "test-box", True)
+        result = read_api.read_inventory(FakeTable([{"Items": [other]}]), "test-box")
         self.assertEqual(result["packages"], [])
+        self.assertEqual(result["inventory_status"], "CONFIRMED")
+        unknown = {**package(), "box_id": None}
+        result = read_api.read_inventory(FakeTable([{"Items": [unknown]}]), "test-box")
+        self.assertEqual(result["packages"], [])
+        self.assertEqual(result["inventory_status"], "PARTIAL")
 
     # 부적합 포장은 전체 조회를 깨지 않고 부분 상태로 남긴다.
     def test_invalid_package_is_partial(self):
         for changes in ({"state": "UNKNOWN"}, {"package_id": "other"}, {"kind": "UNKNOWN"}):
-            result = read_api.read_inventory(FakeTable([{"Items": [{**package(), **changes}]}]), "test-box", True)
+            result = read_api.read_inventory(FakeTable([{"Items": [{**package(), **changes}]}]), "test-box")
             self.assertEqual(result["inventory_status"], "PARTIAL")
             self.assertEqual(result["packages"], [])
 
     # 일부 제품 연결이 빠져도 나머지 약품만으로 포장 전체를 검토 완료 처리하지 않는다.
     def test_missing_product_stays_unresolved(self):
         item = {**package(), "product_codes": ["000000001", "000000002"]}
-        result = read_api.read_inventory(FakeTable([{"Items": [product(), item]}]), "test-box", True)
+        result = read_api.read_inventory(FakeTable([{"Items": [product(), item]}]), "test-box")
         self.assertEqual(len(result["packages"][0]["medicines"]), 2)
         self.assertNotIn("care_assessment", result["packages"][0]["medicines"][1])
 
@@ -191,7 +210,7 @@ class ReadApiTests(unittest.TestCase):
                 "inventory": {"stock_enabled": True, "initial_qty": Decimal("10"), "estimated_qty": Decimal("7")},
                 "expiry": {"verified": True, "actual_expiry": "2027-02-30", "temporary_management_date": "2027-03-01"},
                 "position": {"x": Decimal("12.5"), "y": Decimal("3"), "z_estimated": Decimal("0"), "certainty": "ESTIMATED"}}
-        result = read_api.read_inventory(FakeTable([{"Items": [medicine, item]}]), "test-box", True)
+        result = read_api.read_inventory(FakeTable([{"Items": [medicine, item]}]), "test-box")
         view = result["packages"][0]
         self.assertEqual(view["inventory"]["estimated_qty"], 7)
         self.assertEqual(view["position"]["x"], 12.5)
@@ -201,7 +220,7 @@ class ReadApiTests(unittest.TestCase):
         json.dumps(result)
         for form in ("OTHER", "UNKNOWN"):
             medicine["form"] = form
-            view = read_api.read_inventory(FakeTable([{"Items": [medicine, item]}]), "test-box", True)["packages"][0]
+            view = read_api.read_inventory(FakeTable([{"Items": [medicine, item]}]), "test-box")["packages"][0]
             self.assertIsNone(view["inventory"])
         for value in (True, -1, Decimal("1.5"), Decimal("NaN"), "7"):
             self.assertIsNone(read_api.clean_number(value, integer=True))
@@ -209,9 +228,9 @@ class ReadApiTests(unittest.TestCase):
     # 보관 상태 변경은 그대로 반영하고 실제 데이터가 사라졌을 때 가짜 항목을 남기지 않는다.
     def test_state_change_and_empty_inventory(self):
         for state in ("REGISTERED", "STORED", "OUT", "DEPLETED", "DISPOSED"):
-            result = read_api.read_inventory(FakeTable([{"Items": [{**package(), "state": state}]}]), "test-box", True)
+            result = read_api.read_inventory(FakeTable([{"Items": [{**package(), "state": state}]}]), "test-box")
             self.assertEqual(result["packages"][0]["state"], state)
-        result = read_api.read_inventory(FakeTable([{"Items": []}]), "test-box", True)
+        result = read_api.read_inventory(FakeTable([{"Items": []}]), "test-box")
         self.assertEqual(result["packages"], [])
         self.assertEqual(result["inventory_status"], "CONFIRMED")
 

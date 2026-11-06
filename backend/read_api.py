@@ -148,12 +148,12 @@ def package_view(item, medicines, box_id):
     }
 
 
-# 같은 테이블의 제품·포장만 제한 조회하고 누락·비공개·부분 페이지를 구분한다.
-def read_inventory(table, box_id, public_demo=False):
+# 같은 보관함의 모든 제품·포장을 조회하고 누락·부분 페이지를 구분한다.
+def read_inventory(table, box_id):
     fields = ["pk", "sk", "product_code", "name", "form", "ingredients",
               "ingredients_status", "product_info", "product_info_status",
               "package_id", "box_id", "kind", "state", "product_codes", "expiry", "inventory",
-              "remaining_doses", "position", "size_class", "base_color", "safety_status", "demo_public"]
+              "remaining_doses", "position", "size_class", "base_color", "safety_status"]
     names = {f"#f{index}": name for index, name in enumerate(fields)}
     query = {
         "Limit": 100,
@@ -186,10 +186,7 @@ def read_inventory(table, box_id, public_demo=False):
             if not clean_text(item.get("box_id")):
                 inventory_complete = False
             continue
-        # 공개 시연은 항목별로 허용한 일반약 포장만 조회하며 처방약은 인증 계약에 남긴다.
-        if public_demo and (item.get("demo_public") is not True or item.get("kind") != "OTC"):
-            inventory_complete = False
-            continue
+        # 같은 보관함의 일반약·처방약을 공개 플래그와 무관하게 모두 연결한다.
         package = package_view(item, medicines, box_id)
         if package is None:
             inventory_complete = False
@@ -240,7 +237,7 @@ def lambda_handler(event, context):
     if path != "/inventory":
         return respond(404, {"code": "NOT_FOUND"})
     try:
-        inventory = read_inventory(get_table(), box_id, os.environ.get("MEDKIT_DEMO_PUBLIC_READ") == "true")
+        inventory = read_inventory(get_table(), box_id)
     except Exception:
         return respond(503, {"code": "CATALOG_UNAVAILABLE"})
     return respond(200, {

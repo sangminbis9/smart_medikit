@@ -204,6 +204,63 @@ test('보유 포장 추가와 반출이 홈·케어에 반영된다', async func
   await expect(page.locator('.package-card')).toContainText('반출 중');
 });
 
+// 공개 플래그 없이 받은 일반약·처방약 전체를 검색하고 케어 보관 목록에 표시한다.
+test('보관함의 일반약과 처방약을 모두 검색한다', async function allMedicines({
+  page,
+}) {
+  const otc = syntheticPackage();
+  const prescription = syntheticPackage();
+  prescription.package_id = 'synthetic-prescription';
+  prescription.kind = 'PRESCRIPTION';
+  prescription.name = '검증용 처방약 봉투';
+  prescription.medicines[0].name = '처방 검색용 합성약';
+  prescription.medicines[0].ingredients = ['처방 검색용 성분'];
+  prescription.medicines[0].care_assessment = null;
+  // 두 종류의 보관 약품이 동일한 조회 응답으로 들어오는 상황을 재현한다.
+  await page.route('**/api/**', async function respond(route) {
+    await route.fulfill({
+      json: route.request().url().includes('/inventory')
+        ? {
+            box: { box_id: 'test-box' },
+            packages: [otc, prescription],
+            inventory_status: 'CONFIRMED',
+          }
+        : { alerts: [], alerts_status: 'UNAVAILABLE' },
+    });
+  });
+  await page.goto('/');
+  await expect(page.locator('.package-card')).toHaveCount(2);
+  const search = page
+    .getByRole('searchbox', { name: '보관 약품 검색' })
+    .filter({ visible: true });
+  await search.fill('처방 검색용 성분');
+  await expect(page.locator('.package-card')).toHaveCount(1);
+  await expect(page.locator('.package-card')).toContainText(
+    '검증용 처방약 봉투',
+  );
+  await search.fill('검증 전용 합성 제품');
+  await expect(page.locator('.package-card')).toHaveCount(1);
+  await expect(page.locator('.package-card')).toContainText(
+    '검증 전용 합성 제품',
+  );
+  await search.fill('');
+  await page
+    .getByRole('link', { name: '케어 가이드', exact: true })
+    .filter({ visible: true })
+    .click();
+  const stored = page.getByRole('region', {
+    name: '보관 중인 약품',
+    exact: true,
+  });
+  await expect(stored.locator('li')).toHaveCount(2);
+  await expect(stored).toContainText('검증용 처방약 봉투');
+  await page.getByRole('link', { name: '두통', exact: true }).click();
+  await expect(stored.locator('li')).toHaveCount(2);
+  await expect(page.locator('.care-product')).not.toContainText(
+    '검증용 처방약 봉투',
+  );
+});
+
 // DynamoDB 제품 캐시를 실제 포장이나 보유 제품으로 잘못 표현하지 않는지 확인한다.
 test('제품 캐시만 있으면 보유 여부와 사용정보 부족을 알린다', async function catalog({
   page,

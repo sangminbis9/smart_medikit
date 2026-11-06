@@ -59,7 +59,7 @@ function reviewedPackage(): Package {
 // 케어 판단에 필요한 합성 보관 데이터만 전달한다.
 function result(items: Package[], fresh = true) {
   return matchCareMedicines(
-    { ...emptyData(), packages: items },
+    { ...emptyData(), inventory_status: 'CONFIRMED', packages: items },
     'headache',
     'PAIN_RELIEF',
     fresh,
@@ -173,6 +173,7 @@ describe('제품 연결 안전 경계', function matching() {
       matchCareMedicines(
         {
           ...emptyData(),
+          inventory_status: 'CONFIRMED',
           packages: [reviewedPackage()],
           alerts_status: 'UNAVAILABLE',
         },
@@ -249,6 +250,37 @@ describe('제품 연결 안전 경계', function matching() {
     expect(snapshotSchema.parse({ packages: [] }).inventory_status).toBe(
       'UNAVAILABLE',
     );
+  });
+  // 성공한 조회의 미완성 재고를 연결 실패나 확정 보유·미보유로 오해하지 않는다.
+  it('조회 성공과 재고 미확인을 구분한다', function connectedInventory() {
+    for (const inventoryStatus of ['UNAVAILABLE', 'PARTIAL'] as const) {
+      for (const packages of [[], [reviewedPackage()]]) {
+        const data = {
+          ...emptyData(),
+          inventory_status: inventoryStatus,
+          packages,
+        };
+        const connected = matchCareMedicines(
+          data,
+          'headache',
+          'PAIN_RELIEF',
+          true,
+          now,
+        );
+        expect(connected.status).toBe('확인 필요');
+        expect(connected.reason).toContain(
+          inventoryStatus === 'UNAVAILABLE'
+            ? '제품 조회는 연결되어 있어요'
+            : '조회는 완료됐지만 일부 보관 정보',
+        );
+        for (const match of connected.matches)
+          expect(match.status).toBe('확인 필요');
+        expect(
+          matchCareMedicines(data, 'headache', 'PAIN_RELIEF', false, now)
+            .reason,
+        ).toBe('최신 보관함 정보를 확인할 수 없어요.');
+      }
+    }
   });
   // 관련 없는 제품도 검토가 완료되어야 미보유 판정에 사용할 수 있다.
   it('승인된 비관련 제품만 있으면 미보유', function noMatch() {

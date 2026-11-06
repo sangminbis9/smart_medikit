@@ -11,6 +11,16 @@ export type CareMatch = {
 };
 type Medicine = Package['medicines'][number];
 
+// 조회 성공과 보관 재고의 완성 여부를 구분해 미확인 사유를 안내한다.
+export function careInventoryNotice(data: Data, queryReady: boolean) {
+  if (!queryReady) return '최신 보관함 정보를 확인할 수 없어요.';
+  if (data.inventory_status === 'UNAVAILABLE')
+    return '제품 조회는 연결되어 있어요. 실제 보관 여부·유효기간 정보가 없어 관련 약품의 보유 여부는 확인이 필요해요.';
+  if (data.inventory_status === 'PARTIAL')
+    return '조회는 완료됐지만 일부 보관 정보가 아직 확인되지 않았어요. 관련 약품의 보유 여부는 확인이 필요해요.';
+  return null;
+}
+
 // 공식 출처와 제품·성분·원문·검토 유효기간이 모두 일치해야 승인 근거를 사용한다.
 export function verifiedAssessment(medicine: Medicine, now = new Date()) {
   const assessment = medicine.care_assessment;
@@ -59,7 +69,7 @@ export function matchCareMedicines(
   data: Data,
   symptomId: string,
   category: MedicineCategory,
-  fresh: boolean,
+  queryReady: boolean,
   now = new Date(),
 ): {
   status: CareStatus;
@@ -68,6 +78,9 @@ export function matchCareMedicines(
   reason: string;
   warningTone: 'amber' | 'red';
 } {
+  const inventoryNotice = careInventoryNotice(data, queryReady);
+  // 연결 성공만으로 보유·미보유를 확정하지 않고 완성된 재고 응답도 요구한다.
+  const inventoryReady = queryReady && data.inventory_status === 'CONFIRMED';
   const matches: CareMatch[] = [];
   const unknown: Package[] = [];
   for (const item of data.packages) {
@@ -99,7 +112,7 @@ export function matchCareMedicines(
     const reasons: string[] = [];
     let caution = false;
     let warningTone: 'amber' | 'red' = 'amber';
-    if (!fresh) reasons.push('최신 보관 상태 확인 필요');
+    if (inventoryNotice) reasons.push(inventoryNotice);
     if (unresolved) reasons.push('일부 의약품의 허가정보 확인 필요');
     if (!item.expiry.verified || !item.expiry.actual_expiry)
       reasons.push('실제 유효기간 확인 필요');
@@ -136,7 +149,7 @@ export function matchCareMedicines(
     });
   }
   let status: CareStatus = '미보유';
-  if (!fresh || unknown.length) status = '확인 필요';
+  if (!inventoryReady || unknown.length) status = '확인 필요';
   for (const match of matches) {
     if (match.status === '사용 주의') {
       status = '사용 주의';
@@ -145,13 +158,13 @@ export function matchCareMedicines(
     if (match.status === '보유') status = '보유';
     else if (status !== '보유') status = '확인 필요';
   }
-  const reason = !fresh
-    ? '최신 보관함 정보를 확인할 수 없어요.'
-    : unknown.length
+  const reason =
+    inventoryNotice ??
+    (unknown.length
       ? '효능 근거가 부족한 보관 품목이 있어 보유 여부를 확정할 수 없어요.'
       : !matches.length
         ? '조회된 보관 목록에서 관련 제품이 확인되지 않았어요.'
-        : '허가 효능과 연결된 보관 제품 정보이며 개인별 사용 권장이 아니에요.';
+        : '허가 효능과 연결된 보관 제품 정보이며 개인별 사용 권장이 아니에요.');
   const warningTone = matches.some(
     // 하나라도 DUR 경고가 있으면 요약에도 가장 높은 주의 색상을 유지한다.
     function hasDur(match) {

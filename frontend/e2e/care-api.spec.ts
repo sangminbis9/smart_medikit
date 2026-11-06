@@ -121,6 +121,9 @@ test('API 상태와 사용정보를 안전하게 표시한다', async function s
     '최신 정보를 가져오지 못했어요',
   );
   await expect(page.locator('.care-product .badge')).toHaveText('확인 필요');
+  await expect(page.locator('.care-match-reason')).toHaveText(
+    '최신 보관함 정보를 확인할 수 없어요.',
+  );
 });
 
 // DynamoDB 제품 캐시를 실제 포장이나 보유 제품으로 잘못 표현하지 않는지 확인한다.
@@ -130,6 +133,7 @@ test('제품 캐시만 있으면 보유 여부와 사용정보 부족을 알린�
   const medicine = syntheticPackage().medicines[0];
   medicine.product_info = null;
   medicine.care_assessment = null;
+  let inventoryStatus: 'UNAVAILABLE' | 'PARTIAL' = 'UNAVAILABLE';
   // 현재 읽기 전용 Lambda와 같은 미확인 응답 계약을 제공한다.
   await page.route('**/api/**', async function respond(route) {
     await route.fulfill({
@@ -137,7 +141,7 @@ test('제품 캐시만 있으면 보유 여부와 사용정보 부족을 알린�
         ? {
             box: { box_id: 'test-box' },
             packages: [],
-            inventory_status: 'UNAVAILABLE',
+            inventory_status: inventoryStatus,
             catalog_medicines: [medicine],
             catalog_complete: true,
           }
@@ -149,6 +153,17 @@ test('제품 캐시만 있으면 보유 여부와 사용정보 부족을 알린�
   await expect(page.locator('.care-medicine-heading')).toContainText(
     '확인 필요',
   );
+  await expect(page.locator('.care-match-reason')).toContainText(
+    '제품 조회는 연결되어 있어요',
+  );
+  await expect(page.locator('.care-data-notice')).toContainText(
+    '실제 보관 여부·유효기간 정보가 없어',
+  );
+  await expect(
+    page.getByText('최신 보관함 정보를 확인할 수 없어요.', {
+      exact: true,
+    }),
+  ).toHaveCount(0);
   await page.getByText('인식된 제품 정보 1개 · 보유 여부 미확인').click();
   await page
     .getByRole('button', { name: '검증 전용 합성 제품 · 사용법 상세' })
@@ -158,6 +173,14 @@ test('제품 캐시만 있으면 보유 여부와 사용정보 부족을 알린�
   );
   await page.getByRole('button', { name: '닫기', exact: true }).click();
   await expect(page.getByRole('dialog')).toHaveCount(0);
+  inventoryStatus = 'PARTIAL';
+  await page.reload();
+  await expect(page.locator('.care-match-reason')).toContainText(
+    '조회는 완료됐지만 일부 보관 정보',
+  );
+  await expect(page.locator('.care-medicine-heading')).toContainText(
+    '확인 필요',
+  );
   await page.goto('/alerts');
   await expect(page.getByText(/알림 이력이 아직 연결되지/)).toBeVisible();
 });

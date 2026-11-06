@@ -6,7 +6,11 @@ import {
   findCareGuides,
   medicineCategories,
 } from './careGuides';
-import { matchCareMedicines, type CareStatus } from './careMatching';
+import {
+  careInventoryNotice,
+  matchCareMedicines,
+  type CareStatus,
+} from './careMatching';
 import { expiryLabel, stockLabel, type Package } from './data';
 import type { Medkit } from './useMedkit';
 import { Badge, Dialog, EmptyState, Icon, Note } from './ui';
@@ -191,14 +195,11 @@ export function CareDetail({ kit }: { kit: Medkit }) {
         </EmptyState>
       </div>
     );
-  const fresh =
-    kit.online &&
-    kit.status === 'ready' &&
-    kit.data.inventory_status === 'CONFIRMED' &&
-    !kit.demo;
+  const queryReady = kit.online && kit.status === 'ready' && !kit.demo;
+  const inventoryNotice = careInventoryNotice(kit.data, queryReady);
   const unknown = new Map<string, Package>();
   for (const category of guide.relatedMedicineCategories) {
-    const result = matchCareMedicines(kit.data, guide.id, category, fresh);
+    const result = matchCareMedicines(kit.data, guide.id, category, queryReady);
     for (const item of result.unknown) unknown.set(item.package_id, item);
   }
   return (
@@ -251,7 +252,7 @@ export function CareDetail({ kit }: { kit: Medkit }) {
                             kit.data,
                             guide.id,
                             category,
-                            fresh,
+                            queryReady,
                           );
                           return (
                             <div className="care-medicines" key={category}>
@@ -354,10 +355,8 @@ export function CareDetail({ kit }: { kit: Medkit }) {
             보관함 살펴보기 →
           </Link>
           {kit.demo && <Badge tone="amber">시연 정보 · 실제 보유 아님</Badge>}
-          {!fresh && (
-            <p className="care-data-notice">
-              최신 보유 여부를 확인할 수 없어요. 연결 및 재고 확인이 필요해요.
-            </p>
+          {inventoryNotice && (
+            <p className="care-data-notice">{inventoryNotice}</p>
           )}
         </aside>
       </div>

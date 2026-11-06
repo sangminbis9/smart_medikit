@@ -1,12 +1,14 @@
 """가상 제품으로 읽기 경계·페이지 처리·권한 검사·개인정보 제외를 검증한다."""
 
 import json
+import io
 import os
 import unittest
-from unittest.mock import patch
+from decimal import Decimal
+from unittest.mock import Mock, call, patch
 
 from backend import read_api
-from backend.deploy_read_api import school_role
+from backend.deploy_read_api import school_role, update_code
 
 
 # 실제 약품·환자정보와 구분되는 합성 제품을 만든다.
@@ -17,6 +19,16 @@ def product():
         "ingredients": [{"name": "합성 성분"}],
         "product_info": {"source": "MFDS_PERMIT_DETAIL", "indications": "합성 효능"},
         "ocr_text": "노출 금지 합성 원문", "source_image": "노출 금지 참조",
+    }
+
+
+# 기존 제품과 연결되는 명시적인 합성 보유 포장을 만든다.
+def package():
+    return {
+        "pk": "PACKAGE#synthetic-package", "sk": "META", "package_id": "synthetic-package",
+        "box_id": "test-box", "kind": "OTC", "state": "STORED",
+        "product_codes": ["000000001"], "demo_public": True,
+        "note": "노출 금지 메모", "patient_name": "노출 금지 개인 정보",
     }
 
 
@@ -33,6 +45,31 @@ class FakeTable:
 
 
 class ReadApiTests(unittest.TestCase):
+    # 코드만 배포할 때 역할·환경변수·API를 변경하지 않고 동시 수정도 보호한다.
+    def test_code_only_update_boundary(self):
+        sdk = Mock()
+        session = sdk.Session.return_value
+        sts, lambdas = Mock(), Mock()
+        session.client.side_effect = {"sts": sts, "lambda": lambdas}.__getitem__
+        sts.get_caller_identity.return_value = {"Account": "123456789012"}
+        lambdas.get_function.return_value = {
+            "Tags": {"ManagedBy": "smart-medikit-read-api"},
+            "Configuration": {"Handler": "read_api.lambda_handler", "RevisionId": "test-revision"},
+        }
+        lambdas.invoke.return_value = {"Payload": io.BytesIO(json.dumps({
+            "statusCode": 200, "body": json.dumps({"packages": [], "inventory_status": "CONFIRMED"}),
+        }).encode())}
+        with patch.dict("sys.modules", {"boto3": sdk}):
+            update_code("123456789012")
+        self.assertEqual(session.client.call_args_list, [call("sts"), call("lambda")])
+        self.assertEqual(lambdas.update_function_code.call_args.kwargs["RevisionId"], "test-revision")
+        lambdas.update_function_configuration.assert_not_called()
+        lambdas.update_function_code.reset_mock()
+        lambdas.get_function.return_value["Tags"] = {}
+        with patch.dict("sys.modules", {"boto3": sdk}), self.assertRaises(RuntimeError):
+            update_code("123456789012")
+        lambdas.update_function_code.assert_not_called()
+
     # 학교 역할 선택도 고정 계정과 Lambda 신뢰를 검증하고 IAM 변경을 호출하지 않는다.
     def test_school_role_boundary(self):
         from unittest.mock import Mock
@@ -79,30 +116,104 @@ class ReadApiTests(unittest.TestCase):
     def test_filtered_empty_page(self):
         cursor = {"pk": "RECOGNITION#synthetic", "sk": "META"}
         table = FakeTable([{"Items": [], "LastEvaluatedKey": cursor}, {"Items": [product()]}])
-        medicines, complete = read_api.read_catalog(table)
-        self.assertEqual(len(medicines), 1)
-        self.assertTrue(complete)
+        result = read_api.read_inventory(table, "test-box")
+        self.assertEqual(len(result["catalog_medicines"]), 1)
+        self.assertTrue(result["catalog_complete"])
         self.assertEqual(table.calls[1]["ExclusiveStartKey"], cursor)
         self.assertEqual(table.calls[0]["Limit"], 100)
+        self.assertTrue(table.calls[0]["ConsistentRead"])
 
     # 읽기 한도를 넘으면 부분 결과임을 유지한다.
     def test_read_limit(self):
         page = {"Items": [], "LastEvaluatedKey": {"pk": "next", "sk": "META"}}
         table = FakeTable([page, page, page])
-        self.assertEqual(read_api.read_catalog(table), ([], False))
+        self.assertEqual(read_api.read_inventory(table, "test-box")["inventory_status"], "PARTIAL")
         self.assertEqual(len(table.calls), 2)
 
     # 승인된 요청도 제품 캐시를 포장·재고로 변환하지 않는지 확인한다.
-    def test_inventory_unknown(self):
+    def test_catalog_does_not_create_packages(self):
         event = self.event()
         with patch.dict(os.environ, {"MEDKIT_BOX_ID": "test-box"}), patch.object(read_api, "get_table", return_value=FakeTable([{"Items": [product()]}])):
             response = read_api.lambda_handler(event, None)
         self.assertEqual(response["statusCode"], 200)
         body = json.loads(response["body"])
         self.assertEqual(body["packages"], [])
-        self.assertEqual(body["inventory_status"], "UNAVAILABLE")
+        self.assertEqual(body["inventory_status"], "CONFIRMED")
         self.assertEqual(len(body["catalog_medicines"]), 1)
         self.assertEqual(response["headers"]["Cache-Control"], "no-store")
+
+    # 포장과 제품의 스캔 순서·페이지가 달라도 품목 코드로 연결한다.
+    def test_package_join_across_pages(self):
+        cursor = {"pk": "cursor", "sk": "META"}
+        table = FakeTable([{"Items": [package()], "LastEvaluatedKey": cursor}, {"Items": [product()]}])
+        result = read_api.read_inventory(table, "test-box", public_demo=True)
+        self.assertEqual(result["inventory_status"], "CONFIRMED")
+        item = result["packages"][0]
+        self.assertEqual(item["name"], "검증용 합성 제품")
+        self.assertEqual(item["medicines"][0]["product_code"], "000000001")
+        self.assertEqual(item["state"], "STORED")
+        self.assertIsNone(item["expiry"]["actual_expiry"])
+        self.assertFalse(item["expiry"]["verified"])
+        self.assertIsNone(item["inventory"])
+        self.assertIsNone(item["position"])
+        self.assertEqual(item["safety_status"], "SAFETY_CHECK_PENDING")
+        self.assertNotIn("노출 금지", json.dumps(result, ensure_ascii=False))
+
+    # 공개 시연 허용·보관함·일반약 조건이 없으면 포장 내용을 내보내지 않는다.
+    def test_public_and_box_boundaries(self):
+        for changes in ({"demo_public": False}, {"demo_public": "true"}, {"kind": "PRESCRIPTION"}):
+            item = {**package(), **changes}
+            result = read_api.read_inventory(FakeTable([{"Items": [product(), item]}]), "test-box", True)
+            self.assertEqual(result["packages"], [])
+            self.assertEqual(result["inventory_status"], "PARTIAL")
+        other = {**package(), "box_id": "other-box"}
+        result = read_api.read_inventory(FakeTable([{"Items": [other]}]), "test-box", True)
+        self.assertEqual(result["packages"], [])
+
+    # 부적합 포장은 전체 조회를 깨지 않고 부분 상태로 남긴다.
+    def test_invalid_package_is_partial(self):
+        for changes in ({"state": "UNKNOWN"}, {"package_id": "other"}, {"kind": "UNKNOWN"}):
+            result = read_api.read_inventory(FakeTable([{"Items": [{**package(), **changes}]}]), "test-box", True)
+            self.assertEqual(result["inventory_status"], "PARTIAL")
+            self.assertEqual(result["packages"], [])
+
+    # 일부 제품 연결이 빠져도 나머지 약품만으로 포장 전체를 검토 완료 처리하지 않는다.
+    def test_missing_product_stays_unresolved(self):
+        item = {**package(), "product_codes": ["000000001", "000000002"]}
+        result = read_api.read_inventory(FakeTable([{"Items": [product(), item]}]), "test-box", True)
+        self.assertEqual(len(result["packages"][0]["medicines"]), 2)
+        self.assertNotIn("care_assessment", result["packages"][0]["medicines"][1])
+
+    # DynamoDB 숫자·실제 날짜만 변환하고 임시 기준일을 실제 유효기간으로 승격하지 않는다.
+    def test_inventory_values_and_forms(self):
+        medicine = {**product(), "form": "TABLET"}
+        item = {**package(),
+                "inventory": {"stock_enabled": True, "initial_qty": Decimal("10"), "estimated_qty": Decimal("7")},
+                "expiry": {"verified": True, "actual_expiry": "2027-02-30", "temporary_management_date": "2027-03-01"},
+                "position": {"x": Decimal("12.5"), "y": Decimal("3"), "z_estimated": Decimal("0"), "certainty": "ESTIMATED"}}
+        result = read_api.read_inventory(FakeTable([{"Items": [medicine, item]}]), "test-box", True)
+        view = result["packages"][0]
+        self.assertEqual(view["inventory"]["estimated_qty"], 7)
+        self.assertEqual(view["position"]["x"], 12.5)
+        self.assertIsNone(view["expiry"]["actual_expiry"])
+        self.assertFalse(view["expiry"]["verified"])
+        self.assertEqual(view["expiry"]["temporary_management_date"], "2027-03-01")
+        json.dumps(result)
+        for form in ("OTHER", "UNKNOWN"):
+            medicine["form"] = form
+            view = read_api.read_inventory(FakeTable([{"Items": [medicine, item]}]), "test-box", True)["packages"][0]
+            self.assertIsNone(view["inventory"])
+        for value in (True, -1, Decimal("1.5"), Decimal("NaN"), "7"):
+            self.assertIsNone(read_api.clean_number(value, integer=True))
+
+    # 보관 상태 변경은 그대로 반영하고 실제 데이터가 사라졌을 때 가짜 항목을 남기지 않는다.
+    def test_state_change_and_empty_inventory(self):
+        for state in ("REGISTERED", "STORED", "OUT", "DEPLETED", "DISPOSED"):
+            result = read_api.read_inventory(FakeTable([{"Items": [{**package(), "state": state}]}]), "test-box", True)
+            self.assertEqual(result["packages"][0]["state"], state)
+        result = read_api.read_inventory(FakeTable([{"Items": []}]), "test-box", True)
+        self.assertEqual(result["packages"], [])
+        self.assertEqual(result["inventory_status"], "CONFIRMED")
 
     # 검증된 서버 권한 문맥을 포함한 합성 요청을 만든다.
     def event(self):

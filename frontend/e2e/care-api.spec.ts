@@ -126,6 +126,84 @@ test('API 상태와 사용정보를 안전하게 표시한다', async function s
   );
 });
 
+// 새 포장·반출 상태가 자동 재조회로 홈과 케어에 함께 반영되는지 확인한다.
+test('보유 포장 추가와 반출이 홈·케어에 반영된다', async function inventory({
+  page,
+}) {
+  const item = syntheticPackage();
+  item.medicines[0].care_assessment = null;
+  item.expiry = {
+    actual_expiry: null,
+    temporary_management_date: null,
+    verified: false,
+  };
+  item.safety_status = 'SAFETY_CHECK_PENDING';
+  let packages: (typeof item)[] = [];
+  let inventoryReads = 0;
+  // 검증용 시간을 앞당겨 실제 네트워크를 호출하지 않고 30초 갱신을 검사한다.
+  await page.clock.install();
+  // 백엔드의 포장·제품 결합 응답을 동일 계약의 합성 데이터로 제공한다.
+  await page.route('**/api/**', async function respond(route) {
+    const inventory = route.request().url().includes('/inventory');
+    if (inventory) inventoryReads++;
+    await route.fulfill({
+      json: inventory
+        ? {
+            box: { box_id: 'test-box' },
+            packages,
+            inventory_status: 'CONFIRMED',
+            catalog_medicines: [item.medicines[0]],
+            catalog_complete: true,
+          }
+        : { alerts: [], alerts_status: 'UNAVAILABLE' },
+    });
+  });
+  await page.goto('/');
+  await expect(page.locator('.package-card')).toHaveCount(0);
+  await expect
+    .poll(
+      // 첫 조회 완료 뒤 추가 항목의 반영 여부를 검사한다.
+      function reads() {
+        return inventoryReads;
+      },
+    )
+    .toBeGreaterThan(0);
+  packages = [item];
+  await page.clock.fastForward(31000);
+  await expect(page.locator('.package-card')).toContainText(
+    '검증 전용 합성 제품',
+  );
+  await expect(page.locator('.package-card')).toContainText('보관 중');
+  await page
+    .getByRole('link', { name: '케어 가이드', exact: true })
+    .filter({ visible: true })
+    .click();
+  const stored = page.getByRole('region', {
+    name: '보관 중인 약품',
+    exact: true,
+  });
+  await expect(stored).toContainText('검증 전용 합성 제품');
+  await page.getByRole('link', { name: '두통', exact: true }).click();
+  await expect(stored).toContainText('검증 전용 합성 제품');
+  await expect(page.locator('.care-medicine-heading')).toContainText(
+    '확인 필요',
+  );
+  await expect(page.locator('.care-product')).toHaveCount(0);
+  await expect(page.getByText(/인식된 제품 정보 1개/)).toHaveCount(0);
+  await stored.getByRole('link', { name: /검증 전용 합성 제품/ }).click();
+  await expect(page.getByText('합성 사용법', { exact: true })).toBeVisible();
+  await page.goBack();
+  item.state = 'OUT';
+  await page.clock.fastForward(31000);
+  await expect(stored.locator('li')).toHaveCount(0);
+  await expect(stored).toContainText('현재 보관 중으로 등록된 약품이 없어요');
+  await page
+    .getByRole('link', { name: '홈', exact: true })
+    .filter({ visible: true })
+    .click();
+  await expect(page.locator('.package-card')).toContainText('반출 중');
+});
+
 // DynamoDB 제품 캐시를 실제 포장이나 보유 제품으로 잘못 표현하지 않는지 확인한다.
 test('제품 캐시만 있으면 보유 여부와 사용정보 부족을 알린다', async function catalog({
   page,
@@ -156,7 +234,7 @@ test('제품 캐시만 있으면 보유 여부와 사용정보 부족을 알린�
   await expect(page.locator('.care-match-reason')).toContainText(
     '제품 조회는 연결되어 있어요',
   );
-  await expect(page.locator('.care-data-notice')).toContainText(
+  await expect(page.locator('.care-side-note .care-data-notice')).toContainText(
     '실제 보관 여부·유효기간 정보가 없어',
   );
   await expect(

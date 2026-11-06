@@ -1,4 +1,4 @@
-# 기존 DynamoDB 제품정보 조회 API
+# 기존 DynamoDB 제품·보유 포장 조회 API
 
 `read_api.py`는 서울(`ap-northeast-2`)의 **`inha-capstone-02-medkit-data`**를 읽는 별도 Lambda 진입점이다. 기존 OCR Lambda·Pi·테이블·`pk`/`sk`·저장 구조를 변경하지 않는다. 웹의 기존 `useMedkit.ts`가 호출하는 `GET /inventory`, `GET /alerts` 응답으로 변환한다.
 
@@ -18,13 +18,43 @@
 
 ## 응답의 의미
 
-- `/inventory`: `{box, packages: [], doses: [], inventory_status: "UNAVAILABLE", catalog_medicines, catalog_complete, synced_at}`. `catalog_medicines`는 **제품 캐시**이며 포장·실제 보유·사용 가능한 재고가 아니다. 날짜·수량·좌표·OTC 여부를 추측하지 않는다. 제품을 보유 상태로 전환하는 API는 없다.
+- `/inventory`: `{box, packages, doses: [], inventory_status, catalog_medicines, catalog_complete, synced_at}`. `MEDICINE#<코드>/META` 제품 정보와 `PACKAGE#<포장 ID>/META` 보유 포장을 `product_codes`로 연결한다. 제품 정보만 추가하면 포장이 생기지 않는다. 날짜·수량·좌표·OTC 여부를 추측하지 않으며 쓰기 API는 없다.
+- `inventory_status=CONFIRMED`는 해당 보관함의 포장 레코드를 끝까지 읽었다는 뜻이다. 실물 재고·유효기간·안전성 검증 완료가 아니다. 빈 포장 목록도 전체 조회가 성공하면 `CONFIRMED`다. 페이지 한도, 잘못된 포장 또는 공개 대상에서 제외된 같은 보관함 포장이 있으면 `PARTIAL`이다. 구버전 제품 전용 API의 `UNAVAILABLE`도 프론트엔드에서 지원한다.
 - `/alerts`: `{alerts: [], alerts_status: "UNAVAILABLE"}`. 알림 저장 계층이 없으므로 주의정보가 없다고 확정하지 않는다.
 - 식약처 허가 출처 `MFDS_PERMIT_DETAIL`의 효능·용법·주의사항만 선택적으로 반환한다. 오래된 테이블 항목에 허가정보가 없으면 `null`이다. `care_assessment`는 자동 생성하지 않는다.
-- 한 요청에서 최대 100개 평가 항목 × 2페이지를 읽는다. `LastEvaluatedKey`가 남으면 `catalog_complete=false`다. 이는 일관된 재고 스냅샷이 아니다. 테이블이 커지면 기존 조회 인덱스/접근 패턴을 팀과 합의해야 하며 무한 Scan으로 확대하지 않는다.
+- 한 요청에서 최대 100개 평가 항목 × 2페이지를 `ConsistentRead=true`로 읽는다. `LastEvaluatedKey`가 남으면 `catalog_complete=false`, `inventory_status=PARTIAL`이다. 여러 페이지를 읽는 동안의 변경까지 원자적으로 보장하지는 않는다. 테이블이 커지면 기존 조회 인덱스/접근 패턴을 팀과 합의해야 하며 무한 Scan으로 확대하지 않는다.
 - 필드 허용 목록으로 인식 이벤트·원본 OCR·사진 참조·민감 원문을 제외한다. 응답 `Cache-Control: no-store`; 서버/브라우저 로그에 데이터 본문을 남기지 않는다.
 
+## DynamoDB에 보유 약품 추가하기
+
+같은 테이블 `inha-capstone-02-medkit-data`에 **실물 포장마다** 아래 항목을 추가한다. 기존 `MEDICINE#<품목기준코드>/META`와 `product_codes`로 연결한다. 같은 제품 두 포장은 서로 다른 ID를 쓴다. 아래는 DynamoDB 콘솔의 **DynamoDB JSON** 형식이며, 합성 코드 `000000001`과 포장 ID를 실제 값으로 바꾼다.
+
+```json
+{
+  "pk": { "S": "PACKAGE#my-package-001" },
+  "sk": { "S": "META" },
+  "package_id": { "S": "my-package-001" },
+  "box_id": { "S": "inha-capstone-02-medkit" },
+  "kind": { "S": "OTC" },
+  "state": { "S": "STORED" },
+  "product_codes": { "L": [{ "S": "000000001" }] },
+  "demo_public": { "BOOL": true }
+}
+```
+
+- `package_id`는 영문·숫자·`_`·`-` 1~100자이며 `pk` 접미사와 같아야 한다. `state`는 `REGISTERED`, `STORED`, `OUT`, `DEPLETED`, `DISPOSED` 중 하나다. 케어 보관 목록에는 `STORED`만 표시한다.
+- 공개 시연에서는 **`demo_public=true`인 `OTC` 포장만** 공개한다. 이 값을 지정하면 제품명·보관 상태·입력한 수량/기한/추정 위치가 API 주소를 아는 사람에게 공개된다. 환자명·처방전·개인 건강정보를 넣지 않는다. 이 플래그는 인증 수단이 아니며 처방약 포장은 공개 시연에서 제외한다.
+- 제품 레코드가 있으면 이름·성분·허가정보를 함께 표시한다. 연결이 빠지면 `name`(선택 문자열) 또는 미확인 이름으로 포장을 표시하고 효능을 추정하지 않는다. 이름만으로 실제 제품을 확정하지 않는다.
+- `expiry`(Map)의 `actual_expiry`(String, `YYYY-MM-DD`)와 `verified`(Bool)는 실물 기한을 확인한 경우에만 입력한다. `temporary_management_date`는 별도 임시 날짜다.
+- `inventory`(Map)의 `stock_enabled`(Bool), `initial_qty`·`estimated_qty`(Number)는 정제·캡슐 일반약의 예상 수량이다. 시럽·연고 등에는 반환하지 않는다. 누락된 날짜·수량·위치는 `null`, 안전정보는 기본 `SAFETY_CHECK_PENDING`이다.
+- 웹은 새로고침·화면 복귀 때 조회하며 WebSocket이 없으면 보이는 화면에서 **30초 간격**으로 다시 조회한다. 항목 추가·수정에는 재배포가 필요 없다.
+- 홈과 케어 첫 화면·증상 상세의 **보관 중인 약품**에 같은 포장을 표시한다. 증상별 약품 역할의 보유 판정에는 별도 검토된 효능·기한·안전정보가 필요하다. 읽기 API는 승인된 효능 매칭을 생성하지 않는다.
+
+실제 촬영에서 `PACKAGE`를 쓰는 입출고 처리기는 이번 조회 연결의 범위가 아니다. 기존 OCR의 `MEDICINE`·`RECOGNITION` 저장과 Pi 이벤트는 유지한다. 조회 확인용 합성 항목은 `test_only=true`로 표시하고 검증 후 별도 검증용 `box_id`로 옮겨 실제 보관 목록에서 제외한다.
+
 ## 배포 시 필요한 변경과 승인 범위
+
+기존 함수만 갱신할 때는 MFA 인증한 CloudShell에서 같은 커밋의 두 Python 파일을 준비한 뒤 `python backend/deploy_read_api.py --account 842544789367 --update-code-only`를 실행한다. 이 모드는 소유 태그·계정·진입점과 `RevisionId`를 검사하고 **코드만** 교체하며 IAM·역할·환경변수·API·Amplify 설정을 바꾸지 않는다.
 
 학교 계정의 `SafePowerUser`가 `iam:CreateRole`을 명시적으로 거부하여 전용 역할 방식은 사용할 수 없었다. 학교 제공 `SafeRole-inha-capstone-02`는 Lambda 신뢰가 있지만 `SafeBaseRolePolicy` 내용 조회도 `iam:GetRolePolicy` 권한 부족으로 거부되어 읽기 전용 역할이라고 보증할 수 없다. 사용자가 이 차이를 확인하고 학교 역할 재사용을 별도 승인했다.
 
@@ -48,5 +78,7 @@ AGENTS.md 5절의 **“IAM 권한 변경, 서비스 공개 설정은 팀 승인 
 저장소 루트에서 `python -m pytest backend/tests -q` 또는 `python -m unittest discover -s backend/tests`를 실행한다. Python과 pytest가 필요하며 단위 검증은 AWS·boto3·실제 의료정보를 사용하지 않는다. DynamoDB API는 가상 테이블로 대체해 필드 제외, 페이지 제한, 권한, 미확인 재고, 조회 오류를 검사한다.
 
 2026-11-02: Python 단위 테스트 9개와 구문 검사 통과. 프론트엔드의 합성 API 화면 검증 결과는 [프론트엔드 안내](../frontend/README.md)에 기록했다.
+
+2026-11-07: Python 단위 테스트 16개와 구문 검사 통과. 포장·제품의 페이지 간 연결, 다른 보관함·비공개·처방약 제외, 누락 정보·잘못된 날짜·수량, 빈 재고·부분 조회 및 기존 함수 코드만 교체하는 경로를 검증했다. 실제 환자 정보는 사용하지 않았다.
 
 참고: [DynamoDB Scan과 페이지 처리](https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/Scan.html), [Lambda와 API Gateway](https://docs.aws.amazon.com/lambda/latest/dg/services-apigateway.html).

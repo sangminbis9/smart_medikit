@@ -11,13 +11,13 @@ import {
   matchCareMedicines,
   type CareStatus,
 } from './careMatching';
-import { expiryLabel, stockLabel, type Package } from './data';
+import { expiryLabel, stockLabel } from './data';
 import type { Medkit } from './useMedkit';
 import { Badge, Dialog, EmptyState, Icon, Note } from './ui';
 import MedicineUsage from './MedicineUsage';
 
 // 검색과 카테고리를 주소에 남겨 상세 화면에서 돌아와도 탐색을 유지한다.
-export function CareIndex() {
+export function CareIndex({ kit }: { kit: Medkit }) {
   const [params, setParams] = useSearchParams();
   const query = params.get('q') || '';
   const category = params.get('category') || '';
@@ -141,12 +141,65 @@ export function CareIndex() {
           },
         )}
       </div>
+      <StoredMedicines kit={kit} />
       <Note tone="neutral">
         일반적인 건강 정보이며 진단이나 개인별 복용 지시가 아니에요.
         어린이·임산부·기저질환자·다른 약을 복용 중인 분은 의사 또는 약사와 먼저
         상담하세요.
       </Note>
     </div>
+  );
+}
+
+// 실제 보관 목록을 증상별 사용 추천과 구분해 케어 첫 화면과 상세에서 공유한다.
+function StoredMedicines({ kit }: { kit: Medkit }) {
+  // 반출·소진·폐기한 포장은 현재 보관 목록에서 제외한다.
+  const stored = kit.data.packages.filter(function isStored(item) {
+    return item.state === 'STORED';
+  });
+  const queryReady = kit.online && kit.status === 'ready' && !kit.demo;
+  const notice = careInventoryNotice(kit.data, queryReady);
+  return (
+    <section className="care-inventory" aria-label="보관 중인 약품">
+      <div className="care-section-heading">
+        <h2>보관 중인 약품</h2>
+        <span>{stored.length}개</span>
+      </div>
+      <p>
+        보관 목록이에요. 이 증상에 대한 복용 추천이 아니며, 효능·용법·주의사항을
+        확인해주세요.
+      </p>
+      {notice && <p className="care-data-notice">{notice}</p>}
+      {!stored.length && !notice && (
+        <p>현재 보관 중으로 등록된 약품이 없어요.</p>
+      )}
+      <ul>
+        {stored.map(
+          // 제품명을 누르면 홈과 같은 포장 상세와 실제 사용정보를 보여준다.
+          function storedMedicine(item) {
+            return (
+              <li key={item.package_id}>
+                <Link to={`/packages/${encodeURIComponent(item.package_id)}`}>
+                  <strong>{item.name}</strong>
+                  <span>사용정보 확인 →</span>
+                </Link>
+                <div className="flex flex-wrap gap-2">
+                  <Badge>
+                    {item.kind === 'PRESCRIPTION'
+                      ? '처방약 봉투'
+                      : '일반의약품'}
+                  </Badge>
+                  <Badge>{expiryLabel(item)}</Badge>
+                  {stockLabel(item) && (
+                    <Badge tone="amber">{stockLabel(item)}</Badge>
+                  )}
+                </div>
+              </li>
+            );
+          },
+        )}
+      </ul>
+    </section>
   );
 }
 
@@ -197,11 +250,16 @@ export function CareDetail({ kit }: { kit: Medkit }) {
     );
   const queryReady = kit.online && kit.status === 'ready' && !kit.demo;
   const inventoryNotice = careInventoryNotice(kit.data, queryReady);
-  const unknown = new Map<string, Package>();
-  for (const category of guide.relatedMedicineCategories) {
-    const result = matchCareMedicines(kit.data, guide.id, category, queryReady);
-    for (const item of result.unknown) unknown.set(item.package_id, item);
-  }
+  const linkedCodes = new Set<string>();
+  for (const item of kit.data.packages)
+    for (const medicine of item.medicines)
+      if (medicine.product_code) linkedCodes.add(medicine.product_code);
+  // 포장과 연결된 제품을 보유 여부 미확인 캐시 목록에 중복 표시하지 않는다.
+  const catalogMedicines = kit.data.catalog_medicines.filter(
+    function unlinked(medicine) {
+      return !medicine.product_code || !linkedCodes.has(medicine.product_code);
+    },
+  );
   return (
     <div className="standard-page care-page care-detail">
       <Link className="care-back" to={back}>
@@ -360,33 +418,11 @@ export function CareDetail({ kit }: { kit: Medkit }) {
           )}
         </aside>
       </div>
-      {unknown.size > 0 && (
-        <details className="care-unverified">
-          <summary>관련성 확인이 필요한 보관 품목 {unknown.size}개</summary>
-          <p>효능 근거가 부족해 이 증상의 관련 약품으로 연결하지 않았어요.</p>
-          <ul>
-            {[...unknown.values()].map(
-              // 미검증 품목은 관련 제품 카드와 구분해 상세 확인만 제공한다.
-              function unverified(item) {
-                return (
-                  <li key={item.package_id}>
-                    <Link
-                      to={`/packages/${encodeURIComponent(item.package_id)}`}
-                    >
-                      {item.name} · 정보 확인 →
-                    </Link>
-                  </li>
-                );
-              },
-            )}
-          </ul>
-        </details>
-      )}
-      {!kit.demo && kit.data.catalog_medicines.length > 0 && (
+      <StoredMedicines kit={kit} />
+      {!kit.demo && catalogMedicines.length > 0 && (
         <details className="care-unverified">
           <summary>
-            인식된 제품 정보 {kit.data.catalog_medicines.length}개 · 보유 여부
-            미확인
+            인식된 제품 정보 {catalogMedicines.length}개 · 보유 여부 미확인
           </summary>
           <p>
             제품 인식 기록만 연결되어 있어요. 실제 보관 여부·유효기간·증상
@@ -398,7 +434,7 @@ export function CareDetail({ kit }: { kit: Medkit }) {
             <p>이전 조회 결과예요. 최신 정보 확인이 필요해요.</p>
           )}
           <ul>
-            {kit.data.catalog_medicines.map(
+            {catalogMedicines.map(
               // 제품 캐시는 포장 카드와 구분하고 정보 열람만 제공한다.
               function catalog(medicine) {
                 // 현재 선택한 제품의 허가정보를 연다.

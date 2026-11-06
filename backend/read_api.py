@@ -1,9 +1,11 @@
-"""기존 DynamoDB 제품 캐시를 읽고 보관 재고와 구분해 웹 조회 계약으로 반환한다."""
+"""기존 DynamoDB의 제품 정보와 명시적인 보유 포장을 연결해 읽기 전용으로 반환한다."""
 
 import json
+import math
 import os
 import re
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
+from decimal import Decimal
 
 
 TABLE_NAME = "inha-capstone-02-medkit-data"
@@ -33,15 +35,37 @@ def clean_text(value):
     return value.strip() if isinstance(value, str) and value.strip() else None
 
 
+# 실제 달력 날짜만 사용하며 누락·잘못된 날짜를 추정하지 않는다.
+def clean_date(value):
+    if not isinstance(value, str) or not re.fullmatch(r"[0-9]{4}-[0-9]{2}-[0-9]{2}", value):
+        return None
+    try:
+        return date.fromisoformat(value).isoformat()
+    except ValueError:
+        return None
+
+
+# DynamoDB Decimal을 JSON 숫자로 바꾸고 음수·비정상 수량을 차단한다.
+def clean_number(value, integer=False):
+    if isinstance(value, bool) or not isinstance(value, (int, float, Decimal)):
+        return None
+    number = float(value)
+    if not math.isfinite(number) or number < 0 or number > 9007199254740991:
+        return None
+    if integer:
+        return int(number) if number.is_integer() else None
+    return number
+
+
 # 허용한 제품 필드만 내보내며 OCR 원문·S3 참조·인식 이벤트를 제외한다.
 def medicine_view(item):
     code = item.get("product_code")
-    if not isinstance(code, str) or not re.fullmatch(r"\d{9}", code):
+    if not isinstance(code, str) or not re.fullmatch(r"[0-9]{9}", code):
         return None
     if item.get("pk") != f"MEDICINE#{code}" or item.get("sk") != "META":
         return None
     ingredients = []
-    if item.get("ingredients_status") == "SUCCEEDED":
+    if item.get("ingredients_status") == "SUCCEEDED" and isinstance(item.get("ingredients"), list):
         for ingredient in item.get("ingredients", []):
             if isinstance(ingredient, dict):
                 name = clean_text(ingredient.get("name"))
@@ -58,7 +82,7 @@ def medicine_view(item):
         "medicine_id": code,
         "product_code": code,
         "name": clean_text(item.get("name")) or "약품 정보 미확인",
-        "form": form if form in {"TABLET", "CAPSULE", "OTHER"} else "UNKNOWN",
+        "form": form if form in ("TABLET", "CAPSULE", "OTHER") else "UNKNOWN",
         "ingredients": ingredients,
         "indications": [info["indications"]] if info and info["indications"] else [],
         "product_info": info,
@@ -68,34 +92,114 @@ def medicine_view(item):
     }
 
 
-# 기존 키만 조회하고 읽기량을 제한하며 중간 페이지를 전체 결과로 표시하지 않는다.
-def read_catalog(table):
+# 명시적으로 저장된 포장만 연결하고 제품 정보에서 보유 상태나 수량을 만들지 않는다.
+def package_view(item, medicines, box_id):
+    package_id = item.get("package_id")
+    if (not isinstance(package_id, str) or not re.fullmatch(r"[A-Za-z0-9_-]{1,100}", package_id)
+            or item.get("pk") != f"PACKAGE#{package_id}" or item.get("sk") != "META"
+            or item.get("box_id") != box_id
+            or item.get("kind") not in ("OTC", "PRESCRIPTION")
+            or item.get("state") not in ("REGISTERED", "STORED", "OUT", "DEPLETED", "DISPOSED")):
+        return None
+    codes = item.get("product_codes")
+    if not isinstance(codes, list):
+        codes = []
+    linked = []
+    seen = set()
+    for code in codes:
+        if isinstance(code, str) and re.fullmatch(r"[0-9]{9}", code) and code not in seen:
+            seen.add(code)
+            if code in medicines:
+                linked.append(medicines[code])
+    # 일부 제품이 없으면 알 수 있는 성분만으로 포장 전체를 판정하지 않도록 미확인 항목을 남긴다.
+    if len(linked) != len(codes):
+        linked.append({"medicine_id": f"unresolved-{package_id}", "name": "연결된 제품 정보 확인 필요"})
+    expiry = item.get("expiry") if isinstance(item.get("expiry"), dict) else {}
+    actual_expiry = clean_date(expiry.get("actual_expiry"))
+    inventory = None
+    raw_inventory = item.get("inventory")
+    # 정제·캡슐 일반약의 명시적인 예상 수량만 내보낸다.
+    if (item["kind"] == "OTC" and linked and all(m.get("form") in {"TABLET", "CAPSULE"} for m in linked)
+            and isinstance(raw_inventory, dict) and raw_inventory.get("stock_enabled") is True):
+        inventory = {"stock_enabled": True,
+                     "initial_qty": clean_number(raw_inventory.get("initial_qty"), integer=True),
+                     "estimated_qty": clean_number(raw_inventory.get("estimated_qty"), integer=True)}
+    position = None
+    raw_position = item.get("position")
+    if isinstance(raw_position, dict) and raw_position.get("certainty") in ("OBSERVED", "ESTIMATED", "UNCERTAIN"):
+        coordinates = {field: clean_number(raw_position.get(field)) for field in ("x", "y", "z_estimated")}
+        if all(value is not None for value in coordinates.values()):
+            position = {**coordinates, "certainty": raw_position["certainty"]}
+    color = item.get("base_color")
+    return {
+        "package_id": package_id, "box_id": box_id, "kind": item["kind"], "state": item["state"],
+        "name": clean_text(item.get("name")) or (linked[0]["name"] if linked else "약품 정보 미확인"),
+        "medicines": linked, "inventory": inventory,
+        "remaining_doses": clean_number(item.get("remaining_doses"), integer=True) if item["kind"] == "PRESCRIPTION" else None,
+        "expiry": {"actual_expiry": actual_expiry,
+                   "temporary_management_date": clean_date(expiry.get("temporary_management_date")),
+                   "verified": expiry.get("verified") is True and actual_expiry is not None},
+        "position": position,
+        "size_class": item.get("size_class") if item.get("size_class") in ("SMALL", "MEDIUM", "LARGE") else None,
+        "base_color": color if isinstance(color, str) and re.fullmatch(r"#[0-9a-fA-F]{6}", color) else "#d9e4d5",
+        "safety_status": "CHECKED" if item.get("safety_status") == "CHECKED" else "SAFETY_CHECK_PENDING",
+        # 자유 메모·환자 식별정보·사진·원문은 공개 조회에 포함하지 않는다.
+        "note": None,
+    }
+
+
+# 같은 테이블의 제품·포장만 제한 조회하고 누락·비공개·부분 페이지를 구분한다.
+def read_inventory(table, box_id, public_demo=False):
     fields = ["pk", "sk", "product_code", "name", "form", "ingredients",
-              "ingredients_status", "product_info", "product_info_status"]
+              "ingredients_status", "product_info", "product_info_status",
+              "package_id", "box_id", "kind", "state", "product_codes", "expiry", "inventory",
+              "remaining_doses", "position", "size_class", "base_color", "safety_status", "demo_public"]
     names = {f"#f{index}": name for index, name in enumerate(fields)}
     query = {
         "Limit": 100,
+        "ConsistentRead": True,
         "ProjectionExpression": ", ".join(names),
         "ExpressionAttributeNames": names,
-        "FilterExpression": "begins_with(#f0, :prefix) AND #f1 = :meta",
-        "ExpressionAttributeValues": {":prefix": "MEDICINE#", ":meta": "META"},
+        "FilterExpression": "(begins_with(#f0, :medicine) OR begins_with(#f0, :package)) AND #f1 = :meta",
+        "ExpressionAttributeValues": {":medicine": "MEDICINE#", ":package": "PACKAGE#", ":meta": "META"},
     }
-    medicines = []
-    seen = set()
+    medicines = {}
+    package_items = []
     complete = False
     for _ in range(2):
         response = table.scan(**query)
         for item in response.get("Items", []):
             medicine = medicine_view(item)
-            if medicine and medicine["medicine_id"] not in seen:
-                seen.add(medicine["medicine_id"])
-                medicines.append(medicine)
+            if medicine:
+                medicines[medicine["medicine_id"]] = medicine
+            elif isinstance(item.get("pk"), str) and item["pk"].startswith("PACKAGE#") and item.get("sk") == "META":
+                package_items.append(item)
         cursor = response.get("LastEvaluatedKey")
         if not cursor:
             complete = True
             break
         query["ExclusiveStartKey"] = cursor
-    return medicines, complete
+    packages = []
+    inventory_complete = complete
+    for item in package_items:
+        if item.get("box_id") != box_id:
+            if not clean_text(item.get("box_id")):
+                inventory_complete = False
+            continue
+        # 공개 시연은 항목별로 허용한 일반약 포장만 조회하며 처방약은 인증 계약에 남긴다.
+        if public_demo and (item.get("demo_public") is not True or item.get("kind") != "OTC"):
+            inventory_complete = False
+            continue
+        package = package_view(item, medicines, box_id)
+        if package is None:
+            inventory_complete = False
+        else:
+            packages.append(package)
+    return {
+        "packages": packages,
+        "inventory_status": "CONFIRMED" if inventory_complete else "PARTIAL",
+        "catalog_medicines": list(medicines.values()), "catalog_complete": complete,
+    }
 
 
 # 민감 응답은 캐시하지 않고 오류에도 내부 내용이나 예외 원문을 포함하지 않는다.
@@ -117,7 +221,7 @@ def authorized(event, box_id):
     return context.get("medkit_read") is True and context.get("box_id") == box_id
 
 
-# 제품 조회만 제공하며 등록·입출고·재고·복약 상태를 생성하거나 변경하지 않는다.
+# 저장된 제품·포장을 읽으며 등록·입출고·재고·복약 상태를 생성하거나 변경하지 않는다.
 def lambda_handler(event, context):
     box_id = os.environ.get("MEDKIT_BOX_ID", "").strip()
     if not box_id:
@@ -136,13 +240,11 @@ def lambda_handler(event, context):
     if path != "/inventory":
         return respond(404, {"code": "NOT_FOUND"})
     try:
-        medicines, complete = read_catalog(get_table())
+        inventory = read_inventory(get_table(), box_id, os.environ.get("MEDKIT_DEMO_PUBLIC_READ") == "true")
     except Exception:
         return respond(503, {"code": "CATALOG_UNAVAILABLE"})
     return respond(200, {
         "box": {"box_id": box_id, "dimensions": None, "device_status": "UNKNOWN"},
-        "packages": [], "doses": [],
-        "inventory_status": "UNAVAILABLE",
-        "catalog_medicines": medicines, "catalog_complete": complete,
+        **inventory, "doses": [],
         "synced_at": datetime.now(timezone.utc).isoformat(),
     })

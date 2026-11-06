@@ -191,16 +191,50 @@ def deploy(account, app_id, use_school_role=False):
     print(f"API_URL={endpoint}\nBOX_ID={BOX}\nAMPLIFY_CONFIGURED: rebuild main to activate", flush=True)
 
 
-# 계정·앱과 공개 시연 승인 플래그를 명시해야 배포를 시작한다.
+# 기존 함수의 코드만 교체하며 실행 역할·환경변수·API·Amplify 설정은 보존한다.
+def update_code(account):
+    import boto3
+
+    session = boto3.Session(region_name=REGION)
+    if session.client("sts").get_caller_identity()["Account"] != account:
+        raise RuntimeError("승인된 AWS 계정과 현재 계정이 다릅니다.")
+    lambdas = session.client("lambda")
+    function = lambdas.get_function(FunctionName=NAME)
+    require_owned(function.get("Tags", {}))
+    config = function["Configuration"]
+    if config["Handler"] != "read_api.lambda_handler":
+        raise RuntimeError("기존 함수의 진입점이 달라 코드 교체를 중단합니다.")
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as archive:
+        archive.write(Path(__file__).with_name("read_api.py"), "read_api.py")
+    # 확인 후 다른 작업자가 갱신했으면 덮어쓰지 않고 AWS가 충돌로 중단한다.
+    lambdas.update_function_code(FunctionName=NAME, ZipFile=buffer.getvalue(), RevisionId=config["RevisionId"])
+    lambdas.get_waiter("function_updated_v2").wait(FunctionName=NAME)
+    verification = lambdas.invoke(FunctionName=NAME, Payload=json.dumps({
+        "rawPath": "/inventory", "queryStringParameters": {"box_id": BOX},
+        "requestContext": {"http": {"method": "GET"}},
+    }).encode())
+    response = json.load(verification["Payload"])
+    if verification.get("FunctionError") or response.get("statusCode") != 200:
+        raise RuntimeError("코드 교체 후 실제 테이블 조회 검증에 실패했습니다.")
+    body = json.loads(response["body"])
+    print(f"CODE_UPDATED: packages={len(body['packages'])}, inventory_status={body['inventory_status']}", flush=True)
+
+
+# 신규 배포와 기존 함수 코드 교체를 명시적인 실행 옵션으로 구분한다.
 def main():
     parser = argparse.ArgumentParser(description="승인된 공개 시연 조회 API 배포")
     parser.add_argument("--account", required=True)
-    parser.add_argument("--app", required=True)
+    parser.add_argument("--app")
+    parser.add_argument("--update-code-only", action="store_true")
     parser.add_argument("--apply-public-demo", action="store_true")
     parser.add_argument("--use-school-role", action="store_true", help="학교 역할의 넓은 권한 가능성을 별도 승인한 경우에만 사용")
     args = parser.parse_args()
-    if not args.apply_public_demo:
-        parser.error("팀 승인 후 --apply-public-demo를 지정하세요.")
+    if args.update_code_only:
+        update_code(args.account)
+        return
+    if not args.apply_public_demo or not args.app:
+        parser.error("팀 승인 후 --app 및 --apply-public-demo를 지정하세요.")
     deploy(args.account, args.app, args.use_school_role)
 
 

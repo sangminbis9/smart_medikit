@@ -80,7 +80,13 @@ export default function Device({ kit }: { kit: Medkit }) {
             </div>
             <div>
               <dt>실시간 갱신</dt>
-              <dd>{kit.live ? '실시간 연결됨' : '실시간 연결 대기'}</dd>
+              <dd>
+                {kit.live
+                  ? '실시간 연결됨'
+                  : !kit.demo && kit.online && settings.apiUrl
+                    ? '화면 표시 중 30초 간격 조회'
+                    : '연결 대기'}
+              </dd>
             </div>
             <div>
               <dt>보관함 내부 치수 · 가로 × 세로 × 높이</dt>

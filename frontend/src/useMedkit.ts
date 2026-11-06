@@ -172,6 +172,27 @@ export function useMedkit() {
     [demo, online, refresh],
   );
 
+  // 실시간 연결이 없으면 열린 화면에서만 30초 간격으로 DynamoDB 변경을 조회한다.
+  useEffect(
+    // 숨긴 탭·오프라인·시연에서는 불필요한 조회를 만들지 않는다.
+    function pollInventory() {
+      if (demo || !online || live || !settings.apiUrl || settings.issues.length)
+        return;
+      const timer = window.setInterval(
+        // 브라우저로 돌아올 때는 기존 화면 복귀 조회가 즉시 실행된다.
+        function refreshVisible() {
+          if (!document.hidden) void refresh();
+        },
+        30000,
+      );
+      // 시연 전환·실시간 연결·화면 종료 때 예약 조회를 해제한다.
+      return function cleanup() {
+        window.clearInterval(timer);
+      };
+    },
+    [demo, online, live, refresh],
+  );
+
   // 시연 전환 시 실제 응답과 시연 수정값을 모두 버린다.
   function toggleDemo() {
     request.current?.abort();

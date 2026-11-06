@@ -156,8 +156,9 @@ export default function App() {
             !kit.demo &&
             kit.data.inventory_status !== 'CONFIRMED' && (
               <div className="connection-banner" role="status">
-                제품 조회는 연결되었지만 현재 보관 재고·유효기간은 확인되지
-                않았어요.
+                {kit.data.inventory_status === 'PARTIAL'
+                  ? '보관 목록 일부만 확인되었어요. 누락된 정보가 있어 전체 보유 여부를 확정할 수 없어요.'
+                  : '제품 조회는 연결되었지만 현재 보관 재고·유효기간은 확인되지 않았어요.'}
               </div>
             )}
           <Routes>
@@ -174,7 +175,7 @@ export default function App() {
               }
             />
             <Route path="/schedule" element={<Schedule kit={kit} />} />
-            <Route path="/care" element={<CareIndex />} />
+            <Route path="/care" element={<CareIndex kit={kit} />} />
             <Route path="/care/:symptomId" element={<CareDetail kit={kit} />} />
             <Route path="/alerts" element={<Alerts kit={kit} />} />
             <Route path="/packages/:id" element={<PackageDetail kit={kit} />} />

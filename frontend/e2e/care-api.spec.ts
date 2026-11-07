@@ -571,3 +571,120 @@ test('제품명과 용법 미리보기·전체 사용정보', async function dos
     '용법용량',
   );
 });
+
+// 합성 원문의 계산식과 표에서 병합·행 순서·모바일 스크롤을 검증한다.
+test('제품 사용정보의 원문 표와 계산식', async function structuredInfo({
+  page,
+}) {
+  const medicine = syntheticPackage().medicines[0];
+  medicine.product_info!.dosage =
+    '합성 조건\nX =\n합성 분자\n× 조건\n합성 분모\n합성 표';
+  medicine.product_info!.documents = {
+    indications: null,
+    precautions: null,
+    dosage: [
+      { type: 'text', text: '합성 공식' },
+      {
+        type: 'table',
+        rows: [
+          {
+            cells: [
+              { text: 'X =', header: false, rowspan: 2, colspan: 1 },
+              { text: '합성 분자', header: false, rowspan: 1, colspan: 1 },
+              { text: '× 조건', header: false, rowspan: 2, colspan: 1 },
+            ],
+          },
+          {
+            cells: [
+              { text: '합성 분모', header: false, rowspan: 1, colspan: 1 },
+            ],
+          },
+        ],
+      },
+      { type: 'text', text: '합성 표 제목' },
+      {
+        type: 'table',
+        rows: [
+          {
+            cells: [
+              { text: '구분', header: true, rowspan: 1, colspan: 1 },
+              { text: '기준', header: true, rowspan: 1, colspan: 1 },
+              { text: '결과', header: true, rowspan: 1, colspan: 1 },
+            ],
+          },
+          {
+            cells: [
+              { text: '합성 A', header: false, rowspan: 1, colspan: 1 },
+              { text: '< 30', header: false, rowspan: 1, colspan: 1 },
+              { text: '합성 조건', header: false, rowspan: 1, colspan: 1 },
+            ],
+          },
+        ],
+      },
+      { type: 'text', text: '합성 마지막 문단' },
+    ],
+  };
+  // 실제 환자·제품을 사용하지 않는다.
+  await page.route('**/api/**', async function respond(route) {
+    await route.fulfill({
+      json: route.request().url().includes('/inventory')
+        ? {
+            box: { box_id: 'test-box' },
+            packages: [],
+            inventory_status: 'CONFIRMED',
+            catalog_medicines: [medicine],
+            catalog_complete: true,
+          }
+        : { alerts: [], alerts_status: 'UNAVAILABLE' },
+    });
+  });
+  await page.setViewportSize({ width: 320, height: 700 });
+  await page.goto('/');
+  await page
+    .getByRole('button', { name: '검증 전용 합성 제품 · 사용법 상세' })
+    .click();
+  const dialog = page.getByRole('dialog');
+  const tables = dialog.locator('.usage-dosage table');
+  await expect(tables).toHaveCount(2);
+  await expect(tables.nth(0)).toHaveClass(/product-formula/);
+  await expect(
+    tables.nth(0).locator('tr').first().locator('td').first(),
+  ).toHaveAttribute('rowspan', '2');
+  await expect(tables.nth(0).locator('tr').nth(1)).toContainText('합성 분모');
+  await expect(
+    tables.nth(0).locator('tr').first().locator('td').nth(1),
+  ).toHaveAttribute('aria-label', '분자: 합성 분자');
+  await expect(
+    tables.nth(0).locator('tr').nth(1).locator('td').first(),
+  ).toHaveAttribute('aria-label', '분모: 합성 분모');
+  await expect(tables.nth(1).locator('tr').nth(1).locator('td')).toHaveText([
+    '합성 A',
+    '< 30',
+    '합성 조건',
+  ]);
+  await expect(dialog.locator('.usage-dosage')).toContainText(
+    '합성 마지막 문단',
+  );
+  await expect(dialog.locator('.dosage-source-note')).toHaveCount(0);
+  // 짧은 분수식은 모바일에서도 모든 항이 한 화면에 표시된다.
+  expect(
+    await dialog
+      .locator('.product-table-scroll')
+      .first()
+      .evaluate(function fitsFormula(element) {
+        return element.scrollWidth <= element.clientWidth;
+      }),
+  ).toBe(true);
+  // 표가 팝업을 밀어내지 않고 표 영역 안에서 가로로 스크롤된다.
+  const scroll = dialog.locator('.product-table-scroll').last();
+  expect(
+    await scroll.evaluate(function overflows(element) {
+      return element.scrollWidth > element.clientWidth;
+    }),
+  ).toBe(true);
+  expect(
+    await page.evaluate(function fits() {
+      return document.documentElement.scrollWidth <= window.innerWidth;
+    }),
+  ).toBe(true);
+});

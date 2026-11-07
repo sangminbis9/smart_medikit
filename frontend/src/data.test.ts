@@ -45,6 +45,51 @@ describe('제품 사용정보 표시', function productText() {
     expect(displayMedicineName('(제품명)')).toBe('(제품명)');
     expect(displayMedicineName('괄호 없는 제품')).toBe('괄호 없는 제품');
   });
+  // 잘못된 표 구조가 있어도 허가 원문과 다른 제품 정보는 보존한다.
+  it('잘못된 표 병합은 구조만 버리고 평문은 유지한다', function invalidTable() {
+    const data = parseData(
+      {
+        box: { box_id: 'test-box' },
+        catalog_medicines: [
+          {
+            medicine_id: 'synthetic',
+            name: '합성 제품',
+            product_info: {
+              source: 'MFDS_PERMIT_DETAIL',
+              indications: null,
+              dosage: '합성 용법 원문',
+              precautions: null,
+              documents: {
+                dosage: [
+                  {
+                    type: 'table',
+                    rows: [
+                      {
+                        cells: [
+                          {
+                            text: '오류',
+                            header: false,
+                            rowspan: 0,
+                            colspan: 1,
+                          },
+                        ],
+                      },
+                    ],
+                  },
+                ],
+              },
+            },
+          },
+        ],
+      },
+      { alerts: [] },
+      'test-box',
+    );
+    expect(data.catalog_medicines[0].product_info?.documents).toBeNull();
+    expect(data.catalog_medicines[0].product_info?.dosage).toBe(
+      '합성 용법 원문',
+    );
+  });
 });
 
 // 빈 입력과 불확실한 의료정보의 표시 경계를 검증한다.

@@ -10,11 +10,48 @@ export const dimensionsSchema = z.object({
   height: z.number().positive(),
 });
 
+const documentCellSchema = z.object({
+  text: z.string(),
+  header: z.boolean(),
+  rowspan: z.number().int().min(1).max(20),
+  colspan: z.number().int().min(1).max(20),
+});
+const documentBlockSchema = z.discriminatedUnion('type', [
+  z.object({ type: z.literal('text'), text: z.string() }),
+  z.object({
+    type: z.literal('table'),
+    rows: z
+      .array(z.object({ cells: z.array(documentCellSchema).min(1).max(30) }))
+      .min(1)
+      .max(200),
+  }),
+]);
 const productInfoSchema = z.object({
   source: z.enum(['MFDS_PERMIT_DETAIL', 'DYNAMODB_PRODUCT_INFO']),
   indications: text,
   dosage: text,
   precautions: text,
+  documents: z
+    .object({
+      indications: z
+        .array(documentBlockSchema)
+        .max(1000)
+        .nullable()
+        .default(null),
+      dosage: z.array(documentBlockSchema).max(1000).nullable().default(null),
+      precautions: z
+        .array(documentBlockSchema)
+        .max(1000)
+        .nullable()
+        .default(null),
+    })
+    .nullable()
+    .optional()
+    .catch(null),
+  documents_incomplete: z
+    .array(z.enum(['indications', 'dosage', 'precautions']))
+    .optional()
+    .catch(undefined),
 });
 
 // 선택 확장 필드는 불완전해도 기존 재고 조회를 중단시키지 않는다.

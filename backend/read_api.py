@@ -7,6 +7,12 @@ import re
 from datetime import date, datetime, timezone
 from decimal import Decimal
 
+# 구조화 모듈은 단독 Lambda ZIP과 저장소 테스트에서 같은 코드를 사용한다.
+try:
+    from product_document import structured_document
+except ModuleNotFoundError:
+    from backend.product_document import structured_document
+
 
 # 배포 ZIP과 저장소 실행 모두 기존 OCR의 문서 변환기를 재사용한다.
 try:
@@ -95,12 +101,30 @@ def medicine_view(item):
         info = {"source": "MFDS_PERMIT_DETAIL"}
         for field in ("indications", "dosage", "precautions"):
             info[field] = product_text(raw_info.get(field))
+        source_fields = raw_info
     elif item.get("product_info_status") == "SUCCEEDED":
         # 현재 OCR 파이프라인은 사용정보를 최상위 필드에 저장한다.
         fields = {field: product_text(item.get(field)) for field in ("indications", "dosage", "precautions")}
         if any(fields.values()):
             # 저장된 정보에 없는 공식 출처·전문가 승인을 만들어 붙이지 않는다.
             info = {"source": "DYNAMODB_PRODUCT_INFO", **fields}
+            source_fields = item
+    if info:
+        # 공개 필드에만 구조를 더하고 기존 평문 계약은 유지한다.
+        documents = {field: structured_document(source_fields.get(field), product_text)
+                     for field in ("indications", "dosage", "precautions")}
+        if any(documents.values()):
+            info["documents"] = documents
+        # 표·계산식 구조를 읽지 못한 필드는 완전한 원문 배열로 오인하지 않게 표시한다.
+        incomplete = []
+        for field, blocks in documents.items():
+            value = source_fields.get(field)
+            if isinstance(value, str) and not blocks and re.search(
+                r'tagName\s*=\s*["\']table["\']|(?:<|&(?:amp;){0,2}lt;)\s*(?:table|math|sup|sub|img)\b', value, re.I
+            ):
+                incomplete.append(field)
+        if incomplete:
+            info["documents_incomplete"] = incomplete
     form = item.get("form")
     return {
         "medicine_id": code,

@@ -20,6 +20,7 @@
 
 - `/inventory`: `{box, packages, doses: [], inventory_status, catalog_medicines, catalog_complete, synced_at}`. `MEDICINE#<코드>/META` 제품 정보와 `PACKAGE#<포장 ID>/META` 보유 포장을 `product_codes`로 연결한다. 제품 정보만 추가하면 포장이 생기지 않는다. 날짜·수량·좌표·OTC 여부를 추측하지 않으며 쓰기 API는 없다.
 - `inventory_status=CONFIRMED`는 해당 보관함의 포장 레코드를 끝까지 읽었다는 뜻이다. 실물 재고·유효기간·안전성 검증 완료가 아니다. 빈 포장 목록도 전체 조회가 성공하면 `CONFIRMED`다. 페이지 한도 또는 잘못된 포장이 있으면 `PARTIAL`이다. 구버전 제품 전용 API의 `UNAVAILABLE`도 프론트엔드에서 지원한다.
+- `product_info.documents`는 원문 XML의 표를 텍스트·표 블록으로 전달하며, 표 셀의 행·열 병합을 유지한다. 미지원·잘못된 구조는 `documents_incomplete`로 표시하고 원문 확인이 필요하다. 기존 평문 필드와 기존 OCR Lambda는 유지한다.
 - `/alerts`: `{alerts: [], alerts_status: "UNAVAILABLE"}`. 알림 저장 계층이 없으므로 주의정보가 없다고 확정하지 않는다.
 - 식약처 허가 출처 `MFDS_PERMIT_DETAIL`의 중첩 `product_info`와, `product_info_status=SUCCEEDED`인 기존 최상위 `indications`·`dosage`·`precautions`를 읽는다. 최상위 형식은 출처를 `DYNAMODB_PRODUCT_INFO`로 구분하며 `ocr-lambda/backend/mfds.py`의 기존 XML 변환기를 `medkit_mfds.py`로 ZIP에 포함해 재사용한다. 제목 속성·CDATA·문단·표를 평문으로 반환한다. 오래된 테이블 항목에 허가정보가 없으면 `null`이다. `care_assessment`는 자동 생성하지 않는다.
 - 한 요청에서 최대 100개 평가 항목 × 2페이지를 `ConsistentRead=true`로 읽는다. `LastEvaluatedKey`가 남으면 `catalog_complete=false`, `inventory_status=PARTIAL`이다. 여러 페이지를 읽는 동안의 변경까지 원자적으로 보장하지는 않는다. 테이블이 커지면 기존 조회 인덱스/접근 패턴을 팀과 합의해야 하며 무한 Scan으로 확대하지 않는다.

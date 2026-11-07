@@ -1,6 +1,120 @@
 import { displayMedicineName, type Medicine } from './data';
 import { Badge } from './ui';
 
+type ProductDocument = NonNullable<
+  NonNullable<Medicine['product_info']>['documents']
+>;
+
+// 원문의 텍스트와 표를 받은 순서 그대로 안전한 React 요소로 표시한다.
+function DocumentBlocks({
+  blocks,
+}: {
+  blocks: NonNullable<ProductDocument['dosage']>;
+}) {
+  return (
+    <div className="product-document">
+      {blocks.map(
+        // 텍스트는 HTML로 해석하지 않고 표는 셀 병합을 유지한다.
+        function block(item, index) {
+          if (item.type === 'text')
+            return <p key={index}>{formatProductText(item.text)}</p>;
+          const first = item.rows[0]?.cells;
+          const second = item.rows[1]?.cells;
+          // 원문이 공식이라고 명시하고 등호·2행 병합이 확인된 경우에만 분수로 표시한다.
+          const preceding = blocks[index - 1];
+          const fraction =
+            preceding?.type === 'text' &&
+            /공식|계산식/.test(preceding.text) &&
+            item.rows.length === 2 &&
+            first?.length === 3 &&
+            second?.length === 1 &&
+            first[0].rowspan === 2 &&
+            first[0].colspan === 1 &&
+            /=\s*$/.test(first[0].text) &&
+            first[1].rowspan === 1 &&
+            first[1].colspan === 1 &&
+            first[2].rowspan === 2 &&
+            first[2].colspan === 1 &&
+            second[0].rowspan === 1 &&
+            second[0].colspan === 1;
+          return (
+            <div
+              className="product-table-scroll"
+              key={index}
+              role="region"
+              aria-label="제품 정보 표"
+              tabIndex={0}
+            >
+              <table
+                className={
+                  fraction ? 'product-table product-formula' : 'product-table'
+                }
+              >
+                <tbody>
+                  {item.rows.map(
+                    // 원문 행을 생략하거나 서로 다른 행으로 재배치하지 않는다.
+                    function row(line, rowIndex) {
+                      return (
+                        <tr key={rowIndex}>
+                          {line.cells.map(
+                            // 셀 병합과 제목 여부는 원문 속성만 따른다.
+                            function cell(entry, cellIndex) {
+                              const Tag = entry.header ? 'th' : 'td';
+                              // 분수의 분자와 분모를 화면 낭독기에도 구분해 전달한다.
+                              const fractionLabel =
+                                fraction && rowIndex === 0 && cellIndex === 1
+                                  ? `분자: ${formatProductText(entry.text)}`
+                                  : fraction &&
+                                      rowIndex === 1 &&
+                                      cellIndex === 0
+                                    ? `분모: ${formatProductText(entry.text)}`
+                                    : undefined;
+                              return (
+                                <Tag
+                                  key={cellIndex}
+                                  rowSpan={entry.rowspan}
+                                  colSpan={entry.colspan}
+                                  aria-label={fractionLabel}
+                                >
+                                  {formatProductText(entry.text)}
+                                </Tag>
+                              );
+                            },
+                          )}
+                        </tr>
+                      );
+                    },
+                  )}
+                </tbody>
+              </table>
+            </div>
+          );
+        },
+      )}
+    </div>
+  );
+}
+
+// 구조를 복원할 수 없는 문서는 추측하지 않고 공식 원문으로 안내한다.
+function SourceStructureNotice({ code }: { code: string | null }) {
+  return (
+    <span className="dosage-source-note">
+      표와 계산식은 배열이 달라질 수 있어요.{' '}
+      {code ? (
+        <a
+          href={`https://nedrug.mfds.go.kr/pbp/CCBBB01/getItemDetail?itemSeq=${code}`}
+          target="_blank"
+          rel="noreferrer"
+        >
+          식약처 원문에서 확인 ↗
+        </a>
+      ) : (
+        '식약처 원문을 확인해주세요.'
+      )}
+    </span>
+  );
+}
+
 // HTML 엔터티만 문자로 해석하고 제품 문구를 HTML로 실행하지 않는다.
 function decodeProductEntities(value: string) {
   return value.replace(
@@ -82,6 +196,7 @@ export default function MedicineUsage({ medicine }: { medicine: Medicine }) {
   const hasStructuredDosage = /다음\s*표|표를\s*참조|계산식|\bCLcr\b/i.test(
     info?.dosage || '',
   );
+  const dosageBlocks = info?.documents?.dosage;
   return (
     <article className="medicine-usage">
       <h3>{displayMedicineName(medicine.name)}</h3>
@@ -93,36 +208,43 @@ export default function MedicineUsage({ medicine }: { medicine: Medicine }) {
         <div className="usage-dosage">
           <dt>용법·용량</dt>
           <dd>
-            {formatDosageText(info?.dosage) || '허가된 용법·용량 확인 필요'}
-            {hasStructuredDosage && (
-              <span className="dosage-source-note">
-                표와 계산식은 배열이 달라질 수 있어요.{' '}
-                {medicine.product_code ? (
-                  <a
-                    href={`https://nedrug.mfds.go.kr/pbp/CCBBB01/getItemDetail?itemSeq=${medicine.product_code}`}
-                    target="_blank"
-                    rel="noreferrer"
-                  >
-                    식약처 원문에서 확인 ↗
-                  </a>
-                ) : (
-                  '식약처 원문을 확인해주세요.'
-                )}
-              </span>
+            {dosageBlocks ? (
+              <DocumentBlocks blocks={dosageBlocks} />
+            ) : (
+              formatDosageText(info?.dosage) || '허가된 용법·용량 확인 필요'
             )}
+            {(hasStructuredDosage ||
+              info?.documents_incomplete?.includes('dosage')) &&
+              !dosageBlocks && (
+                <SourceStructureNotice code={medicine.product_code} />
+              )}
           </dd>
         </div>
         <div className="usage-precautions">
           <dt>사용 시 주의사항</dt>
           <dd>
-            {formatProductText(info?.precautions) ||
-              '사용 시 주의사항 확인 필요'}
+            {info?.documents?.precautions ? (
+              <DocumentBlocks blocks={info.documents.precautions} />
+            ) : (
+              formatProductText(info?.precautions) ||
+              '사용 시 주의사항 확인 필요'
+            )}
+            {info?.documents_incomplete?.includes('precautions') && (
+              <SourceStructureNotice code={medicine.product_code} />
+            )}
           </dd>
         </div>
         <div className="usage-indications">
           <dt>주요 효능·효과</dt>
           <dd>
-            {formatProductText(info?.indications) || '효능·효과 확인 필요'}
+            {info?.documents?.indications ? (
+              <DocumentBlocks blocks={info.documents.indications} />
+            ) : (
+              formatProductText(info?.indications) || '효능·효과 확인 필요'
+            )}
+            {info?.documents_incomplete?.includes('indications') && (
+              <SourceStructureNotice code={medicine.product_code} />
+            )}
           </dd>
         </div>
         <div className="usage-ingredients">

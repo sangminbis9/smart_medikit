@@ -46,6 +46,50 @@ class FakeTable:
 
 
 class ReadApiTests(unittest.TestCase):
+    # 원문 문단과 표의 셀 병합·기호를 정확히 보존한다.
+    def test_structured_formula_and_table(self):
+        item = product()
+        del item["product_info"]
+        item.update({"product_info_status": "SUCCEEDED", "dosage": '''<DOC title="용법용량"><SECTION>
+          <ARTICLE title="합성 조건"><PARAGRAPH tagName="table"><![CDATA[<tbody>
+          <tr><td rowspan="2"><p>X =</p></td><td><p>합성 분자</p></td><td rowspan="2"><p>× 조건</p></td></tr>
+          <tr><td><p>합성 분모</p></td></tr></tbody>]]></PARAGRAPH>
+          <PARAGRAPH tagName="p"><![CDATA[합성 표 제목]]></PARAGRAPH>
+          <PARAGRAPH tagName="table"><![CDATA[<tbody><tr><th>구분</th><th colspan="2">합성 정보</th></tr>
+          <tr><td>항목</td><td>&lt; 30</td><td>주의</td></tr></tbody>]]></PARAGRAPH>
+          </ARTICLE></SECTION></DOC>'''})
+        info = read_api.medicine_view(item)["product_info"]
+        blocks = info["documents"]["dosage"]
+        self.assertEqual([block["type"] for block in blocks], ["text", "table", "text", "table"])
+        self.assertEqual(blocks[0]["text"], "합성 조건")
+        formula = blocks[1]["rows"]
+        self.assertEqual([cell["text"] for cell in formula[0]["cells"]], ["X =", "합성 분자", "× 조건"])
+        self.assertEqual(formula[0]["cells"][0]["rowspan"], 2)
+        self.assertEqual(formula[1]["cells"][0]["text"], "합성 분모")
+        self.assertEqual(blocks[3]["rows"][0]["cells"][1]["colspan"], 2)
+        self.assertEqual(blocks[3]["rows"][1]["cells"][1]["text"], "< 30")
+        self.assertIn("합성 분모", info["dosage"])
+
+    # 깨진 표·중첩 태그·위험한 코드와 과도한 병합은 평문 원문 확인 대상으로 둔다.
+    def test_unsafe_or_unsupported_structures_are_not_guessed(self):
+        from backend.product_document import structured_document
+        for table in (
+            '<tr><td rowspan="3">X</td></tr>',
+            '<tr><td colspan="99">X</td></tr>',
+            '<tr><td><script>alert(1)</script></td></tr>',
+            '<tr><td><img src="https://example.invalid/test"></td></tr>',
+            '<tr><td>기호<sup>2</sup></td></tr>',
+            '<tr><td>누락</tr>',
+        ):
+            xml = f'<DOC><PARAGRAPH tagName="table"><![CDATA[<tbody>{table}</tbody>]]></PARAGRAPH></DOC>'
+            self.assertIsNone(structured_document(xml, read_api.product_text))
+        self.assertIsNone(structured_document('평문 표 데이터', read_api.product_text))
+        item = product()
+        item["product_info"]["dosage"] = '<DOC><PARAGRAPH tagName="table"><![CDATA[<tbody><tr><td rowspan="3">X</td></tr></tbody>]]></PARAGRAPH></DOC>'
+        result = read_api.medicine_view(item)["product_info"]
+        self.assertIn("dosage", result["documents_incomplete"])
+        self.assertNotIn("documents", result)
+
     # 최상위 XML의 제목·CDATA·조건을 보존하고 기존 중첩 형식도 유지한다.
     def test_flat_product_information(self):
         item = product()
@@ -95,7 +139,7 @@ class ReadApiTests(unittest.TestCase):
         self.assertEqual(session.client.call_args_list, [call("sts"), call("lambda")])
         self.assertEqual(lambdas.update_function_code.call_args.kwargs["RevisionId"], "test-revision")
         with zipfile.ZipFile(io.BytesIO(lambdas.update_function_code.call_args.kwargs["ZipFile"])) as archive:
-            self.assertEqual(set(archive.namelist()), {"read_api.py", "medkit_mfds.py"})
+            self.assertEqual(set(archive.namelist()), {"read_api.py", "product_document.py", "medkit_mfds.py"})
             compile(archive.read("medkit_mfds.py"), "medkit_mfds.py", "exec")
         lambdas.update_function_configuration.assert_not_called()
         lambdas.update_function_code.reset_mock()

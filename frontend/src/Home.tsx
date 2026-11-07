@@ -1,6 +1,13 @@
 import { lazy, Suspense, useEffect, useMemo, useRef } from 'react';
 import { Link } from 'react-router-dom';
-import { expiryLabel, findPackages, stockLabel, type Package } from './data';
+import {
+  expiryLabel,
+  findCatalogMedicines,
+  findPackages,
+  stockLabel,
+  type Package,
+} from './data';
+import CatalogMedicines from './CatalogMedicines';
 import { settings } from './settings';
 import type { Medkit } from './useMedkit';
 import { Badge, EmptyState, Icon } from './ui';
@@ -35,6 +42,8 @@ export default function Home({
   setSelected,
 }: Props) {
   const { data, demo, toggleDemo } = kit;
+  const catalogCount = demo ? 0 : findCatalogMedicines(data).length;
+  const catalogOnly = data.packages.length === 0 && catalogCount > 0;
   const list = useRef<HTMLDivElement>(null);
   const scrollTarget = useRef<number | null>(null);
   const filter = query === '' ? '전체' : query;
@@ -136,11 +145,18 @@ export default function Home({
       <div className="page-heading home-heading">
         <div>
           <h1>우리집 약품함</h1>
-          <p>보고 있는 약을, 보관함에서도 바로 찾아보세요.</p>
+          <p>
+            {catalogOnly
+              ? '등록된 약품을 검색하고 제품 정보를 확인하세요.'
+              : '보고 있는 약을, 보관함에서도 바로 찾아보세요.'}
+          </p>
         </div>
         <div className="heading-badges">
-          <Badge tone="green">보관 중 {stored}</Badge>
-          <Badge tone="amber">확인할 정보 {review}</Badge>
+          {catalogCount > 0 && <Badge>등록 제품 {catalogCount}</Badge>}
+          {!catalogOnly && <Badge tone="green">보관 중 {stored}</Badge>}
+          <Badge tone="amber">
+            {catalogOnly ? '보관 정보 미확인' : `확인할 정보 ${review}`}
+          </Badge>
         </div>
         <Link className="mobile-connection" to="/device">
           <Badge tone={demo ? 'amber' : 'neutral'}>
@@ -178,135 +194,140 @@ export default function Home({
         </div>
         <span>약 이름 또는 효능·효과로 검색</span>
       </div>
-      <div className="home-grid">
-        <div className="scene-column">
-          <Suspense
-            fallback={
-              <div className="cabinet scene-loading" role="status">
-                3D 보관함을 준비하고 있어요…
-              </div>
-            }
-          >
-            <Cabinet
-              items={items}
-              alerts={data.alerts}
-              selected={selectedId}
-              dimensions={data.box.dimensions || settings.dimensions}
-              demo={demo}
-              onSelect={select}
-            />
-          </Suspense>
-          {active ? (
-            <Link
-              className="focus-summary"
-              to={`/packages/${active.package_id}`}
+      <CatalogMedicines kit={kit} query={query} />
+      {!catalogOnly && (
+        <div className="home-grid">
+          <div className="scene-column">
+            <Suspense
+              fallback={
+                <div className="cabinet scene-loading" role="status">
+                  3D 보관함을 준비하고 있어요…
+                </div>
+              }
             >
+              <Cabinet
+                items={items}
+                alerts={data.alerts}
+                selected={selectedId}
+                dimensions={data.box.dimensions || settings.dimensions}
+                demo={demo}
+                onSelect={select}
+              />
+            </Suspense>
+            {active ? (
+              <Link
+                className="focus-summary"
+                to={`/packages/${active.package_id}`}
+              >
+                <div className="flex items-center justify-between gap-3">
+                  <h2>
+                    {String(index + 1).padStart(2, '0')} {active.name}
+                  </h2>
+                  <span>선택된 약품</span>
+                </div>
+                <p>
+                  {active.position ? '위치 추정' : '위치 미확인'} ·{' '}
+                  {active.note || '포장 정보를 확인해주세요.'}
+                </p>
+              </Link>
+            ) : (
+              <div className="focus-summary">
+                <h2>
+                  {query ? '검색 결과가 없어요' : '아직 보관된 약품이 없어요'}
+                </h2>
+                <p>보관함 카메라로 등록한 약품이 여기에 표시돼요.</p>
+              </div>
+            )}
+            <p className="scene-caption">
+              가려진 약품의 위치는 실제 배치와 다를 수 있어요.
+            </p>
+          </div>
+          <section className="inventory" aria-label="보관 약품 목록">
+            <div className="inventory-heading">
               <div className="flex items-center justify-between gap-3">
                 <h2>
-                  {String(index + 1).padStart(2, '0')} {active.name}
+                  보관 약품 <span>{items.length}</span>
                 </h2>
-                <span>선택된 약품</span>
+                <div className="stepper">
+                  <span>
+                    {index < 0 ? '00' : String(index + 1).padStart(2, '0')} /{' '}
+                    {String(items.length).padStart(2, '0')}
+                  </span>
+                  <button
+                    className="icon-button"
+                    aria-label="이전 약품"
+                    onClick={previous}
+                    disabled={index <= 0}
+                  >
+                    <Icon name="up" />
+                  </button>
+                  <button
+                    className="icon-button"
+                    aria-label="다음 약품"
+                    onClick={next}
+                    disabled={index < 0 || index >= items.length - 1}
+                  >
+                    <Icon name="down" />
+                  </button>
+                </div>
               </div>
-              <p>
-                {active.position ? '위치 추정' : '위치 미확인'} ·{' '}
-                {active.note || '포장 정보를 확인해주세요.'}
-              </p>
-            </Link>
-          ) : (
-            <div className="focus-summary">
-              <h2>
-                {query ? '검색 결과가 없어요' : '아직 보관된 약품이 없어요'}
-              </h2>
-              <p>보관함 카메라로 등록한 약품이 여기에 표시돼요.</p>
+              <p>카드를 스크롤하면 3D에서도 같은 약을 강조해요.</p>
             </div>
-          )}
-          <p className="scene-caption">
-            가려진 약품의 위치는 실제 배치와 다를 수 있어요.
-          </p>
-        </div>
-        <section className="inventory" aria-label="보관 약품 목록">
-          <div className="inventory-heading">
-            <div className="flex items-center justify-between gap-3">
-              <h2>
-                보관 약품 <span>{items.length}</span>
-              </h2>
-              <div className="stepper">
-                <span>
-                  {index < 0 ? '00' : String(index + 1).padStart(2, '0')} /{' '}
-                  {String(items.length).padStart(2, '0')}
-                </span>
-                <button
-                  className="icon-button"
-                  aria-label="이전 약품"
-                  onClick={previous}
-                  disabled={index <= 0}
-                >
-                  <Icon name="up" />
-                </button>
-                <button
-                  className="icon-button"
-                  aria-label="다음 약품"
-                  onClick={next}
-                  disabled={index < 0 || index >= items.length - 1}
-                >
-                  <Icon name="down" />
-                </button>
-              </div>
-            </div>
-            <p>카드를 스크롤하면 3D에서도 같은 약을 강조해요.</p>
-          </div>
-          <div
-            className="card-list"
-            ref={list}
-            tabIndex={0}
-            aria-label="약품 카드 스크롤 영역"
-          >
-            {items.length ? (
-              items.map(
-                /* 포장별 요약 카드와 상세 링크를 표시한다. */ function card(
-                  item,
-                  order,
-                ) {
-                  // 카드 본문을 선택하면 3D만 바꾸고 상세 링크는 별도로 연다.
-                  function focus() {
-                    select(item.package_id);
+            <div
+              className="card-list"
+              ref={list}
+              tabIndex={0}
+              aria-label="약품 카드 스크롤 영역"
+            >
+              {items.length ? (
+                items.map(
+                  /* 포장별 요약 카드와 상세 링크를 표시한다. */ function card(
+                    item,
+                    order,
+                  ) {
+                    // 카드 본문을 선택하면 3D만 바꾸고 상세 링크는 별도로 연다.
+                    function focus() {
+                      select(item.package_id);
+                    }
+                    return (
+                      <PackageCard
+                        key={item.package_id}
+                        item={item}
+                        order={order + 1}
+                        selected={item.package_id === selectedId}
+                        onSelect={focus}
+                      />
+                    );
+                  },
+                )
+              ) : (
+                <EmptyState
+                  title={
+                    query
+                      ? '일치하는 약품이 없어요'
+                      : '첫 약품을 기다리고 있어요'
                   }
-                  return (
-                    <PackageCard
-                      key={item.package_id}
-                      item={item}
-                      order={order + 1}
-                      selected={item.package_id === selectedId}
-                      onSelect={focus}
-                    />
-                  );
-                },
-              )
-            ) : (
-              <EmptyState
-                title={
-                  query ? '일치하는 약품이 없어요' : '첫 약품을 기다리고 있어요'
-                }
-                action={
-                  query ? (
-                    <button className="secondary-button" onClick={clear}>
-                      검색 초기화
-                    </button>
-                  ) : (
-                    <button className="secondary-button" onClick={toggleDemo}>
-                      {demo ? '빈 보관함으로 돌아가기' : '시연 데이터 보기'}
-                    </button>
-                  )
-                }
-              >
-                {query
-                  ? '약 이름이나 다른 검색어로 다시 찾아보세요.'
-                  : '약 포장을 보관함 카메라에 보여주면 자동 등록돼요. 지금은 시연 데이터로 먼저 둘러볼 수 있어요.'}
-              </EmptyState>
-            )}
-          </div>
-        </section>
-      </div>
+                  action={
+                    query ? (
+                      <button className="secondary-button" onClick={clear}>
+                        검색 초기화
+                      </button>
+                    ) : (
+                      <button className="secondary-button" onClick={toggleDemo}>
+                        {demo ? '빈 보관함으로 돌아가기' : '시연 데이터 보기'}
+                      </button>
+                    )
+                  }
+                >
+                  {query
+                    ? '약 이름이나 다른 검색어로 다시 찾아보세요.'
+                    : '약 포장을 보관함 카메라에 보여주면 자동 등록돼요. 지금은 시연 데이터로 먼저 둘러볼 수 있어요.'}
+                </EmptyState>
+              )}
+            </div>
+          </section>
+        </div>
+      )}
     </div>
   );
 }

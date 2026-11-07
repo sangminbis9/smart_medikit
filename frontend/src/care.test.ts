@@ -282,6 +282,25 @@ describe('제품 연결 안전 경계', function matching() {
       }
     }
   });
+  // 제품이 조회되어도 포장 연결이 없으면 미보유나 사용 가능으로 확정하지 않는다.
+  it('빈 포장과 제품 정보가 함께 있으면 보관 정보 확인이 필요하다', function unlinkedCatalog() {
+    const data = {
+      ...emptyData(),
+      inventory_status: 'CONFIRMED' as const,
+      catalog_medicines: reviewedPackage().medicines,
+      catalog_complete: true,
+    };
+    const matched = matchCareMedicines(
+      data,
+      'headache',
+      'PAIN_RELIEF',
+      true,
+      now,
+    );
+    expect(matched.status).toBe('확인 필요');
+    expect(matched.reason).toContain('등록된 제품 정보는 조회됐지만');
+    expect(matched.matches).toEqual([]);
+  });
   // 관련 없는 제품도 검토가 완료되어야 미보유 판정에 사용할 수 있다.
   it('승인된 비관련 제품만 있으면 미보유', function noMatch() {
     const item = reviewedPackage();

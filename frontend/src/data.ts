@@ -246,6 +246,38 @@ export function findPackages(items: Package[], query: string): Package[] {
   });
 }
 
+// 포장에 연결되지 않은 제품도 이름·성분·효능으로 찾되 보유 포장과 중복하지 않는다.
+export function findCatalogMedicines(data: Data, query = ''): Medicine[] {
+  const linkedCodes = new Set<string>();
+  const linkedIds = new Set<string>();
+  for (const item of data.packages)
+    for (const medicine of item.medicines) {
+      linkedIds.add(medicine.medicine_id);
+      if (medicine.product_code) linkedCodes.add(medicine.product_code);
+    }
+  const words = query.trim().toLocaleLowerCase('ko-KR').split(/\s+/);
+  // 보관 상태를 만들어 내지 않고 서버가 제공한 제품 문자열만 검색한다.
+  return data.catalog_medicines.filter(function matches(medicine) {
+    if (
+      linkedIds.has(medicine.medicine_id) ||
+      (medicine.product_code && linkedCodes.has(medicine.product_code))
+    )
+      return false;
+    const text = [
+      medicine.name,
+      medicine.product_code || '',
+      ...medicine.ingredients,
+      ...medicine.indications,
+    ]
+      .join(' ')
+      .toLocaleLowerCase('ko-KR');
+    // 여러 검색어는 동일 제품 안에서 모두 일치해야 한다.
+    return words.every(function contains(word) {
+      return text.includes(word);
+    });
+  });
+}
+
 // 현재 보관 약품 관계만 3D에 사용하고 병용금기의 빨간 표시를 우선한다.
 export function riskFor(
   id: string,

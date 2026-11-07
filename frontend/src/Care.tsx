@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ChangeEvent } from 'react';
+import { useEffect, useRef, type ChangeEvent } from 'react';
 import { Link, useParams, useSearchParams } from 'react-router-dom';
 import {
   careCategories,
@@ -13,8 +13,8 @@ import {
 } from './careMatching';
 import { expiryLabel, stockLabel } from './data';
 import type { Medkit } from './useMedkit';
-import { Badge, Dialog, EmptyState, Icon, Note } from './ui';
-import MedicineUsage from './MedicineUsage';
+import { Badge, EmptyState, Icon, Note } from './ui';
+import CatalogMedicines from './CatalogMedicines';
 
 // 검색과 카테고리를 주소에 남겨 상세 화면에서 돌아와도 탐색을 유지한다.
 export function CareIndex({ kit }: { kit: Medkit }) {
@@ -142,6 +142,7 @@ export function CareIndex({ kit }: { kit: Medkit }) {
         )}
       </div>
       <StoredMedicines kit={kit} />
+      <CatalogMedicines kit={kit} />
       <Note tone="neutral">
         일반적인 건강 정보이며 진단이나 개인별 복용 지시가 아니에요.
         어린이·임산부·기저질환자·다른 약을 복용 중인 분은 의사 또는 약사와 먼저
@@ -159,6 +160,9 @@ function StoredMedicines({ kit }: { kit: Medkit }) {
   });
   const queryReady = kit.online && kit.status === 'ready' && !kit.demo;
   const notice = careInventoryNotice(kit.data, queryReady);
+  // 제품 정보만 있으면 빈 보관 수량 대신 아래 등록 제품 목록을 보여준다.
+  if (!kit.data.packages.length && kit.data.catalog_medicines.length)
+    return null;
   return (
     <section className="care-inventory" aria-label="보관 중인 약품">
       <div className="care-section-heading">
@@ -208,19 +212,6 @@ export function CareDetail({ kit }: { kit: Medkit }) {
   const { symptomId } = useParams();
   const [params] = useSearchParams();
   const heading = useRef<HTMLHeadingElement>(null);
-  const [selectedMedicineId, setSelectedMedicine] = useState<string | null>(
-    null,
-  );
-  // 재조회 후에도 선택 제품의 최신 사용정보를 보여준다.
-  const selectedMedicine = kit.data.catalog_medicines.find(
-    function selected(item) {
-      return item.medicine_id === selectedMedicineId;
-    },
-  );
-  // 제품정보 창을 닫고 원래 확인 버튼으로 초점을 돌린다.
-  function closeMedicine() {
-    setSelectedMedicine(null);
-  }
   // 주소의 정확한 ID만 사용하고 다른 증상으로 대체하지 않는다.
   const guide = careGuides.find(function same(item) {
     return item.id === symptomId;
@@ -250,16 +241,6 @@ export function CareDetail({ kit }: { kit: Medkit }) {
     );
   const queryReady = kit.online && kit.status === 'ready' && !kit.demo;
   const inventoryNotice = careInventoryNotice(kit.data, queryReady);
-  const linkedCodes = new Set<string>();
-  for (const item of kit.data.packages)
-    for (const medicine of item.medicines)
-      if (medicine.product_code) linkedCodes.add(medicine.product_code);
-  // 포장과 연결된 제품을 보유 여부 미확인 캐시 목록에 중복 표시하지 않는다.
-  const catalogMedicines = kit.data.catalog_medicines.filter(
-    function unlinked(medicine) {
-      return !medicine.product_code || !linkedCodes.has(medicine.product_code);
-    },
-  );
   return (
     <div className="standard-page care-page care-detail">
       <Link className="care-back" to={back}>
@@ -419,49 +400,7 @@ export function CareDetail({ kit }: { kit: Medkit }) {
         </aside>
       </div>
       <StoredMedicines kit={kit} />
-      {!kit.demo && catalogMedicines.length > 0 && (
-        <details className="care-unverified">
-          <summary>
-            인식된 제품 정보 {catalogMedicines.length}개 · 보유 여부 미확인
-          </summary>
-          <p>
-            제품 인식 기록만 연결되어 있어요. 실제 보관 여부·유효기간·증상
-            관련성은 확인되지 않았으며 아래 목록은 이 증상에 대한 추천이
-            아니에요.
-          </p>
-          {!kit.data.catalog_complete && <p>제품 목록 일부만 조회되었어요.</p>}
-          {(!kit.online || kit.status !== 'ready') && (
-            <p>이전 조회 결과예요. 최신 정보 확인이 필요해요.</p>
-          )}
-          <ul>
-            {catalogMedicines.map(
-              // 제품 캐시는 포장 카드와 구분하고 정보 열람만 제공한다.
-              function catalog(medicine) {
-                // 현재 선택한 제품의 허가정보를 연다.
-                function openMedicine() {
-                  setSelectedMedicine(medicine.medicine_id);
-                }
-                return (
-                  <li key={medicine.medicine_id}>
-                    <button className="text-button" onClick={openMedicine}>
-                      {medicine.name} · 사용법 상세
-                    </button>
-                  </li>
-                );
-              },
-            )}
-          </ul>
-        </details>
-      )}
-      {selectedMedicine && (
-        <Dialog title="제품 사용정보" onClose={closeMedicine}>
-          <Note>
-            보관함 보유 여부와 실제 유효기간은 확인되지 않았어요. 일반 의약품
-            정보이며 개인별 사용 권장이 아니에요.
-          </Note>
-          <MedicineUsage medicine={selectedMedicine} />
-        </Dialog>
-      )}
+      <CatalogMedicines kit={kit} />
       <section className="care-warnings" aria-labelledby="care-warning-title">
         <h2 id="care-warning-title">이럴 때는 진료가 필요해요</h2>
         <ul>

@@ -3,6 +3,7 @@ import {
   emptyData,
   expiryLabel,
   findPackages,
+  findCatalogMedicines,
   hasStock,
   packageSchema,
   parseData,
@@ -69,6 +70,23 @@ describe('표시 정책', function policies() {
       'demo-p01',
     );
     expect(findPackages(makeDemo().packages, '없는 약품')).toEqual([]);
+  });
+  // 제품 목록 검색은 보유 상태를 생성하지 않고 포장 연결 여부로 중복을 제거한다.
+  it('포장 없는 제품을 검색하고 연결된 제품은 중복 표시하지 않는다', function catalogSearch() {
+    const data = makeDemo();
+    const medicine = {
+      ...data.packages[0].medicines[0],
+      medicine_id: 'catalog-only',
+      product_code: '000000001',
+      name: '합성 등록약',
+      ingredients: ['합성 성분'],
+      indications: ['시험 효능'],
+    };
+    data.catalog_medicines = [medicine];
+    expect(findCatalogMedicines(data, '합성 성분 시험')).toEqual([medicine]);
+    expect(findCatalogMedicines(data, '다른 성분')).toEqual([]);
+    data.packages[0].medicines = [medicine];
+    expect(findCatalogMedicines(data)).toEqual([]);
   });
   // 보관 검사와 반출 이력 경고를 같은 3D 관계로 취급하지 않는다.
   it('3D는 현재 보관 관계만 강조하고 빨강을 우선한다', function safetyScope() {

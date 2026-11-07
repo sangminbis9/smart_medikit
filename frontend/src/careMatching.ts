@@ -1,4 +1,4 @@
-import { dayKey, type Data, type Package } from './data';
+import { dayKey, findCatalogMedicines, type Data, type Package } from './data';
 import type { MedicineCategory } from './careGuides';
 
 export type CareStatus = '보유' | '미보유' | '확인 필요' | '사용 주의';
@@ -18,6 +18,8 @@ export function careInventoryNotice(data: Data, queryReady: boolean) {
     return '제품 조회는 연결되어 있어요. 실제 보관 여부·유효기간 정보가 없어 관련 약품의 보유 여부는 확인이 필요해요.';
   if (data.inventory_status === 'PARTIAL')
     return '조회는 완료됐지만 일부 보관 정보가 아직 확인되지 않았어요. 관련 약품의 보유 여부는 확인이 필요해요.';
+  if (findCatalogMedicines(data).length > 0)
+    return '등록된 제품 정보는 조회됐지만 보관 상태·유효기간이 아직 연결되지 않았어요. 아래 등록된 약품에서 제품 정보를 확인해주세요.';
   return null;
 }
 
@@ -80,7 +82,8 @@ export function matchCareMedicines(
 } {
   const inventoryNotice = careInventoryNotice(data, queryReady);
   // 연결 성공만으로 보유·미보유를 확정하지 않고 완성된 재고 응답도 요구한다.
-  const inventoryReady = queryReady && data.inventory_status === 'CONFIRMED';
+  const inventoryReady =
+    queryReady && data.inventory_status === 'CONFIRMED' && !inventoryNotice;
   const matches: CareMatch[] = [];
   const unknown: Package[] = [];
   for (const item of data.packages) {

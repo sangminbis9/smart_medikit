@@ -159,7 +159,7 @@ WebSocket은 **상태 변경 사실과 버전 정보**를 알리고, 웹앱은 �
 `/care`, `/care/:symptomId`는 8개 카테고리·32개 증상의 일반 건강정보를 표시한다. `careGuides.ts`의 버전·출처 확인일·원문 링크와 증상별 대처/위험 신호를 사용한다. 의료 전문가 검토 완료나 개인별 사용 적합성을 뜻하지 않는다. 기존 `useMedkit.ts` 조회·취소·오프라인·복귀 재조회 경로를 재사용하며 쓰기·OCR·Pi 이벤트 계약은 바꾸지 않는다.
 
 - `GET /inventory`의 선택 응답 확장: `inventory_status: CONFIRMED | PARTIAL | UNAVAILABLE`(없으면 `UNAVAILABLE`), `catalog_medicines: Medicine[]`(없으면 `[]`), `catalog_complete: boolean`(없으면 `false`). 기존 필드는 유지한다. 케어의 보유·미보유 확정에는 최신 성공 응답과 `inventory_status=CONFIRMED`가 필요하다. 시연·오프라인·조회 실패·미완성 재고는 확인 필요다.
-- `catalog_medicines`는 기존 `MEDICINE#<ITEM_SEQ>/META` 제품 캐시다. 포장 상태·실제 보유·유효기간을 의미하지 않으므로 `packages`로 변환하지 않는다. UI에서 **인식된 제품 정보 · 보유 여부 미확인**으로 분리한다. `GET /alerts`에 `alerts_status=UNAVAILABLE`이 있으면 알림 미연결을 안내한다.
+- `catalog_medicines`는 기존 `MEDICINE#<ITEM_SEQ>/META` 제품 캐시다. 포장 상태·실제 보유·유효기간을 의미하지 않으므로 `packages`로 변환하지 않는다. 홈과 케어 첫 화면·상세의 **등록된 약품 · 보관 정보 미확인** 카드로 표시하고 제품명·성분·효능 검색과 사용정보 열람을 제공한다. 이미 포장에 연결된 제품은 중복 표시하지 않는다. `GET /alerts`에 `alerts_status=UNAVAILABLE`이 있으면 알림 미연결을 안내한다.
 - `Medicine` 선택 필드: `product_code`(9자리 품목기준코드), `product_info: {source:"MFDS_PERMIT_DETAIL", indications, dosage, precautions}`(각 문구 `string|null`), `product_info_status`, `care_assessment`. 없거나 잘못된 선택 허가·검토 구조는 `null`로 처리하고 기존 목록은 유지한다. 원문을 HTML로 실행하지 않고 텍스트로 표시한다. 사진 근거가 없으면 기본 아이콘을 사용한다.
 - `care_assessment`는 **향후 서버의 검토 결과를 받기 위한 선택 계약**이다. 현재 테이블에 존재한다고 가정하거나 자동 생성하지 않는다. `{product_code, review_status:"APPROVED", scope:"CARE_GUIDE_32_V1", source_url, reviewed_at, valid_until, indications, ingredient_names, matches:[{symptom_id, medicine_categories, evidence, conditions}]}` 형태다. 시간은 시간대 포함 ISO 8601, `conditions`는 비어 있지 않은 적용 조건 목록이다. `scope`는 이번 32개 증상 전체를 검토했다는 뜻이며, 부분 검토 결과를 이 값으로 보내면 안 된다. 제품별 `APPROVED`를 발행할 사람 검토 절차와 유효기간 정책은 별도 팀 합의 대상이다.
 - 프론트엔드는 출처 HTTPS 허용 호스트(`nedrug.mfds.go.kr`, `data.mfds.go.kr`, `apis.data.go.kr`), 품목 코드·성분 집합·효능 원문 일치, 허가 사용법/주의사항 존재, 검토 유효기간, 원문 내 직접 근거, 정확한 증상 ID·역할을 검사한다. 제품명·효능 키워드 부분 일치로 효능 매칭을 만들지 않는다. 조건을 노출하되 개인별 적합성을 자동 판단하지 않는다.
@@ -174,6 +174,7 @@ WebSocket은 **상태 변경 사실과 버전 정보**를 알리고, 웹앱은 �
 - 사용자의 전체 보관 약품 조회 요청에 따라 `demo_public` 항목 필터와 `OTC` 전용 제한을 제거한다. 설정된 `box_id`의 일반약·처방약 포장을 모두 반환하며, 기존 `demo_public` 값은 읽거나 판단하지 않는다. API 접근 정책과 다른 보관함 제외는 유지한다. 무로그인 배포에서는 반환되는 제품·포장 정보가 공개되므로 환자 식별정보·원문·메모는 응답에 포함하지 않는다.
 - 한 요청에서 최대 100개 평가 항목 × 2페이지를 강한 일관성으로 읽고 제품·포장을 결합한다. 전체 조회가 끝나고 제외/잘못된 대상 포장이 없으면 `inventory_status=CONFIRMED`, 나머지는 `PARTIAL`이다. `CONFIRMED`는 **DB 포장 목록 조회 완성 여부**이며 실물·기한·효능·안전성 보증이 아니다. 빈 포장 목록도 완전한 조회이면 `CONFIRMED`다. 10.1의 제품 전용 API는 구버전 계약으로 유지한다.
 - 프론트엔드는 홈과 케어 첫 화면·증상 상세에 같은 포장 자료를 표시한다. 케어의 별도 **보관 중인 약품**에는 `STORED`만 표시하며 증상별 복용 추천으로 표현하지 않는다. 기존 검토된 효능 연결·기한·주의정보 조건은 그대로이며 `care_assessment`를 생성하지 않는다.
+- 제품만 저장된 경우에도 홈·케어에서 `catalog_medicines`를 펼친 카드로 보여준다. 포장 0건과 미연결 제품이 함께 있으면 홈의 빈 보관함 안내 대신 제품 목록을 우선 표시한다. `CONFIRMED` 빈 포장 응답이라도 미연결 제품이 남아 있으면 케어에서 미보유로 확정하지 않고 보관 정보 확인을 안내한다. API·DynamoDB 저장 계약을 변경하거나 제품으로 보유 포장을 자동 생성하지 않는다.
 - WebSocket이 연결되지 않은 온라인 화면은 보이는 동안 30초 간격으로 재조회한다. 숨긴 탭·오프라인·시연은 폴링하지 않으며, 화면 복귀·재연결·알림 클릭의 즉시 재조회도 유지한다. 브라우저 캐시나 장기 AWS 키를 사용하지 않는다.
 - DynamoDB 콘솔 입력 예시는 [백엔드 안내](../backend/README.md#dynamodb에-보유-약품-추가하기)를 따른다.
 

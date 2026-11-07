@@ -72,7 +72,20 @@ test('검토 상태를 복용 추천으로 표시하지 않는다', async functi
     name: '효능 원문 검색 결과',
     exact: true,
   });
+  await expect(
+    page.getByRole('heading', { name: '보유중인 두통 관련 약품 1개' }),
+  ).toBeVisible();
   await expect(related).toContainText('추가 적용 조건');
+  // 관련 제품이 일반 건강정보보다 앞에 표시되는지 확인한다.
+  expect(
+    await page.locator('.care-related').evaluate(function comesFirst(node) {
+      const steps = document.querySelector('.care-detail-grid');
+      return Boolean(
+        steps &&
+        node.compareDocumentPosition(steps) & Node.DOCUMENT_POSITION_FOLLOWING,
+      );
+    }),
+  ).toBe(true);
   await expect(related).toContainText('판단할 수 없어요');
   await expect(
     page.locator('.care-medicine-heading, .care-product'),
@@ -292,6 +305,12 @@ test('제품만 등록해도 홈·케어에서 표시하고 검색한다', async
     name: '효능 원문 검색 결과',
     exact: true,
   });
+  await expect(
+    page.getByRole('heading', { name: '보유중인 두통 관련 약품 0개' }),
+  ).toBeVisible();
+  await expect(
+    related.getByRole('heading', { name: '보관 정보 미확인 제품 2개' }),
+  ).toBeVisible();
   await expect(related.locator('li')).toHaveCount(2);
   await expect(related).toContainText('감기로 인한 두통의 완화');
   await expect(related).not.toContainText('등록 제품 3');

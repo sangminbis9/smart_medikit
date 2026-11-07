@@ -194,6 +194,7 @@ export function CareDetail({ kit }: { kit: Medkit }) {
         <Icon name="info" />
         <p>{guide.notice}</p>
       </div>
+      <CareMedicines kit={kit} guide={guide} />
       <div className="care-detail-grid">
         <section aria-labelledby="care-steps-title">
           <div className="care-section-heading">
@@ -238,7 +239,6 @@ export function CareDetail({ kit }: { kit: Medkit }) {
           </Link>
         </aside>
       </div>
-      <CareMedicines kit={kit} guide={guide} />
       <section className="care-warnings" aria-labelledby="care-warning-title">
         <h2 id="care-warning-title">이럴 때는 진료가 필요해요</h2>
         <ul>

@@ -384,6 +384,17 @@
   flex-direction: column;
   gap: 10px;
 }
+.care-unconfirmed-heading {
+  margin-top: 24px;
+  color: #465f55;
+  font-size: 15px;
+  font-weight: 700;
+}
+.care-unconfirmed-heading span {
+  margin-left: 6px;
+  color: #63736c;
+  font-size: 13px;
+}
 
 .indication-evidence {
   white-space: pre-line;

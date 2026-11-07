@@ -164,6 +164,12 @@ export type Data = Snapshot & {
   alerts_status?: 'CONFIRMED' | 'UNAVAILABLE';
 };
 
+// 표시할 때만 제품명 뒤 괄호 정보를 숨기고 원본 식별·검색 값은 유지한다.
+export function displayMedicineName(name: string): string {
+  const display = name.replace(/(?:\s*[（(][^()（）]*[)）])+\s*$/, '').trim();
+  return display || name;
+}
+
 // 입력되지 않은 정보는 수량·날짜를 추측하지 않고 빈 상태로 시작한다.
 export function emptyData(): Data {
   return { ...snapshotSchema.parse({}), alerts: [] };

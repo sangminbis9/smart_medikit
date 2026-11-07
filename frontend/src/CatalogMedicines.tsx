@@ -1,7 +1,7 @@
 import { useState } from 'react';
-import { findCatalogMedicines } from './data';
+import { displayMedicineName, findCatalogMedicines } from './data';
 import type { Medkit } from './useMedkit';
-import MedicineUsage, { formatProductText } from './MedicineUsage';
+import MedicineUsage, { formatDosageText } from './MedicineUsage';
 import { Dialog, Note } from './ui';
 
 // 포장 정보가 없는 등록 제품도 홈·케어에서 검색하고 실제 허가정보를 열람하게 한다.
@@ -51,19 +51,21 @@ export default function CatalogMedicines({
                 <button
                   className="catalog-card"
                   onClick={openMedicine}
-                  aria-label={`${medicine.name} · 사용법 상세`}
+                  aria-label={`${displayMedicineName(medicine.name)} · 사용법 상세`}
                 >
-                  <strong>{medicine.name}</strong>
+                  <strong>{displayMedicineName(medicine.name)}</strong>
                   <span>
                     {medicine.ingredients.join(', ') || '성분 정보 확인 필요'}
                   </span>
                   <span className="product-dosage">
                     <b>용법·용량</b>
-                    {formatProductText(medicine.product_info?.dosage) ||
-                      '용법·용량 정보 확인 필요'}
+                    <span className="dosage-preview">
+                      {formatDosageText(medicine.product_info?.dosage) ||
+                        '용법·용량 정보 확인 필요'}
+                    </span>
                   </span>
                   <span className="catalog-link">
-                    효능·용법·주의사항 확인 →
+                    제품 사용정보에서 전체 내용 확인 →
                   </span>
                 </button>
               </li>

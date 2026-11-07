@@ -2,13 +2,14 @@ import { lazy, Suspense, useEffect, useMemo, useRef } from 'react';
 import { Link } from 'react-router-dom';
 import {
   expiryLabel,
+  displayMedicineName,
   findCatalogMedicines,
   findPackages,
   stockLabel,
   type Package,
 } from './data';
 import CatalogMedicines from './CatalogMedicines';
-import { formatProductText } from './MedicineUsage';
+import { formatDosageText } from './MedicineUsage';
 import { settings } from './settings';
 import type { Medkit } from './useMedkit';
 import { Badge, EmptyState, Icon } from './ui';
@@ -218,7 +219,8 @@ export default function Home({
             >
               <div className="flex items-center justify-between gap-3">
                 <h2>
-                  {String(index + 1).padStart(2, '0')} {active.name}
+                  {String(index + 1).padStart(2, '0')}{' '}
+                  {displayMedicineName(active.name)}
                 </h2>
                 <span>선택된 약품</span>
               </div>
@@ -404,12 +406,12 @@ function PackageCard({
         <button
           className="package-select"
           onClick={onSelect}
-          aria-label={`${item.name} 3D에서 선택`}
+          aria-label={`${displayMedicineName(item.name)} 3D에서 선택`}
           aria-pressed={selected}
         >
           <span className="ordinal">{String(order).padStart(2, '0')}</span>
           <span className="package-label">
-            <strong>{item.name}</strong>
+            <strong>{displayMedicineName(item.name)}</strong>
             <small>
               {stateLabels[item.state]} /{' '}
               {item.kind === 'PRESCRIPTION' ? '처방약 봉투' : '일반의약품'}
@@ -419,7 +421,7 @@ function PackageCard({
         <Link
           className="detail-link"
           to={`/packages/${item.package_id}`}
-          aria-label={`${item.name} 상세 보기`}
+          aria-label={`${displayMedicineName(item.name)} 상세 보기`}
         >
           <Icon name="chevron" />
         </Link>
@@ -437,15 +439,20 @@ function PackageCard({
               key={medicine.medicine_id}
             >
               <b>
-                {item.medicines.length > 1 ? `${medicine.name} · ` : ''}제품
-                용법·용량
+                {item.medicines.length > 1
+                  ? `${displayMedicineName(medicine.name)} · `
+                  : ''}
+                제품 용법·용량
               </b>
               {item.kind === 'PRESCRIPTION' && (
                 <span>처방 지시를 따르세요.</span>
               )}
-              <span>
-                {formatProductText(medicine.product_info?.dosage) ||
+              <span className="dosage-preview">
+                {formatDosageText(medicine.product_info?.dosage) ||
                   '용법·용량 정보 확인 필요'}
+              </span>
+              <span className="dosage-more">
+                전체 내용은 약품 상세에서 확인
               </span>
             </div>
           );

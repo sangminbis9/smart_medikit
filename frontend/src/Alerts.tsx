@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
-import { timeLabel, type Alert } from './data';
+import { displayMedicineName, timeLabel, type Alert } from './data';
 import type { Medkit } from './useMedkit';
 import { Badge, EmptyState, Note } from './ui';
 
@@ -144,7 +144,11 @@ export default function Alerts({ kit }: { kit: Medkit }) {
                           },
                         );
                         return (
-                          <Badge key={id}>{item?.name || '약품 미확인'}</Badge>
+                          <Badge key={id}>
+                            {item
+                              ? displayMedicineName(item.name)
+                              : '약품 미확인'}
+                          </Badge>
                         );
                       },
                     )}

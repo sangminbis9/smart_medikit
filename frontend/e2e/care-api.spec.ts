@@ -509,3 +509,65 @@ test('백그라운드 재조회가 카드를 흔들지 않는다', async functio
   await page.clock.fastForward(31000);
   await expect(card).toContainText('변경된 합성 제품');
 });
+
+// 긴 용법의 미리보기와 사용정보의 전체 원문을 확인한다.
+test('제품명과 용법 미리보기·전체 사용정보', async function dosagePreview({
+  page,
+}) {
+  const medicine = syntheticPackage().medicines[0];
+  medicine.name = '합성 제품(합성 성분)';
+  medicine.product_info!.dosage =
+    '용법용량\n다음 표를 참조\n' +
+    Array.from({ length: 12 }, function line(_, i) {
+      return `${i + 1}. &nbsp;합성 조건과 용법을 확인하세요.`;
+    }).join('\n');
+  medicine.product_info!.precautions = '주의 &lt; 30 &amp;nbsp; 합성 주의사항';
+  // 개인 정보가 없는 합성 데이터로 표시한다.
+  await page.route('**/api/**', async function respond(route) {
+    await route.fulfill({
+      json: route.request().url().includes('/inventory')
+        ? {
+            box: { box_id: 'test-box' },
+            packages: [],
+            inventory_status: 'CONFIRMED',
+            catalog_medicines: [medicine],
+            catalog_complete: true,
+          }
+        : { alerts: [], alerts_status: 'UNAVAILABLE' },
+    });
+  });
+  await page.goto('/');
+  const card = page.getByRole('button', { name: '합성 제품 · 사용법 상세' });
+  await expect(card.locator('strong')).toHaveText('합성 제품');
+  const preview = card.locator('.dosage-preview');
+  await expect(preview).toContainText('1. 합성 조건');
+  const clipped = await preview.evaluate(function dimensions(element) {
+    return {
+      height: element.clientHeight,
+      scroll: element.scrollHeight,
+      clamp: getComputedStyle(element).webkitLineClamp,
+    };
+  });
+  expect(clipped.clamp).toBe('3');
+  expect(clipped.scroll).toBeGreaterThan(clipped.height);
+  await expect(card).toContainText('전체 내용 확인');
+  await card.click();
+  const dialog = page.getByRole('dialog');
+  await expect(
+    dialog.getByRole('heading', { name: '합성 제품', exact: true }),
+  ).toBeVisible();
+  await expect(dialog.locator('.usage-dosage dd')).toContainText(
+    '12. 합성 조건',
+  );
+  await expect(dialog.locator('.dosage-source-note')).toContainText(
+    '배열이 달라질 수 있어요',
+  );
+  await expect(dialog.locator('.usage-precautions dd')).toContainText(
+    '주의 < 30',
+  );
+  await expect(dialog).not.toContainText('&nbsp;');
+  await expect(dialog).not.toContainText('&lt;');
+  await expect(dialog.locator('.usage-dosage dd')).not.toContainText(
+    '용법용량',
+  );
+});

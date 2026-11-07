@@ -1,6 +1,12 @@
 import { useState, type FormEvent } from 'react';
 import { Link, useParams } from 'react-router-dom';
-import { expiryLabel, hasStock, stockLabel, type Package } from './data';
+import {
+  displayMedicineName,
+  expiryLabel,
+  hasStock,
+  stockLabel,
+  type Package,
+} from './data';
 import { stateLabels } from './Home';
 import type { Medkit } from './useMedkit';
 import { Badge, Dialog, EmptyState, Icon, Note } from './ui';
@@ -68,7 +74,9 @@ export default function PackageDetail({ kit }: { kit: Medkit }) {
             </span>
             <div>
               <h2>
-                {item.kind === 'PRESCRIPTION' ? '처방 받은 약봉투' : item.name}
+                {item.kind === 'PRESCRIPTION'
+                  ? '처방 받은 약봉투'
+                  : displayMedicineName(item.name)}
               </h2>
               <p>
                 {item.kind === 'PRESCRIPTION' ? '처방의약품' : '일반의약품'} /{' '}

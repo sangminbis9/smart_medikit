@@ -407,6 +407,19 @@
   color: #206d5c;
   margin-bottom: 4px;
 }
+.product-dosage .dosage-preview {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  overflow: hidden;
+  white-space: pre-line;
+  word-break: keep-all;
+  overflow-wrap: anywhere;
+}
+.dosage-more {
+  margin-top: 6px;
+  color: #206d5c;
+}
 .package-dosage {
   color: #536e64;
   font-size: 12px;
@@ -539,6 +552,19 @@
 .medicine-usage dd {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
+  word-break: keep-all;
+}
+.dosage-source-note {
+  display: block;
+  margin-top: 12px;
+  color: #76552e;
+  font-size: 13px;
+  line-height: 1.6;
+  white-space: normal;
+}
+.dosage-source-note a {
+  color: #206d5c;
+  text-decoration: underline;
 }
 .medicine-usage-fields {
   margin: 20px 0;

@@ -2,9 +2,12 @@ import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import type { CareGuide } from './careGuides';
 import { findIndicationMedicines } from './careMatching';
-import { expiryLabel } from './data';
+import { displayMedicineName, expiryLabel } from './data';
 import type { Medkit } from './useMedkit';
-import MedicineUsage, { formatProductText } from './MedicineUsage';
+import MedicineUsage, {
+  formatDosageText,
+  formatProductText,
+} from './MedicineUsage';
 import { Badge, Dialog, Note } from './ui';
 
 // 선택 증상과 효능 원문이 일치하는 제품만 보여주고 사용정보를 연결한다.
@@ -84,20 +87,22 @@ export default function CareMedicines({
                 <button
                   className="catalog-card"
                   onClick={open}
-                  aria-label={`${medicine.name} · 사용법 상세`}
+                  aria-label={`${displayMedicineName(medicine.name)} · 사용법 상세`}
                 >
-                  <strong>{medicine.name}</strong>
+                  <strong>{displayMedicineName(medicine.name)}</strong>
                   <span className="product-dosage">
                     <b>용법·용량</b>
-                    {formatProductText(medicine.product_info?.dosage) ||
-                      '용법·용량 정보 확인 필요'}
+                    <span className="dosage-preview">
+                      {formatDosageText(medicine.product_info?.dosage) ||
+                        '용법·용량 정보 확인 필요'}
+                    </span>
                   </span>
                   <span className="indication-evidence">
                     <b>등록된 효능·효과 원문</b>
                     {formatProductText(medicine.product_info?.indications)}
                   </span>
                   <span className="catalog-link">
-                    효능·용법·주의사항 확인 →
+                    제품 사용정보에서 전체 내용 확인 →
                   </span>
                 </button>
                 {packages.map(
@@ -109,7 +114,7 @@ export default function CareMedicines({
                         to={`/packages/${encodeURIComponent(item.package_id)}`}
                         key={item.package_id}
                       >
-                        {item.name} ·{' '}
+                        {displayMedicineName(item.name)} ·{' '}
                         {item.kind === 'PRESCRIPTION'
                           ? '처방약 봉투'
                           : '보관 포장'}{' '}

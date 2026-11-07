@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   emptyData,
+  displayMedicineName,
   expiryLabel,
   findPackages,
   findCatalogMedicines,
@@ -13,7 +14,7 @@ import {
 } from './data';
 import { makeDemo } from './demo';
 import { readSettings } from './settings';
-import { formatProductText } from './MedicineUsage';
+import { formatDosageText, formatProductText } from './MedicineUsage';
 
 // 사용정보의 빈 XML 서식을 제거하면서 내용과 표의 구분을 보존한다.
 describe('제품 사용정보 표시', function productText() {
@@ -24,6 +25,25 @@ describe('제품 사용정보 표시', function productText() {
     ).toBe('제목\n첫째\n둘째\t10 mg');
     expect(formatProductText(' \n  \n')).toBe('');
     expect(formatProductText(null)).toBe('');
+  });
+  // 표시용 변환은 원본의 숫자·기호·조건을 바꾸거나 HTML을 실행하지 않는다.
+  it('HTML 문자표현과 중복 제목을 정리한다', function entities() {
+    expect(
+      formatDosageText('용법용량\n  1일&nbsp;2회\n&#60; 30 &amp;lt; 40\n'),
+    ).toBe('1일 2회\n< 30 < 40');
+    expect(formatProductText('&lt;script&gt;안내&lt;/script&gt;')).toBe(
+      '<script>안내</script>',
+    );
+    expect(formatDosageText('용법용량\n구분\t용량\n정상\t1회')).toBe(
+      '구분\t용량\n정상\t1회',
+    );
+  });
+  // 화면 제목만 바꾸며 비어 있는 이름은 원본을 유지한다.
+  it('이름 끝의 괄호 정보를 화면에서 숨긴다', function names() {
+    expect(displayMedicineName('제품정(합성 성분)')).toBe('제품정');
+    expect(displayMedicineName('제품（성분）')).toBe('제품');
+    expect(displayMedicineName('(제품명)')).toBe('(제품명)');
+    expect(displayMedicineName('괄호 없는 제품')).toBe('괄호 없는 제품');
   });
 });
 

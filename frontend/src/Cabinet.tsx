@@ -1,7 +1,13 @@
 import { useEffect, useRef, useState } from 'react';
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
-import { riskFor, type Alert, type Dimensions, type Package } from './data';
+import {
+  displayMedicineName,
+  riskFor,
+  type Alert,
+  type Dimensions,
+  type Package,
+} from './data';
 import { Badge, Icon } from './ui';
 
 type Props = {
@@ -366,7 +372,9 @@ export default function Cabinet({
       <div className="scene-controls">
         <span className="scene-desktop-help">드래그 회전 / 휠 확대</span>
         <span className="scene-mobile-label">
-          {selectedItem?.name || '보관함 카메라 등록 대기'}
+          {selectedItem
+            ? displayMedicineName(selectedItem.name)
+            : '보관함 카메라 등록 대기'}
         </span>
         <button className="soft-button" onClick={reset} disabled={failed}>
           <Icon name="rotate" />

@@ -1,5 +1,5 @@
 import { useState, type FormEvent } from 'react';
-import { dayKey, timeLabel, type Dose } from './data';
+import { dayKey, displayMedicineName, timeLabel, type Dose } from './data';
 import type { Medkit } from './useMedkit';
 import { Badge, Dialog, EmptyState, Icon, Note } from './ui';
 
@@ -238,7 +238,9 @@ export default function Schedule({ kit }: { kit: Medkit }) {
                       <strong>
                         {item?.kind === 'PRESCRIPTION'
                           ? '처방 받은 약봉투'
-                          : item?.name || '약품 정보 미확인'}
+                          : item
+                            ? displayMedicineName(item.name)
+                            : '약품 정보 미확인'}
                       </strong>
                       <small>
                         {dose.result === 'ESTIMATED'

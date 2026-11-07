@@ -73,9 +73,10 @@ test('검토 상태를 복용 추천으로 표시하지 않는다', async functi
     exact: true,
   });
   await expect(
-    page.getByRole('heading', { name: '보유중인 두통 관련 약품 1개' }),
+    page.getByRole('heading', { name: '등록된 두통 관련 약품 1개' }),
   ).toBeVisible();
   await expect(related).toContainText('추가 적용 조건');
+  await expect(related.locator('.product-dosage')).toContainText('합성 사용법');
   // 관련 제품이 일반 건강정보보다 앞에 표시되는지 확인한다.
   expect(
     await page.locator('.care-related').evaluate(function comesFirst(node) {
@@ -272,6 +273,10 @@ test('제품만 등록해도 홈·케어에서 표시하고 검색한다', async
     exact: true,
   });
   await expect(catalog.locator('li')).toHaveCount(4);
+  await expect(catalog.locator('.product-dosage')).toHaveCount(4);
+  await expect(catalog.locator('.product-dosage').first()).toContainText(
+    '합성 사용법',
+  );
   await expect(page.locator('.scene canvas')).toBeVisible();
   await expect(page.getByText('포장 위치 정보가 아직 없어요')).toBeVisible();
   await expect(page.locator('.package-card')).toHaveCount(0);
@@ -306,11 +311,9 @@ test('제품만 등록해도 홈·케어에서 표시하고 검색한다', async
     exact: true,
   });
   await expect(
-    page.getByRole('heading', { name: '보유중인 두통 관련 약품 0개' }),
+    page.getByRole('heading', { name: '등록된 두통 관련 약품 2개' }),
   ).toBeVisible();
-  await expect(
-    related.getByRole('heading', { name: '보관 정보 미확인 제품 2개' }),
-  ).toBeVisible();
+  await expect(related).not.toContainText('보관 정보 미확인');
   await expect(related.locator('li')).toHaveCount(2);
   await expect(related).toContainText('감기로 인한 두통의 완화');
   await expect(related).not.toContainText('등록 제품 3');
@@ -403,6 +406,12 @@ test('제품 정보 팝업이 화면 크기에 맞는다', async function respon
       .click();
     const dialog = page.getByRole('dialog');
     await expect(dialog.getByText('주요 효능·효과')).toBeVisible();
+    await expect(dialog.locator('.medicine-usage-fields dt')).toHaveText([
+      '용법·용량',
+      '사용 시 주의사항',
+      '주요 효능·효과',
+      '주요 성분',
+    ]);
     await expect(dialog.getByText('용법·용량', { exact: true })).toBeVisible();
     const bounds = await dialog.boundingBox();
     expect(bounds).not.toBeNull();
@@ -423,4 +432,80 @@ test('제품 정보 팝업이 화면 크기에 맞는다', async function respon
     await close.click();
     await expect(dialog).toHaveCount(0);
   }
+});
+
+// 백그라운드 갱신 중 카드가 이동하거나 같은 3D 장면을 다시 만들지 않는지 확인한다.
+test('백그라운드 재조회가 카드를 흔들지 않는다', async function stableRefresh({
+  page,
+}) {
+  await page.clock.install();
+  const item = syntheticPackage();
+  let reads = 0;
+  let delayNext = false;
+  let release: (() => void) | undefined;
+  let changed = false;
+  // 두 번째 조회를 보류해 갱신 중 화면도 검사한다.
+  await page.route('**/api/**', async function respond(route) {
+    if (route.request().url().includes('/inventory')) {
+      reads++;
+      if (delayNext) {
+        delayNext = false;
+        await new Promise<void>(function wait(resolve) {
+          release = resolve;
+        });
+      }
+      const result = structuredClone(item);
+      if (changed) result.name = '변경된 합성 제품';
+      await route.fulfill({
+        json: {
+          box: {
+            box_id: 'test-box',
+            dimensions: { width: 305, depth: 165, height: 190 },
+          },
+          packages: [result],
+          inventory_status: 'CONFIRMED',
+          catalog_complete: true,
+          synced_at: new Date(Date.UTC(2026, 0, 1, 0, reads)).toISOString(),
+        },
+      });
+    } else
+      await route.fulfill({ json: { alerts: [], alerts_status: 'CONFIRMED' } });
+  });
+  await page.goto('/');
+  const card = page.locator('.package-card');
+  await expect(card).toContainText('검증 전용 합성 제품');
+  const canvas = await page.locator('.scene canvas').elementHandle();
+  expect(canvas).not.toBeNull();
+  const before = await card.boundingBox();
+  const connectionBefore = await page.locator('.connection-card').textContent();
+  const previousReads = reads;
+  delayNext = true;
+  await page.clock.fastForward(31000);
+  await expect
+    .poll(function requestCount() {
+      return reads;
+    })
+    .toBeGreaterThan(previousReads);
+  await expect(page.locator('.loading-strip')).toHaveCount(0);
+  expect((await card.boundingBox())!.y).toBe(before!.y);
+  expect(release).toBeDefined();
+  const refreshed = page.waitForResponse(function inventoryResponse(response) {
+    return response.url().includes('/inventory') && response.status() === 200;
+  });
+  release!();
+  await refreshed;
+  await expect(page.locator('.connection-card')).not.toHaveText(
+    connectionBefore!,
+  );
+  await expect
+    .poll(async function sameCanvas() {
+      return canvas!.evaluate(function isCurrent(node) {
+        return node === document.querySelector('.scene canvas');
+      });
+    })
+    .toBe(true);
+  // 다음 갱신에서 실제 변경은 그대로 반영한다.
+  changed = true;
+  await page.clock.fastForward(31000);
+  await expect(card).toContainText('변경된 합성 제품');
 });

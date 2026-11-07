@@ -8,6 +8,7 @@ import {
   type Package,
 } from './data';
 import CatalogMedicines from './CatalogMedicines';
+import { formatProductText } from './MedicineUsage';
 import { settings } from './settings';
 import type { Medkit } from './useMedkit';
 import { Badge, EmptyState, Icon } from './ui';
@@ -154,9 +155,7 @@ export default function Home({
         <div className="heading-badges">
           {catalogCount > 0 && <Badge>등록 제품 {catalogCount}</Badge>}
           {!catalogOnly && <Badge tone="green">보관 중 {stored}</Badge>}
-          <Badge tone="amber">
-            {catalogOnly ? '보관 정보 미확인' : `확인할 정보 ${review}`}
-          </Badge>
+          {!catalogOnly && <Badge tone="amber">확인할 정보 {review}</Badge>}
         </div>
         <Link className="mobile-connection" to="/device">
           <Badge tone={demo ? 'amber' : 'neutral'}>
@@ -429,6 +428,29 @@ function PackageCard({
         {stock && <Badge tone="amber">{stock}</Badge>}
         <Badge>{expiryLabel(item)}</Badge>
       </div>
+      {item.medicines.map(
+        // 포장에 연결된 제품별 사용정보를 처방 지시와 구분해 표시한다.
+        function dosage(medicine) {
+          return (
+            <div
+              className="product-dosage package-dosage"
+              key={medicine.medicine_id}
+            >
+              <b>
+                {item.medicines.length > 1 ? `${medicine.name} · ` : ''}제품
+                용법·용량
+              </b>
+              {item.kind === 'PRESCRIPTION' && (
+                <span>처방 지시를 따르세요.</span>
+              )}
+              <span>
+                {formatProductText(medicine.product_info?.dosage) ||
+                  '용법·용량 정보 확인 필요'}
+              </span>
+            </div>
+          );
+        },
+      )}
       <div className="card-note">
         <Icon name="memo" />
         <p>{item.note || '확인 필요  포장에 적힌 정보를 확인해주세요.'}</p>

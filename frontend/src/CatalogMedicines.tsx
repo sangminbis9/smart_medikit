@@ -1,8 +1,8 @@
 import { useState } from 'react';
 import { findCatalogMedicines } from './data';
 import type { Medkit } from './useMedkit';
-import MedicineUsage from './MedicineUsage';
-import { Badge, Dialog, Note } from './ui';
+import MedicineUsage, { formatProductText } from './MedicineUsage';
+import { Dialog, Note } from './ui';
 
 // 포장 정보가 없는 등록 제품도 홈·케어에서 검색하고 실제 허가정보를 열람하게 한다.
 export default function CatalogMedicines({
@@ -30,12 +30,7 @@ export default function CatalogMedicines({
         <h2>
           등록된 약품 <span>{medicines.length}개</span>
         </h2>
-        <Badge tone="amber">보관 정보 미확인</Badge>
       </div>
-      <p>
-        제품 정보가 등록되어 있어요. 실제 보관 상태·수량·유효기간은 아직
-        연결되지 않았어요.
-      </p>
       {!kit.data.catalog_complete && <p>제품 목록 일부만 조회되었어요.</p>}
       {(!kit.online || kit.status !== 'ready') && (
         <p role="status">이전 조회 결과예요. 최신 정보 확인이 필요해요.</p>
@@ -62,6 +57,11 @@ export default function CatalogMedicines({
                   <span>
                     {medicine.ingredients.join(', ') || '성분 정보 확인 필요'}
                   </span>
+                  <span className="product-dosage">
+                    <b>용법·용량</b>
+                    {formatProductText(medicine.product_info?.dosage) ||
+                      '용법·용량 정보 확인 필요'}
+                  </span>
                   <span className="catalog-link">
                     효능·용법·주의사항 확인 →
                   </span>
@@ -77,10 +77,7 @@ export default function CatalogMedicines({
           onClose={closeMedicine}
           className="product-info-dialog"
         >
-          <Note>
-            실제 보관 상태와 유효기간은 확인되지 않았어요. 제품 정보이며 개인별
-            사용 권장이 아니에요.
-          </Note>
+          <Note>제품 정보이며 개인별 사용 권장이 아니에요.</Note>
           <MedicineUsage medicine={selectedMedicine} />
         </Dialog>
       )}

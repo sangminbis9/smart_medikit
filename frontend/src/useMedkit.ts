@@ -32,6 +32,7 @@ export function useMedkit() {
   const [error, setError] = useState('');
   const [live, setLive] = useState(false);
   const request = useRef<AbortController | null>(null);
+  const hasSnapshot = useRef(false);
 
   // 각 조회마다 이전 요청을 취소하고 데이터 전체를 한 번에 교체한다.
   const refresh = useCallback(
@@ -50,7 +51,8 @@ export function useMedkit() {
       }
       const controller = new AbortController();
       request.current = controller;
-      setStatus('loading');
+      // 첫 조회에만 로딩 영역을 표시하고 백그라운드 갱신은 기존 화면을 유지한다.
+      if (!hasSnapshot.current) setStatus('loading');
       const timeout = window.setTimeout(abortRequest, 12000);
       // 응답이 멈춘 요청은 종료하고 재시도할 수 있게 한다.
       function abortRequest() {
@@ -62,7 +64,31 @@ export function useMedkit() {
           getJson('/alerts', controller.signal),
         ]);
         if (request.current !== controller || controller.signal.aborted) return;
-        setData(parseData(inventory, alerts, settings.boxId));
+        const next = parseData(inventory, alerts, settings.boxId);
+        // 변하지 않은 목록과 치수의 참조를 유지해 3D 장면을 불필요하게 다시 만들지 않는다.
+        setData(function preserveUnchanged(previous) {
+          return {
+            ...next,
+            packages:
+              JSON.stringify(previous.packages) ===
+              JSON.stringify(next.packages)
+                ? previous.packages
+                : next.packages,
+            alerts:
+              JSON.stringify(previous.alerts) === JSON.stringify(next.alerts)
+                ? previous.alerts
+                : next.alerts,
+            box: {
+              ...next.box,
+              dimensions:
+                JSON.stringify(previous.box.dimensions) ===
+                JSON.stringify(next.box.dimensions)
+                  ? previous.box.dimensions
+                  : next.box.dimensions,
+            },
+          };
+        });
+        hasSnapshot.current = true;
         setError('');
         setStatus('ready');
       } catch {
@@ -197,6 +223,7 @@ export function useMedkit() {
   function toggleDemo() {
     request.current?.abort();
     request.current = null;
+    hasSnapshot.current = false;
     setData(demo ? emptyData() : makeDemo());
     setDemo(!demo);
     setError('');

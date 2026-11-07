@@ -384,18 +384,6 @@
   flex-direction: column;
   gap: 10px;
 }
-.care-unconfirmed-heading {
-  margin-top: 24px;
-  color: #465f55;
-  font-size: 15px;
-  font-weight: 700;
-}
-.care-unconfirmed-heading span {
-  margin-left: 6px;
-  color: #63736c;
-  font-size: 13px;
-}
-
 .indication-evidence {
   white-space: pre-line;
   line-height: 1.7;
@@ -404,6 +392,24 @@
 .indication-evidence b {
   display: block;
   margin-bottom: 4px;
+}
+.product-dosage {
+  display: block;
+  white-space: pre-line;
+  overflow-wrap: anywhere;
+  line-height: 1.7;
+}
+.product-dosage b,
+.package-dosage span {
+  display: block;
+}
+.product-dosage b {
+  color: #206d5c;
+  margin-bottom: 4px;
+}
+.package-dosage {
+  color: #536e64;
+  font-size: 12px;
 }
 
 .care-related-package {

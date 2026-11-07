@@ -154,11 +154,9 @@ export default function App() {
           )}
           {kit.status === 'ready' &&
             !kit.demo &&
-            kit.data.inventory_status !== 'CONFIRMED' && (
+            kit.data.inventory_status === 'PARTIAL' && (
               <div className="connection-banner" role="status">
-                {kit.data.inventory_status === 'PARTIAL'
-                  ? '보관 목록 일부만 확인되었어요. 누락된 정보가 있어 전체 보유 여부를 확정할 수 없어요.'
-                  : '제품 조회는 연결되었지만 현재 보관 재고·유효기간은 확인되지 않았어요.'}
+                일부 약품만 조회되었어요. 전체 목록 확인이 필요해요.
               </div>
             )}
           <Routes>

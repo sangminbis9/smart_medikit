@@ -13,6 +13,19 @@ import {
 } from './data';
 import { makeDemo } from './demo';
 import { readSettings } from './settings';
+import { formatProductText } from './MedicineUsage';
+
+// 사용정보의 빈 XML 서식을 제거하면서 내용과 표의 구분을 보존한다.
+describe('제품 사용정보 표시', function productText() {
+  // 빈 줄과 들여쓰기만 지우고 줄 순서와 탭을 유지한다.
+  it('빈 줄을 정리하고 사용정보의 줄과 표 구분을 보존한다', function spacing() {
+    expect(
+      formatProductText('  제목\r\n  \r\n   첫째  \n\t\n  둘째\t10 mg  \n'),
+    ).toBe('제목\n첫째\n둘째\t10 mg');
+    expect(formatProductText(' \n  \n')).toBe('');
+    expect(formatProductText(null)).toBe('');
+  });
+});
 
 // 빈 입력과 불확실한 의료정보의 표시 경계를 검증한다.
 describe('표시 정책', function policies() {

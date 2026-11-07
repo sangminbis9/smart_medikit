@@ -4,7 +4,7 @@ import type { CareGuide } from './careGuides';
 import { findIndicationMedicines } from './careMatching';
 import { expiryLabel } from './data';
 import type { Medkit } from './useMedkit';
-import MedicineUsage from './MedicineUsage';
+import MedicineUsage, { formatProductText } from './MedicineUsage';
 import { Badge, Dialog, Note } from './ui';
 
 // 선택 증상과 효능 원문이 일치하는 제품만 보여주고 사용정보를 연결한다.
@@ -89,7 +89,7 @@ export default function CareMedicines({
                   <strong>{medicine.name}</strong>
                   <span className="indication-evidence">
                     <b>등록된 효능·효과 원문</b>
-                    {medicine.product_info?.indications}
+                    {formatProductText(medicine.product_info?.indications)}
                   </span>
                   {!packages.length && (
                     <Badge tone="amber">보관 정보 미확인</Badge>

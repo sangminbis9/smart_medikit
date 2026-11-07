@@ -21,7 +21,7 @@
 - `/inventory`: `{box, packages, doses: [], inventory_status, catalog_medicines, catalog_complete, synced_at}`. `MEDICINE#<코드>/META` 제품 정보와 `PACKAGE#<포장 ID>/META` 보유 포장을 `product_codes`로 연결한다. 제품 정보만 추가하면 포장이 생기지 않는다. 날짜·수량·좌표·OTC 여부를 추측하지 않으며 쓰기 API는 없다.
 - `inventory_status=CONFIRMED`는 해당 보관함의 포장 레코드를 끝까지 읽었다는 뜻이다. 실물 재고·유효기간·안전성 검증 완료가 아니다. 빈 포장 목록도 전체 조회가 성공하면 `CONFIRMED`다. 페이지 한도 또는 잘못된 포장이 있으면 `PARTIAL`이다. 구버전 제품 전용 API의 `UNAVAILABLE`도 프론트엔드에서 지원한다.
 - `/alerts`: `{alerts: [], alerts_status: "UNAVAILABLE"}`. 알림 저장 계층이 없으므로 주의정보가 없다고 확정하지 않는다.
-- 식약처 허가 출처 `MFDS_PERMIT_DETAIL`의 효능·용법·주의사항만 선택적으로 반환한다. 오래된 테이블 항목에 허가정보가 없으면 `null`이다. `care_assessment`는 자동 생성하지 않는다.
+- 식약처 허가 출처 `MFDS_PERMIT_DETAIL`의 중첩 `product_info`와, `product_info_status=SUCCEEDED`인 기존 최상위 `indications`·`dosage`·`precautions`를 읽는다. 최상위 형식은 출처를 `DYNAMODB_PRODUCT_INFO`로 구분하며 `ocr-lambda/backend/mfds.py`의 기존 XML 변환기를 `medkit_mfds.py`로 ZIP에 포함해 재사용한다. 제목 속성·CDATA·문단·표를 평문으로 반환한다. 오래된 테이블 항목에 허가정보가 없으면 `null`이다. `care_assessment`는 자동 생성하지 않는다.
 - 한 요청에서 최대 100개 평가 항목 × 2페이지를 `ConsistentRead=true`로 읽는다. `LastEvaluatedKey`가 남으면 `catalog_complete=false`, `inventory_status=PARTIAL`이다. 여러 페이지를 읽는 동안의 변경까지 원자적으로 보장하지는 않는다. 테이블이 커지면 기존 조회 인덱스/접근 패턴을 팀과 합의해야 하며 무한 Scan으로 확대하지 않는다.
 - 필드 허용 목록으로 인식 이벤트·원본 OCR·사진 참조·민감 원문을 제외한다. 응답 `Cache-Control: no-store`; 서버/브라우저 로그에 데이터 본문을 남기지 않는다.
 
@@ -41,10 +41,10 @@
 }
 ```
 
-- `package_id`는 영문·숫자·`_`·`-` 1~100자이며 `pk` 접미사와 같아야 한다. `state`는 `REGISTERED`, `STORED`, `OUT`, `DEPLETED`, `DISPOSED` 중 하나다. 케어 보관 목록에는 `STORED`만 표시한다.
+- `package_id`는 영문·숫자·`_`·`-` 1~100자이며 `pk` 접미사와 같아야 한다. `state`는 `REGISTERED`, `STORED`, `OUT`, `DEPLETED`, `DISPOSED` 중 하나다. 케어 효능 검색에는 `STORED` 포장만 포함한다.
 - **`demo_public`을 지정할 필요가 없다.** 사용자 요청으로 항목별 공개 플래그와 일반약 제한을 제거했다. 같은 보관함의 `OTC`·`PRESCRIPTION` 포장을 모두 조회하며 기존 플래그가 `false`여도 포함한다. 무로그인 시연에서는 제품명·보관 상태·입력한 수량/회분·기한·추정 위치가 API 주소를 아는 사람에게 공개된다. 환자 식별정보·처방전 원문·자유 메모는 응답에서 제외한다.
 - 제품 레코드가 있으면 이름·성분·허가정보를 함께 표시한다. 연결이 빠지면 `name`(선택 문자열) 또는 미확인 이름으로 포장을 표시하고 효능을 추정하지 않는다. 이름만으로 실제 제품을 확정하지 않는다.
-- `MEDICINE` 제품만 저장해도 홈·케어의 **등록된 약품**에서 검색·열람할 수 있다. 보유 포장과 연결되지 않았으면 보관 상태·수량·유효기간은 미확인으로 표시하며 재고를 자동 생성하지 않는다.
+- `MEDICINE` 제품만 저장해도 홈의 **등록된 약품**에서 검색·열람할 수 있다. 케어 상세는 선택 증상과 저장된 효능이 일치하는 제품만 보여준다. 효능 누락·실패인 제품은 케어 검색에서 제외하며 전체 제품은 홈에서 확인한다. 보유 포장과 연결되지 않았으면 보관 상태·수량·유효기간은 미확인으로 표시하며 재고를 자동 생성하지 않는다.
 - `expiry`(Map)의 `actual_expiry`(String, `YYYY-MM-DD`)와 `verified`(Bool)는 실물 기한을 확인한 경우에만 입력한다. `temporary_management_date`는 별도 임시 날짜다.
 - `inventory`(Map)의 `stock_enabled`(Bool), `initial_qty`·`estimated_qty`(Number)는 정제·캡슐 일반약의 예상 수량이다. 시럽·연고 등에는 반환하지 않는다. 누락된 날짜·수량·위치는 `null`, 안전정보는 기본 `SAFETY_CHECK_PENDING`이다.
 - 웹은 새로고침·화면 복귀 때 조회하며 WebSocket이 없으면 보이는 화면에서 **30초 간격**으로 다시 조회한다. 항목 추가·수정에는 재배포가 필요 없다.

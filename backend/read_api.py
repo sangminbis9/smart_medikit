@@ -8,6 +8,16 @@ from datetime import date, datetime, timezone
 from decimal import Decimal
 
 
+# 배포 ZIP과 저장소 실행 모두 기존 OCR의 문서 변환기를 재사용한다.
+try:
+    from medkit_mfds import ApiError, document_text
+except ModuleNotFoundError:
+    from importlib import import_module
+
+    _mfds = import_module("ocr-lambda.backend.mfds")
+    ApiError, document_text = _mfds.ApiError, _mfds.document_text
+
+
 TABLE_NAME = "inha-capstone-02-medkit-data"
 _table = None
 
@@ -33,6 +43,14 @@ def get_table():
 # 공백뿐인 필드와 예상하지 않은 자료형은 미확인 값으로 남긴다.
 def clean_text(value):
     return value.strip() if isinstance(value, str) and value.strip() else None
+
+
+# 기존 OCR 변환 규칙으로 제목·본문·표 순서를 유지하고 잘못된 문서는 미확인으로 둔다.
+def product_text(value):
+    try:
+        return document_text(value)
+    except ApiError:
+        return None
 
 
 # 실제 달력 날짜만 사용하며 누락·잘못된 날짜를 추정하지 않는다.
@@ -76,7 +94,13 @@ def medicine_view(item):
     if isinstance(raw_info, dict) and raw_info.get("source") == "MFDS_PERMIT_DETAIL":
         info = {"source": "MFDS_PERMIT_DETAIL"}
         for field in ("indications", "dosage", "precautions"):
-            info[field] = clean_text(raw_info.get(field))
+            info[field] = product_text(raw_info.get(field))
+    elif item.get("product_info_status") == "SUCCEEDED":
+        # 현재 OCR 파이프라인은 사용정보를 최상위 필드에 저장한다.
+        fields = {field: product_text(item.get(field)) for field in ("indications", "dosage", "precautions")}
+        if any(fields.values()):
+            # 저장된 정보에 없는 공식 출처·전문가 승인을 만들어 붙이지 않는다.
+            info = {"source": "DYNAMODB_PRODUCT_INFO", **fields}
     form = item.get("form")
     return {
         "medicine_id": code,
@@ -151,7 +175,7 @@ def package_view(item, medicines, box_id):
 # 같은 보관함의 모든 제품·포장을 조회하고 누락·부분 페이지를 구분한다.
 def read_inventory(table, box_id):
     fields = ["pk", "sk", "product_code", "name", "form", "ingredients",
-              "ingredients_status", "product_info", "product_info_status",
+              "ingredients_status", "product_info", "product_info_status", "indications", "dosage", "precautions",
               "package_id", "box_id", "kind", "state", "product_codes", "expiry", "inventory",
               "remaining_doses", "position", "size_class", "base_color", "safety_status"]
     names = {f"#f{index}": name for index, name in enumerate(fields)}

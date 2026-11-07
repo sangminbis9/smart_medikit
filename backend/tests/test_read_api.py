@@ -4,6 +4,7 @@ import json
 import io
 import os
 import unittest
+import zipfile
 from decimal import Decimal
 from unittest.mock import Mock, call, patch
 
@@ -45,6 +46,36 @@ class FakeTable:
 
 
 class ReadApiTests(unittest.TestCase):
+    # 최상위 XML의 제목·CDATA·조건을 보존하고 기존 중첩 형식도 유지한다.
+    def test_flat_product_information(self):
+        item = product()
+        del item["product_info"]
+        item.update({
+            "product_info_status": "SUCCEEDED",
+            "indications": '<DOC title="효능효과"><SECTION><ARTICLE title="1. 합성 비염"/><ARTICLE title="2. 조건"><PARAGRAPH><![CDATA[감기로 인한 두통의 완화]]></PARAGRAPH></ARTICLE></SECTION></DOC>',
+            "dosage": '<DOC><SECTION><PARAGRAPH><![CDATA[<p>합성 사용법</p><p>합성 조건</p>]]></PARAGRAPH></SECTION></DOC>',
+            "precautions": "합성 주의사항",
+        })
+        info = read_api.medicine_view(item)["product_info"]
+        self.assertEqual(info["source"], "DYNAMODB_PRODUCT_INFO")
+        self.assertEqual(info["indications"], "효능효과\n1. 합성 비염\n2. 조건\n감기로 인한 두통의 완화")
+        self.assertIn("합성 사용법", info["dosage"])
+        self.assertIn("합성 조건", info["dosage"])
+        table = FakeTable([{"Items": [item]}])
+        result = read_api.read_inventory(table, "test-box")
+        self.assertEqual(result["catalog_medicines"][0]["indications"], [info["indications"]])
+        for field in ("indications", "dosage", "precautions"):
+            self.assertIn(field, table.calls[0]["ExpressionAttributeNames"].values())
+        item["product_info_status"] = "FAILED"
+        self.assertIsNone(read_api.medicine_view(item)["product_info"])
+        self.assertEqual(read_api.medicine_view(product())["product_info"]["source"], "MFDS_PERMIT_DETAIL")
+
+    # 깨진 XML·엔터티·빈 내용으로 효능을 만들어내지 않는다.
+    def test_invalid_product_information(self):
+        for value in (None, {}, '<DOC><ARTICLE', '<DOC/>', '<!DOCTYPE DOC [<!ENTITY a "두통">]><DOC>&a;</DOC>', 'x' * 400_001):
+            self.assertIsNone(read_api.product_text(value))
+        self.assertEqual(read_api.product_text('합성 두통 효능'), '합성 두통 효능')
+
     # 코드만 배포할 때 역할·환경변수·API를 변경하지 않고 동시 수정도 보호한다.
     def test_code_only_update_boundary(self):
         sdk = Mock()
@@ -63,6 +94,9 @@ class ReadApiTests(unittest.TestCase):
             update_code("123456789012")
         self.assertEqual(session.client.call_args_list, [call("sts"), call("lambda")])
         self.assertEqual(lambdas.update_function_code.call_args.kwargs["RevisionId"], "test-revision")
+        with zipfile.ZipFile(io.BytesIO(lambdas.update_function_code.call_args.kwargs["ZipFile"])) as archive:
+            self.assertEqual(set(archive.namelist()), {"read_api.py", "medkit_mfds.py"})
+            compile(archive.read("medkit_mfds.py"), "medkit_mfds.py", "exec")
         lambdas.update_function_configuration.assert_not_called()
         lambdas.update_function_code.reset_mock()
         lambdas.get_function.return_value["Tags"] = {}

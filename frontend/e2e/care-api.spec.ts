@@ -179,10 +179,10 @@ test('보유 포장 추가와 반출이 홈·케어에 반영된다', async func
     .filter({ visible: true })
     .click();
   const stored = page.getByRole('region', {
-    name: '보관 중인 약품',
+    name: '증상 관련 약품',
     exact: true,
   });
-  await expect(stored).toContainText('검증 전용 합성 제품');
+  await expect(stored).toHaveCount(0);
   await page.getByRole('link', { name: '두통', exact: true }).click();
   await expect(stored).toContainText('검증 전용 합성 제품');
   await expect(page.locator('.care-medicine-heading')).toContainText(
@@ -198,7 +198,9 @@ test('보유 포장 추가와 반출이 홈·케어에 반영된다', async func
   item.state = 'OUT';
   await page.clock.fastForward(31000);
   await expect(stored.locator('li')).toHaveCount(0);
-  await expect(stored).toContainText('현재 보관 중으로 등록된 약품이 없어요');
+  await expect(stored).toContainText(
+    '등록된 효능 정보에서 이 증상과 일치하는 약품을 찾지 못했어요',
+  );
   await page
     .getByRole('link', { name: '홈', exact: true })
     .filter({ visible: true })
@@ -216,6 +218,8 @@ test('보관함의 일반약과 처방약을 모두 검색한다', async functio
   prescription.kind = 'PRESCRIPTION';
   prescription.name = '검증용 처방약 봉투';
   prescription.medicines[0].name = '처방 검색용 합성약';
+  prescription.medicines[0].medicine_id = 'prescription-product';
+  prescription.medicines[0].product_code = '000000002';
   prescription.medicines[0].ingredients = ['처방 검색용 성분'];
   prescription.medicines[0].care_assessment = null;
   // 두 종류의 보관 약품이 동일한 조회 응답으로 들어오는 상황을 재현한다.
@@ -251,12 +255,12 @@ test('보관함의 일반약과 처방약을 모두 검색한다', async functio
     .filter({ visible: true })
     .click();
   const stored = page.getByRole('region', {
-    name: '보관 중인 약품',
+    name: '증상 관련 약품',
     exact: true,
   });
-  await expect(stored.locator('li')).toHaveCount(2);
-  await expect(stored).toContainText('검증용 처방약 봉투');
+  await expect(stored).toHaveCount(0);
   await page.getByRole('link', { name: '두통', exact: true }).click();
+  await expect(stored).toContainText('검증용 처방약 봉투');
   await expect(stored.locator('li')).toHaveCount(2);
   await expect(page.locator('.care-product')).not.toContainText(
     '검증용 처방약 봉투',
@@ -276,6 +280,9 @@ test('제품만 등록해도 홈·케어에서 표시하고 검색한다', async
     medicine.name = `등록 제품 ${index + 1}`;
     medicine.ingredients = [`시험 성분 ${index + 1}`];
     medicine.care_assessment = null;
+    medicine.product_info!.source = 'DYNAMODB_PRODUCT_INFO';
+    medicine.product_info!.indications =
+      index < 2 ? '감기로 인한 두통의 완화' : '알레르기성 비염의 완화';
     return medicine;
   });
   let fail = false;
@@ -300,6 +307,8 @@ test('제품만 등록해도 홈·케어에서 표시하고 검색한다', async
     exact: true,
   });
   await expect(catalog.locator('li')).toHaveCount(4);
+  await expect(page.locator('.scene canvas')).toBeVisible();
+  await expect(page.getByText('포장 위치 정보가 아직 없어요')).toBeVisible();
   await expect(page.locator('.package-card')).toHaveCount(0);
   await expect(page.getByText('보관 중 0', { exact: true })).toHaveCount(0);
   await expect(
@@ -325,9 +334,20 @@ test('제품만 등록해도 홈·케어에서 표시하고 검색한다', async
     .getByRole('link', { name: '케어 가이드', exact: true })
     .filter({ visible: true })
     .click();
-  await expect(catalog.locator('li')).toHaveCount(4);
+  await expect(catalog).toHaveCount(0);
   await page.getByRole('link', { name: '두통', exact: true }).click();
-  await expect(catalog.locator('li')).toHaveCount(4);
+  const related = page.getByRole('region', {
+    name: '증상 관련 약품',
+    exact: true,
+  });
+  await expect(related.locator('li')).toHaveCount(2);
+  await expect(related).toContainText('감기로 인한 두통의 완화');
+  await expect(related).not.toContainText('등록 제품 3');
+  await related
+    .getByRole('button', { name: '등록 제품 1 · 사용법 상세' })
+    .click();
+  await expect(page.getByRole('dialog')).toContainText('합성 사용법');
+  await page.getByRole('button', { name: '닫기', exact: true }).click();
   await expect(page.locator('.care-medicine-heading')).toContainText(
     '확인 필요',
   );
@@ -380,17 +400,12 @@ test('제품 캐시만 있으면 보유 여부와 사용정보 부족을 알린�
       exact: true,
     }),
   ).toHaveCount(0);
-  await expect(
-    page.getByRole('region', { name: '등록된 약품', exact: true }),
-  ).toContainText('보관 정보 미확인');
-  await page
-    .getByRole('button', { name: '검증 전용 합성 제품 · 사용법 상세' })
-    .click();
-  await expect(page.getByRole('dialog')).toContainText(
-    '의약품 사용정보 확인 필요',
-  );
-  await page.getByRole('button', { name: '닫기', exact: true }).click();
-  await expect(page.getByRole('dialog')).toHaveCount(0);
+  const related = page.getByRole('region', {
+    name: '증상 관련 약품',
+    exact: true,
+  });
+  await expect(related.locator('li')).toHaveCount(0);
+  await expect(related).toContainText('효능 정보를 확인할 수 없는 제품 1개');
   inventoryStatus = 'PARTIAL';
   await page.reload();
   await expect(page.locator('.care-match-reason')).toContainText(

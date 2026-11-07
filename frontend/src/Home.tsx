@@ -194,54 +194,65 @@ export default function Home({
         </div>
         <span>약 이름 또는 효능·효과로 검색</span>
       </div>
-      <CatalogMedicines kit={kit} query={query} />
-      {!catalogOnly && (
-        <div className="home-grid">
-          <div className="scene-column">
-            <Suspense
-              fallback={
-                <div className="cabinet scene-loading" role="status">
-                  3D 보관함을 준비하고 있어요…
-                </div>
-              }
-            >
-              <Cabinet
-                items={items}
-                alerts={data.alerts}
-                selected={selectedId}
-                dimensions={data.box.dimensions || settings.dimensions}
-                demo={demo}
-                onSelect={select}
-              />
-            </Suspense>
-            {active ? (
-              <Link
-                className="focus-summary"
-                to={`/packages/${active.package_id}`}
-              >
-                <div className="flex items-center justify-between gap-3">
-                  <h2>
-                    {String(index + 1).padStart(2, '0')} {active.name}
-                  </h2>
-                  <span>선택된 약품</span>
-                </div>
-                <p>
-                  {active.position ? '위치 추정' : '위치 미확인'} ·{' '}
-                  {active.note || '포장 정보를 확인해주세요.'}
-                </p>
-              </Link>
-            ) : (
-              <div className="focus-summary">
-                <h2>
-                  {query ? '검색 결과가 없어요' : '아직 보관된 약품이 없어요'}
-                </h2>
-                <p>보관함 카메라로 등록한 약품이 여기에 표시돼요.</p>
+      <div className="home-grid">
+        <div className="scene-column">
+          <Suspense
+            fallback={
+              <div className="cabinet scene-loading" role="status">
+                3D 보관함을 준비하고 있어요…
               </div>
-            )}
-            <p className="scene-caption">
-              가려진 약품의 위치는 실제 배치와 다를 수 있어요.
-            </p>
-          </div>
+            }
+          >
+            <Cabinet
+              items={items}
+              alerts={data.alerts}
+              selected={selectedId}
+              dimensions={data.box.dimensions || settings.dimensions}
+              demo={demo}
+              onSelect={select}
+            />
+          </Suspense>
+          {active ? (
+            <Link
+              className="focus-summary"
+              to={`/packages/${active.package_id}`}
+            >
+              <div className="flex items-center justify-between gap-3">
+                <h2>
+                  {String(index + 1).padStart(2, '0')} {active.name}
+                </h2>
+                <span>선택된 약품</span>
+              </div>
+              <p>
+                {active.position ? '위치 추정' : '위치 미확인'} ·{' '}
+                {active.note || '포장 정보를 확인해주세요.'}
+              </p>
+            </Link>
+          ) : (
+            <div
+              className={`focus-summary${catalogOnly ? ' catalog-position-note' : ''}`}
+            >
+              <h2>
+                {catalogOnly
+                  ? '포장 위치 정보가 아직 없어요'
+                  : query
+                    ? '검색 결과가 없어요'
+                    : '아직 보관된 약품이 없어요'}
+              </h2>
+              <p>
+                {catalogOnly
+                  ? '등록된 제품은 목록에서 볼 수 있어요. 포장 위치가 연결되면 3D에 표시돼요.'
+                  : '보관함 카메라로 등록한 약품이 여기에 표시돼요.'}
+              </p>
+            </div>
+          )}
+          <p className="scene-caption">
+            가려진 약품의 위치는 실제 배치와 다를 수 있어요.
+          </p>
+        </div>
+        {catalogOnly ? (
+          <CatalogMedicines kit={kit} query={query} />
+        ) : (
           <section className="inventory" aria-label="보관 약품 목록">
             <div className="inventory-heading">
               <div className="flex items-center justify-between gap-3">
@@ -326,8 +337,9 @@ export default function Home({
               )}
             </div>
           </section>
-        </div>
-      )}
+        )}
+      </div>
+      {!catalogOnly && <CatalogMedicines kit={kit} query={query} />}
     </div>
   );
 }

@@ -11,6 +11,109 @@ export type CareMatch = {
 };
 type Medicine = Package['medicines'][number];
 
+// 진단이나 성분 추론 없이 효능 원문에서 찾을 증상 표현만 정의한다.
+const indicationTerms: Record<string, string[]> = {
+  headache: ['두통'],
+  fever: ['발열', '해열'],
+  'muscle-ache': ['근육통', '몸살'],
+  'period-pain': ['생리통', '월경통'],
+  'joint-pain': ['관절통'],
+  'runny-nose': ['콧물'],
+  'blocked-nose': ['코막힘', '비충혈'],
+  sneezing: ['재채기'],
+  'sore-throat': ['인후통', '목구멍통', '목의통증'],
+  'dry-cough': ['기침'],
+  'productive-cough': ['가래', '객담'],
+  indigestion: ['소화불량'],
+  heartburn: ['속쓰림', '위산과다', '위산역류'],
+  bloating: ['복부팽만', '복부가스'],
+  diarrhoea: ['설사'],
+  constipation: ['변비'],
+  'motion-sickness': ['멀미'],
+  'allergic-rhinitis': ['알레르기성비염', '알레르기비염'],
+  hives: ['두드러기', '피부가려움', '피부소양'],
+  'insect-bite': ['벌레물림', '벌레물린', '충자상'],
+  'mouth-ulcer': ['구내염'],
+  toothache: ['치통'],
+  'dry-eyes': ['안구건조', '눈의건조'],
+  'itchy-eyes': ['알레르기성결막염', '눈의가려움', '눈가려움'],
+  'athletes-foot': ['무좀', '족부백선'],
+  'contact-dermatitis': ['접촉성피부염', '접촉피부염'],
+  acne: ['여드름'],
+  'cold-sore': ['구순포진', '입술포진'],
+  cuts: ['베인상처', '찰과상', '절상'],
+  burns: ['화상'],
+  sprains: ['염좌', '타박상', '타박통'],
+  sunburn: ['햇볕화상', '일광화상', '햇빛화상'],
+};
+
+// 띄어쓰기와 괄호 안 쉬운말 설명 차이를 검색에만 정규화한다.
+function normalizeIndication(text: string) {
+  return text.normalize('NFKC').replace(/[()]/g, '').replace(/\s/g, '');
+}
+
+// 보관 제품과 포장 미연결 제품의 효능에서 선택 증상을 찾고 원문 근거를 반환한다.
+export function findIndicationMedicines(data: Data, symptomId: string) {
+  const terms = indicationTerms[symptomId] || [];
+  const candidates = new Map<
+    string,
+    { medicine: Medicine; packages: Package[] }
+  >();
+  for (const item of data.packages) {
+    if (item.state !== 'STORED') continue;
+    for (const medicine of item.medicines) {
+      const key = medicine.product_code || medicine.medicine_id;
+      const candidate = candidates.get(key);
+      if (candidate) candidate.packages.push(item);
+      else candidates.set(key, { medicine, packages: [item] });
+    }
+  }
+  for (const medicine of findCatalogMedicines(data)) {
+    const key = medicine.product_code || medicine.medicine_id;
+    if (!candidates.has(key)) candidates.set(key, { medicine, packages: [] });
+  }
+  const matches: {
+    medicine: Medicine;
+    packages: Package[];
+    evidence: string;
+  }[] = [];
+  let unavailableCount = 0;
+  for (const candidate of candidates.values()) {
+    const info = candidate.medicine.product_info;
+    if (
+      candidate.medicine.product_info_status !== 'SUCCEEDED' ||
+      !info?.indications?.trim()
+    ) {
+      unavailableCount++;
+      continue;
+    }
+    // 문장 전체를 남겨 감기 등 적용 조건을 검색 결과에서 숨기지 않는다.
+    const evidence = info.indications
+      .split(/\n|(?<=[.!?。])\s+/)
+      .filter(
+        // 부정·제외 문장은 긍정 효능 근거로 사용하지 않는다.
+        function relevant(sentence) {
+          const normalized = normalizeIndication(sentence);
+          if (
+            /(효과|효능).{0,8}없|제외|금기|사용하지|투여하지|적응증.{0,8}아니/.test(
+              normalized,
+            )
+          )
+            return false;
+          return terms.some(
+            // 이름·성분·주의사항은 검색 판단에 사용하지 않는다.
+            function includes(term) {
+              return normalized.includes(term);
+            },
+          );
+        },
+      )
+      .join('\n');
+    if (evidence) matches.push({ ...candidate, evidence });
+  }
+  return { matches, unavailableCount };
+}
+
 // 조회 성공과 보관 재고의 완성 여부를 구분해 미확인 사유를 안내한다.
 export function careInventoryNotice(data: Data, queryReady: boolean) {
   if (!queryReady) return '최신 보관함 정보를 확인할 수 없어요.';
@@ -19,7 +122,7 @@ export function careInventoryNotice(data: Data, queryReady: boolean) {
   if (data.inventory_status === 'PARTIAL')
     return '조회는 완료됐지만 일부 보관 정보가 아직 확인되지 않았어요. 관련 약품의 보유 여부는 확인이 필요해요.';
   if (findCatalogMedicines(data).length > 0)
-    return '등록된 제품 정보는 조회됐지만 보관 상태·유효기간이 아직 연결되지 않았어요. 아래 등록된 약품에서 제품 정보를 확인해주세요.';
+    return '등록된 제품 정보는 조회됐지만 보관 상태·유효기간이 아직 연결되지 않았어요. 관련 약품의 제품 정보를 확인해주세요.';
   return null;
 }
 
@@ -30,6 +133,7 @@ export function verifiedAssessment(medicine: Medicine, now = new Date()) {
   if (
     !assessment ||
     !info ||
+    info.source !== 'MFDS_PERMIT_DETAIL' ||
     medicine.product_info_status !== 'SUCCEEDED' ||
     !medicine.product_code ||
     assessment.product_code !== medicine.product_code ||

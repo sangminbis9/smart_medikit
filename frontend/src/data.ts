@@ -11,7 +11,7 @@ export const dimensionsSchema = z.object({
 });
 
 const productInfoSchema = z.object({
-  source: z.literal('MFDS_PERMIT_DETAIL'),
+  source: z.enum(['MFDS_PERMIT_DETAIL', 'DYNAMODB_PRODUCT_INFO']),
   indications: text,
   dosage: text,
   precautions: text,

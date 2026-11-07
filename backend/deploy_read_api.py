@@ -98,6 +98,7 @@ def deploy(account, app_id, use_school_role=False):
     buffer = io.BytesIO()
     with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as archive:
         archive.write(Path(__file__).with_name("read_api.py"), "read_api.py")
+        archive.write(Path(__file__).resolve().parents[1] / "ocr-lambda/backend/mfds.py", "medkit_mfds.py")
     lambdas = session.client("lambda")
     environment = {"Variables": {"MEDKIT_BOX_ID": BOX, "MEDKIT_DEMO_PUBLIC_READ": "true"}}
     # 미생성 함수에는 소유 태그가 없어 개별 조회가 거부되므로 목록에서 존재를 확인한다.
@@ -207,6 +208,7 @@ def update_code(account):
     buffer = io.BytesIO()
     with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as archive:
         archive.write(Path(__file__).with_name("read_api.py"), "read_api.py")
+        archive.write(Path(__file__).resolve().parents[1] / "ocr-lambda/backend/mfds.py", "medkit_mfds.py")
     # 확인 후 다른 작업자가 갱신했으면 덮어쓰지 않고 AWS가 충돌로 중단한다.
     lambdas.update_function_code(FunctionName=NAME, ZipFile=buffer.getvalue(), RevisionId=config["RevisionId"])
     lambdas.get_waiter("function_updated_v2").wait(FunctionName=NAME)

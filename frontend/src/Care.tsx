@@ -14,10 +14,10 @@ import {
 import { expiryLabel, stockLabel } from './data';
 import type { Medkit } from './useMedkit';
 import { Badge, EmptyState, Icon, Note } from './ui';
-import CatalogMedicines from './CatalogMedicines';
+import CareMedicines from './CareMedicines';
 
 // 검색과 카테고리를 주소에 남겨 상세 화면에서 돌아와도 탐색을 유지한다.
-export function CareIndex({ kit }: { kit: Medkit }) {
+export function CareIndex() {
   const [params, setParams] = useSearchParams();
   const query = params.get('q') || '';
   const category = params.get('category') || '';
@@ -141,69 +141,13 @@ export function CareIndex({ kit }: { kit: Medkit }) {
           },
         )}
       </div>
-      <StoredMedicines kit={kit} />
-      <CatalogMedicines kit={kit} />
+
       <Note tone="neutral">
         일반적인 건강 정보이며 진단이나 개인별 복용 지시가 아니에요.
         어린이·임산부·기저질환자·다른 약을 복용 중인 분은 의사 또는 약사와 먼저
         상담하세요.
       </Note>
     </div>
-  );
-}
-
-// 실제 보관 목록을 증상별 사용 추천과 구분해 케어 첫 화면과 상세에서 공유한다.
-function StoredMedicines({ kit }: { kit: Medkit }) {
-  // 반출·소진·폐기한 포장은 현재 보관 목록에서 제외한다.
-  const stored = kit.data.packages.filter(function isStored(item) {
-    return item.state === 'STORED';
-  });
-  const queryReady = kit.online && kit.status === 'ready' && !kit.demo;
-  const notice = careInventoryNotice(kit.data, queryReady);
-  // 제품 정보만 있으면 빈 보관 수량 대신 아래 등록 제품 목록을 보여준다.
-  if (!kit.data.packages.length && kit.data.catalog_medicines.length)
-    return null;
-  return (
-    <section className="care-inventory" aria-label="보관 중인 약품">
-      <div className="care-section-heading">
-        <h2>보관 중인 약품</h2>
-        <span>{stored.length}개</span>
-      </div>
-      <p>
-        보관 목록이에요. 이 증상에 대한 복용 추천이 아니며, 효능·용법·주의사항을
-        확인해주세요.
-      </p>
-      {notice && <p className="care-data-notice">{notice}</p>}
-      {!stored.length && !notice && (
-        <p>현재 보관 중으로 등록된 약품이 없어요.</p>
-      )}
-      <ul>
-        {stored.map(
-          // 제품명을 누르면 홈과 같은 포장 상세와 실제 사용정보를 보여준다.
-          function storedMedicine(item) {
-            return (
-              <li key={item.package_id}>
-                <Link to={`/packages/${encodeURIComponent(item.package_id)}`}>
-                  <strong>{item.name}</strong>
-                  <span>사용정보 확인 →</span>
-                </Link>
-                <div className="flex flex-wrap gap-2">
-                  <Badge>
-                    {item.kind === 'PRESCRIPTION'
-                      ? '처방약 봉투'
-                      : '일반의약품'}
-                  </Badge>
-                  <Badge>{expiryLabel(item)}</Badge>
-                  {stockLabel(item) && (
-                    <Badge tone="amber">{stockLabel(item)}</Badge>
-                  )}
-                </div>
-              </li>
-            );
-          },
-        )}
-      </ul>
-    </section>
   );
 }
 
@@ -399,8 +343,7 @@ export function CareDetail({ kit }: { kit: Medkit }) {
           )}
         </aside>
       </div>
-      <StoredMedicines kit={kit} />
-      <CatalogMedicines kit={kit} />
+      <CareMedicines kit={kit} guide={guide} />
       <section className="care-warnings" aria-labelledby="care-warning-title">
         <h2 id="care-warning-title">이럴 때는 진료가 필요해요</h2>
         <ul>

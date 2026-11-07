@@ -366,8 +366,40 @@
   border-radius: 24px;
   flex-shrink: 0;
 }
-.home-page > .catalog-medicines {
+.home-page > .catalog-medicines,
+.home-grid > .catalog-medicines {
   margin-top: 0;
+}
+
+.home-grid > .catalog-medicines {
+  align-self: start;
+}
+
+.focus-summary.catalog-position-note {
+  display: block;
+}
+
+.care-related-card {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.indication-evidence {
+  white-space: pre-line;
+  line-height: 1.7;
+}
+
+.indication-evidence b {
+  display: block;
+  margin-bottom: 4px;
+}
+
+.care-related-package {
+  padding: 0 12px 12px;
+  font-size: 12px;
+  line-height: 1.7;
+  overflow-wrap: anywhere;
 }
 .catalog-heading {
   display: flex;

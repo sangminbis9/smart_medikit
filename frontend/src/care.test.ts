@@ -5,10 +5,136 @@ import {
   careNotice,
   findCareGuides,
 } from './careGuides';
-import { matchCareMedicines } from './careMatching';
+import { findIndicationMedicines, matchCareMedicines } from './careMatching';
 import { emptyData, packageSchema, snapshotSchema, type Package } from './data';
 
 const now = new Date('2026-11-02T12:00:00+09:00');
+
+// 효능 검색용 제품을 만들며 검토 승인과 실제 보유는 부여하지 않는다.
+function indicationData(text: string) {
+  const medicine = reviewedPackage().medicines[0];
+  medicine.care_assessment = null;
+  medicine.product_info = {
+    source: 'DYNAMODB_PRODUCT_INFO',
+    indications: text,
+    dosage: null,
+    precautions: null,
+  };
+  return {
+    ...emptyData(),
+    catalog_medicines: [medicine],
+    catalog_complete: true,
+  };
+}
+
+// 증상 검색은 효능 원문에 한정하고 임의의 보유·복용 승인을 만들지 않는다.
+describe('DynamoDB 효능 검색', function indicationSearch() {
+  // 괄호 속 증상 목록과 적용 조건을 보존한다.
+  it('감기 효능의 두통·인후통을 찾고 비염은 제외한다', function symptoms() {
+    const data = indicationData(
+      '감기의 제증상(여러 증상)(두통, 인후(목구멍)통, 발열)의 완화',
+    );
+    expect(findIndicationMedicines(data, 'headache').matches[0].evidence).toBe(
+      data.catalog_medicines[0].product_info!.indications,
+    );
+    expect(findIndicationMedicines(data, 'sore-throat').matches).toHaveLength(
+      1,
+    );
+    expect(
+      findIndicationMedicines(data, 'allergic-rhinitis').matches,
+    ).toHaveLength(0);
+    expect(findIndicationMedicines(data, 'unknown').matches).toHaveLength(0);
+    expect(data.catalog_medicines[0].care_assessment).toBeNull();
+  });
+  // 각 가이드의 대표 표현이 누락되지 않도록 검사한다.
+  it('32개 증상에 대응하는 효능 표현을 지원한다', function coverage() {
+    const terms = [
+      '두통',
+      '발열',
+      '근육통',
+      '월경통',
+      '관절통',
+      '콧물',
+      '코막힘',
+      '재채기',
+      '인후통',
+      '기침',
+      '가래',
+      '소화불량',
+      '속쓰림',
+      '복부 팽만',
+      '설사',
+      '변비',
+      '멀미',
+      '알레르기성 비염',
+      '두드러기',
+      '벌레 물림',
+      '구내염',
+      '치통',
+      '안구건조',
+      '알레르기성 결막염',
+      '무좀',
+      '접촉성 피부염',
+      '여드름',
+      '구순포진',
+      '찰과상',
+      '화상',
+      '염좌',
+      '일광화상',
+    ];
+    for (const [index, guide] of careGuides.entries())
+      expect(
+        findIndicationMedicines(
+          indicationData(terms[index] + '의 완화'),
+          guide.id,
+        ).matches,
+      ).toHaveLength(1);
+  });
+  // 주의사항·성분·제품명 또는 효능 부정 문구를 근거로 쓰지 않는다.
+  it('효능 외 필드와 부정 문장은 제외한다', function noFalseMatch() {
+    const data = indicationData('소화불량의 완화. 두통에는 효과가 없다.');
+    const medicine = data.catalog_medicines[0];
+    medicine.name = '두통 검색 제품';
+    medicine.ingredients = ['두통'];
+    medicine.indications = ['두통'];
+    medicine.product_info!.precautions = '두통이 나타날 수 있음';
+    expect(findIndicationMedicines(data, 'headache').matches).toHaveLength(0);
+    expect(findIndicationMedicines(data, 'indigestion').matches).toHaveLength(
+      1,
+    );
+  });
+  // 누락·조회 실패한 효능을 제품명으로 보완하지 않는다.
+  it('효능 누락과 실패를 구분해 개수를 알린다', function missing() {
+    const data = indicationData('두통');
+    data.catalog_medicines[0].product_info_status = 'FAILED';
+    expect(findIndicationMedicines(data, 'headache')).toEqual({
+      matches: [],
+      unavailableCount: 1,
+    });
+    data.catalog_medicines[0].product_info_status = 'SUCCEEDED';
+    data.catalog_medicines[0].product_info = null;
+    expect(findIndicationMedicines(data, 'headache').unavailableCount).toBe(1);
+  });
+  // 동일 제품의 포장은 합치고 반출 제품은 카탈로그에서 다시 노출하지 않는다.
+  it('보관 일반약·처방약을 검색하고 중복과 반출을 제외한다', function packages() {
+    const item = reviewedPackage();
+    const data = {
+      ...emptyData(),
+      packages: [item],
+      catalog_medicines: [item.medicines[0]],
+    };
+    const second = structuredClone(item);
+    second.package_id = 'second';
+    second.kind = 'PRESCRIPTION';
+    data.packages.push(second);
+    expect(findIndicationMedicines(data, 'headache').matches).toHaveLength(1);
+    expect(
+      findIndicationMedicines(data, 'headache').matches[0].packages,
+    ).toHaveLength(2);
+    item.state = second.state = 'OUT';
+    expect(findIndicationMedicines(data, 'headache').matches).toHaveLength(0);
+  });
+});
 
 // 실제 허가 약품과 혼동되지 않는 합성 검토 자료를 만든다.
 function reviewedPackage(): Package {

@@ -175,7 +175,7 @@ export default function App() {
               }
             />
             <Route path="/schedule" element={<Schedule kit={kit} />} />
-            <Route path="/care" element={<CareIndex kit={kit} />} />
+            <Route path="/care" element={<CareIndex />} />
             <Route path="/care/:symptomId" element={<CareDetail kit={kit} />} />
             <Route path="/alerts" element={<Alerts kit={kit} />} />
             <Route path="/packages/:id" element={<PackageDetail kit={kit} />} />

@@ -47,82 +47,38 @@ function syntheticPackage() {
   });
 }
 
-// 최신 재고·미확인·주의·빈 목록·조회 실패가 UI에서도 서로 구분되는지 확인한다.
-test('API 상태와 사용정보를 안전하게 표시한다', async function safety({
+// 승인 상태가 있는 합성 제품도 복용 판단으로 표시하지 않는다.
+test('검토 상태를 복용 추천으로 표시하지 않는다', async function safety({
   page,
 }) {
-  let item = syntheticPackage();
-  let packages = [item];
-  let fail = false;
-  let alertType: 'DUPLICATE_INGREDIENT' | 'DUR_CONTRAINDICATION' | null = null;
-  // 응답 데이터는 합성 자료로 한정하고 실제 AWS로 요청하지 않는다.
+  const item = syntheticPackage();
+  item.medicines[0].product_info!.indications =
+    '감기 증상에 따른 두통 완화\n추가 적용 조건';
+  // 실제 AWS가 아닌 합성 자료로 원문과 판단 배제 여부를 검사한다.
   await page.route('**/api/**', async function respond(route) {
-    const url = new URL(route.request().url());
-    expect(url.searchParams.get('box_id')).toBe('test-box');
-    const alerts = alertType
-      ? [
-          {
-            alert_id: 'synthetic-alert',
-            type: alertType,
-            title: '합성 주의정보',
-            body: '검증용',
-            package_ids: [item.package_id],
-            occurred_at: '2026-01-01T00:00:00Z',
-          },
-        ]
-      : [];
     await route.fulfill({
-      status: fail ? 503 : 200,
-      json: url.pathname.endsWith('inventory')
+      json: route.request().url().includes('/inventory')
         ? {
             box: { box_id: 'test-box' },
-            packages,
+            packages: [item],
             inventory_status: 'CONFIRMED',
+            catalog_complete: true,
           }
-        : { alerts, alerts_status: 'CONFIRMED' },
-      headers: { 'Cache-Control': 'no-store' },
+        : { alerts: [], alerts_status: 'CONFIRMED' },
     });
   });
   await page.goto('/care/headache');
-  await expect(page.locator('.care-product .badge')).toHaveText('보유');
-  await page
-    .getByRole('link', { name: '사용법 상세 · 검증 전용 합성 제품' })
-    .click();
-  await expect(page.getByText('합성 사용법', { exact: true })).toBeVisible();
-  await expect(page.getByText('합성 주의사항', { exact: true })).toBeVisible();
-  item.expiry.verified = false;
-  await page.goto('/care/headache');
-  await expect(page.locator('.care-product .badge')).toHaveText('확인 필요');
-  for (const type of [
-    'DUPLICATE_INGREDIENT',
-    'DUR_CONTRAINDICATION',
-  ] as const) {
-    alertType = type;
-    await page.reload();
-    await expect(page.locator('.care-product .badge')).toHaveText('사용 주의');
-    await expect(page.locator('.care-product .badge')).toHaveClass(
-      type === 'DUR_CONTRAINDICATION' ? /badge-red/ : /badge-amber/,
-    );
-  }
-  alertType = null;
-  packages = [];
-  await page.reload();
-  await expect(page.locator('.care-medicine-heading')).toContainText('미보유');
-  item = syntheticPackage();
-  packages = [item];
-  await page.reload();
-  await expect(page.locator('.care-product .badge')).toHaveText('보유');
-  fail = true;
-  // 화면 복귀 재조회가 실패하면 메모리에 남은 제품도 확정 보유로 표시하지 않는다.
-  await page.evaluate(function returnToPage() {
-    document.dispatchEvent(new Event('visibilitychange'));
+  const related = page.getByRole('region', {
+    name: '효능 원문 검색 결과',
+    exact: true,
   });
-  await expect(page.getByRole('alert')).toContainText(
-    '최신 정보를 가져오지 못했어요',
-  );
-  await expect(page.locator('.care-product .badge')).toHaveText('확인 필요');
-  await expect(page.locator('.care-match-reason')).toHaveText(
-    '최신 보관함 정보를 확인할 수 없어요.',
+  await expect(related).toContainText('추가 적용 조건');
+  await expect(related).toContainText('판단할 수 없어요');
+  await expect(
+    page.locator('.care-medicine-heading, .care-product'),
+  ).toHaveCount(0);
+  await expect(page.locator('.care-health-notice')).toContainText(
+    '의료 전문가의 검토를 받지 않은',
   );
 });
 
@@ -179,15 +135,13 @@ test('보유 포장 추가와 반출이 홈·케어에 반영된다', async func
     .filter({ visible: true })
     .click();
   const stored = page.getByRole('region', {
-    name: '증상 관련 약품',
+    name: '효능 원문 검색 결과',
     exact: true,
   });
   await expect(stored).toHaveCount(0);
   await page.getByRole('link', { name: '두통', exact: true }).click();
   await expect(stored).toContainText('검증 전용 합성 제품');
-  await expect(page.locator('.care-medicine-heading')).toContainText(
-    '확인 필요',
-  );
+  await expect(page.locator('.care-medicine-heading')).toHaveCount(0);
   await expect(page.locator('.care-product')).toHaveCount(0);
   await expect(
     page.getByRole('region', { name: '등록된 약품', exact: true }),
@@ -199,7 +153,7 @@ test('보유 포장 추가와 반출이 홈·케어에 반영된다', async func
   await page.clock.fastForward(31000);
   await expect(stored.locator('li')).toHaveCount(0);
   await expect(stored).toContainText(
-    '등록된 효능 정보에서 이 증상과 일치하는 약품을 찾지 못했어요',
+    '등록된 효능 문구에서 일치하는 표현을 찾지 못했어요',
   );
   await page
     .getByRole('link', { name: '홈', exact: true })
@@ -255,16 +209,14 @@ test('보관함의 일반약과 처방약을 모두 검색한다', async functio
     .filter({ visible: true })
     .click();
   const stored = page.getByRole('region', {
-    name: '증상 관련 약품',
+    name: '효능 원문 검색 결과',
     exact: true,
   });
   await expect(stored).toHaveCount(0);
   await page.getByRole('link', { name: '두통', exact: true }).click();
   await expect(stored).toContainText('검증용 처방약 봉투');
   await expect(stored.locator('li')).toHaveCount(2);
-  await expect(page.locator('.care-product')).not.toContainText(
-    '검증용 처방약 봉투',
-  );
+  await expect(page.locator('.care-product')).toHaveCount(0);
 });
 
 // 포장이 없는 제품 4개도 홈·케어에서 바로 보고 검색하며 조회 실패를 구분한다.
@@ -337,7 +289,7 @@ test('제품만 등록해도 홈·케어에서 표시하고 검색한다', async
   await expect(catalog).toHaveCount(0);
   await page.getByRole('link', { name: '두통', exact: true }).click();
   const related = page.getByRole('region', {
-    name: '증상 관련 약품',
+    name: '효능 원문 검색 결과',
     exact: true,
   });
   await expect(related.locator('li')).toHaveCount(2);
@@ -348,9 +300,7 @@ test('제품만 등록해도 홈·케어에서 표시하고 검색한다', async
     .click();
   await expect(page.getByRole('dialog')).toContainText('합성 사용법');
   await page.getByRole('button', { name: '닫기', exact: true }).click();
-  await expect(page.locator('.care-medicine-heading')).toContainText(
-    '확인 필요',
-  );
+  await expect(page.locator('.care-medicine-heading')).toHaveCount(0);
   await expect(page.locator('.care-product')).toHaveCount(0);
   await page
     .getByRole('link', { name: '홈', exact: true })
@@ -386,34 +336,16 @@ test('제품 캐시만 있으면 보유 여부와 사용정보 부족을 알린�
   });
   await page.goto('/care/headache');
   await expect(page.locator('.care-product')).toHaveCount(0);
-  await expect(page.locator('.care-medicine-heading')).toContainText(
-    '확인 필요',
-  );
-  await expect(page.locator('.care-match-reason')).toContainText(
-    '제품 조회는 연결되어 있어요',
-  );
-  await expect(page.locator('.care-side-note .care-data-notice')).toContainText(
-    '실제 보관 여부·유효기간 정보가 없어',
-  );
-  await expect(
-    page.getByText('최신 보관함 정보를 확인할 수 없어요.', {
-      exact: true,
-    }),
-  ).toHaveCount(0);
+  await expect(page.locator('.care-medicine-heading')).toHaveCount(0);
   const related = page.getByRole('region', {
-    name: '증상 관련 약품',
+    name: '효능 원문 검색 결과',
     exact: true,
   });
   await expect(related.locator('li')).toHaveCount(0);
   await expect(related).toContainText('효능 정보를 확인할 수 없는 제품 1개');
   inventoryStatus = 'PARTIAL';
   await page.reload();
-  await expect(page.locator('.care-match-reason')).toContainText(
-    '조회는 완료됐지만 일부 보관 정보',
-  );
-  await expect(page.locator('.care-medicine-heading')).toContainText(
-    '확인 필요',
-  );
+  await expect(related).toContainText('일부 정보만 조회되었어요');
   await page.goto('/alerts');
   await expect(page.getByText(/알림 이력이 아직 연결되지/)).toBeVisible();
 });

@@ -31,8 +31,9 @@ test('케어 검색 → 상세 → 목록 복귀와 32개 가이드', async func
   await expect(
     page.getByRole('heading', { name: '마른기침', exact: true }),
   ).toBeVisible();
-  await expect(page.locator('.care-medicine-heading')).toContainText(
-    '확인 필요',
+  await expect(page.locator('.care-medicine-heading')).toHaveCount(0);
+  await expect(page.locator('.care-health-notice')).toContainText(
+    '의료 전문가의 검토를 받지 않은',
   );
   await expect(page.locator('.care-product')).toHaveCount(0);
   await page.screenshot({

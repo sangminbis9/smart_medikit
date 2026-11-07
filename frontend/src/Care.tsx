@@ -1,17 +1,6 @@
 import { useEffect, useRef, type ChangeEvent } from 'react';
 import { Link, useParams, useSearchParams } from 'react-router-dom';
-import {
-  careCategories,
-  careGuides,
-  findCareGuides,
-  medicineCategories,
-} from './careGuides';
-import {
-  careInventoryNotice,
-  matchCareMedicines,
-  type CareStatus,
-} from './careMatching';
-import { expiryLabel, stockLabel } from './data';
+import { careCategories, careGuides, findCareGuides } from './careGuides';
 import type { Medkit } from './useMedkit';
 import { Badge, EmptyState, Icon, Note } from './ui';
 import CareMedicines from './CareMedicines';
@@ -43,7 +32,7 @@ export function CareIndex() {
         <p>
           어디가 불편하신가요?
           <br />
-          먼저 할 수 있는 대처부터, 보관 중인 약품 정보까지 살펴보세요.
+          일반적인 건강정보와 등록된 제품의 효능 원문을 살펴보세요.
         </p>
         <div className="care-counts">
           <span>8개 카테고리</span>
@@ -143,9 +132,9 @@ export function CareIndex() {
       </div>
 
       <Note tone="neutral">
-        일반적인 건강 정보이며 진단이나 개인별 복용 지시가 아니에요.
-        어린이·임산부·기저질환자·다른 약을 복용 중인 분은 의사 또는 약사와 먼저
-        상담하세요.
+        의료 전문가의 검토를 받지 않은 시연용 일반 건강정보이며 진단이나 개인별
+        복용 지시가 아니에요. 어린이·임산부·기저질환자·다른 약을 복용 중인 분은
+        의사 또는 약사와 먼저 상담하세요.
       </Note>
     </div>
   );
@@ -183,8 +172,6 @@ export function CareDetail({ kit }: { kit: Medkit }) {
         </EmptyState>
       </div>
     );
-  const queryReady = kit.online && kit.status === 'ready' && !kit.demo;
-  const inventoryNotice = careInventoryNotice(kit.data, queryReady);
   return (
     <div className="standard-page care-page care-detail">
       <Link className="care-back" to={back}>
@@ -210,7 +197,7 @@ export function CareDetail({ kit }: { kit: Medkit }) {
       <div className="care-detail-grid">
         <section aria-labelledby="care-steps-title">
           <div className="care-section-heading">
-            <h2 id="care-steps-title">단계별 케어 가이드</h2>
+            <h2 id="care-steps-title">일반 건강정보</h2>
             <span>{guide.steps.length}단계</span>
           </div>
           <ol className="care-steps">
@@ -228,94 +215,6 @@ export function CareDetail({ kit }: { kit: Medkit }) {
                     <div className="care-step-content">
                       <h3>{item.title}</h3>
                       <p>{item.description}</p>
-                      {item.medicineCategories.map(
-                        // 제품명 검색과 분리한 근거 기반 상태를 표시한다.
-                        function medicines(category) {
-                          const result = matchCareMedicines(
-                            kit.data,
-                            guide.id,
-                            category,
-                            queryReady,
-                          );
-                          return (
-                            <div className="care-medicines" key={category}>
-                              <div className="care-medicine-heading">
-                                <strong>{medicineCategories[category]}</strong>
-                                <Badge
-                                  tone={statusTone(
-                                    result.status,
-                                    result.warningTone,
-                                  )}
-                                >
-                                  {result.status}
-                                </Badge>
-                              </div>
-                              <p className="care-match-reason">
-                                {result.reason}
-                              </p>
-                              {result.matches.map(
-                                // 검토 조건과 포장 상태를 숨기지 않고 상세 페이지로 연결한다.
-                                function product(match) {
-                                  return (
-                                    <article
-                                      className="care-product"
-                                      key={match.item.package_id}
-                                    >
-                                      <span className="care-product-icon">
-                                        <Icon name="pill" />
-                                      </span>
-                                      <div>
-                                        <h4>{match.item.name}</h4>
-                                        <Badge
-                                          tone={statusTone(
-                                            match.status,
-                                            match.warningTone,
-                                          )}
-                                        >
-                                          {match.status}
-                                        </Badge>
-                                        <p>{expiryLabel(match.item)}</p>
-                                        {stockLabel(match.item) && (
-                                          <p>{stockLabel(match.item)}</p>
-                                        )}
-                                        {match.reasons.map(
-                                          // 미확인·주의 근거를 제품 가까이에 표시한다.
-                                          function reason(text) {
-                                            return <p key={text}>{text}</p>;
-                                          },
-                                        )}
-                                        <details>
-                                          <summary>허가 적용 조건 확인</summary>
-                                          <ul>
-                                            {match.conditions.map(
-                                              // 개인별 적합성은 자동 판단하지 않는다.
-                                              function condition(text) {
-                                                return (
-                                                  <li key={text}>{text}</li>
-                                                );
-                                              },
-                                            )}
-                                          </ul>
-                                        </details>
-                                        <Link
-                                          className="secondary-button"
-                                          to={`/packages/${encodeURIComponent(match.item.package_id)}`}
-                                        >
-                                          사용법 상세
-                                          <span className="sr-only">
-                                            {' '}
-                                            · {match.item.name}
-                                          </span>
-                                        </Link>
-                                      </div>
-                                    </article>
-                                  );
-                                },
-                              )}
-                            </div>
-                          );
-                        },
-                      )}
                     </div>
                   </li>
                 );
@@ -324,23 +223,19 @@ export function CareDetail({ kit }: { kit: Medkit }) {
           </ol>
         </section>
         <aside className="care-side-note">
-          <Icon name="pill" />
-          <h2>우리집 약품, 확인부터</h2>
+          <Icon name="info" />
+          <h2>안내를 확인하기 전에</h2>
           <p>
-            보유 표시는 허가 효능과 연결된 보관 정보예요. 지금 나에게 안전한
-            약이라는 뜻은 아니에요.
+            일반 건강정보를 살펴보는 시연 화면이며 의료 전문가의 검토를 받지
+            않았어요.
           </p>
           <p>
-            어린이·임산부·기저질환자·다른 약을 복용 중인 분은 의사 또는 약사와
-            먼저 상담하세요.
+            진단이나 치료·복용 결정을 대신하지 않아요. 증상이나 약 사용은 의사
+            또는 약사와 상담하세요.
           </p>
           <Link className="text-button" to="/">
             보관함 살펴보기 →
           </Link>
-          {kit.demo && <Badge tone="amber">시연 정보 · 실제 보유 아님</Badge>}
-          {inventoryNotice && (
-            <p className="care-data-notice">{inventoryNotice}</p>
-          )}
         </aside>
       </div>
       <CareMedicines kit={kit} guide={guide} />
@@ -378,15 +273,4 @@ export function CareDetail({ kit }: { kit: Medkit }) {
       </section>
     </div>
   );
-}
-
-// 상태의 뜻을 한국어 배지와 일관된 색으로 표현한다.
-function statusTone(status: CareStatus, warningTone: 'amber' | 'red') {
-  return status === '보유'
-    ? 'green'
-    : status === '사용 주의'
-      ? warningTone
-      : status === '확인 필요'
-        ? 'amber'
-        : 'neutral';
 }

@@ -8,13 +8,20 @@ import { Dialog, Note } from './ui';
 export default function CatalogMedicines({
   kit,
   query = '',
+  medicineIds,
 }: {
   kit: Medkit;
   query?: string;
+  medicineIds?: ReadonlySet<string>;
 }) {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const allMedicines = findCatalogMedicines(kit.data);
-  const medicines = findCatalogMedicines(kit.data, query);
+  const medicines = findCatalogMedicines(kit.data, query).filter(
+    // 분류 선택 시 효능 문구가 일치한 등록 제품만 표시한다.
+    function inCategory(medicine) {
+      return !medicineIds || medicineIds.has(medicine.medicine_id);
+    },
+  );
   // 재조회 뒤 사라지거나 포장과 연결된 제품의 오래된 상세를 남기지 않는다.
   const selectedMedicine = allMedicines.find(function selected(medicine) {
     return medicine.medicine_id === selectedId;
@@ -36,7 +43,7 @@ export default function CatalogMedicines({
         <p role="status">이전 조회 결과예요. 최신 정보 확인이 필요해요.</p>
       )}
       {!medicines.length && (
-        <p>일치하는 등록 약품이 없어요. 다른 이름이나 성분으로 검색해주세요.</p>
+        <p>일치하는 등록 약품이 없어요. 검색어나 분류를 바꿔보세요.</p>
       )}
       <ul className="catalog-list">
         {medicines.map(

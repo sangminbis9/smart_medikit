@@ -5,7 +5,11 @@ import {
   careNotice,
   findCareGuides,
 } from './careGuides';
-import { findIndicationMedicines, matchCareMedicines } from './careMatching';
+import {
+  findCategoryMedicines,
+  findIndicationMedicines,
+  matchCareMedicines,
+} from './careMatching';
 import { emptyData, packageSchema, snapshotSchema, type Package } from './data';
 
 const now = new Date('2026-11-02T12:00:00+09:00');
@@ -29,6 +33,22 @@ function indicationData(text: string) {
 
 // 증상 검색은 효능 원문에 한정하고 임의의 보유·복용 승인을 만들지 않는다.
 describe('DynamoDB 효능 검색', function indicationSearch() {
+  // 홈 분류는 이름이 아니라 해당 분류의 증상에 대응하는 효능으로 검색한다.
+  it('카테고리 내 여러 증상의 효능을 독립적으로 찾는다', function category() {
+    const data = indicationData('두통, 인후통 완화');
+    const id = data.catalog_medicines[0].medicine_id;
+    expect(
+      findCategoryMedicines(data, '통증 및 발열').medicineIds.has(id),
+    ).toBe(true);
+    expect(
+      findCategoryMedicines(data, '감기 및 호흡기').medicineIds.has(id),
+    ).toBe(true);
+    expect(findCategoryMedicines(data, '소화기').medicineIds.size).toBe(0);
+    data.catalog_medicines[0].product_info_status = 'FAILED';
+    expect(findCategoryMedicines(data, '통증 및 발열').medicineIds.size).toBe(
+      0,
+    );
+  });
   // 괄호 속 증상 목록과 적용 조건을 보존한다.
   it('감기 효능의 두통·인후통을 찾고 비염은 제외한다', function symptoms() {
     const data = indicationData(

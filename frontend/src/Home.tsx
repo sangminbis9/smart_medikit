@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect, useMemo, useRef } from 'react';
+import { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import {
   expiryLabel,
@@ -9,6 +9,8 @@ import {
   type Package,
 } from './data';
 import CatalogMedicines from './CatalogMedicines';
+import { careCategories } from './careGuides';
+import { findCategoryMedicines } from './careMatching';
 import { formatDosageText } from './MedicineUsage';
 import { settings } from './settings';
 import type { Medkit } from './useMedkit';
@@ -48,14 +50,27 @@ export default function Home({
   const catalogOnly = data.packages.length === 0 && catalogCount > 0;
   const list = useRef<HTMLDivElement>(null);
   const scrollTarget = useRef<number | null>(null);
-  const filter = query === '' ? '전체' : query;
+  const [category, setCategory] = useState('');
+  // 분류별 증상의 효능 원문 일치 결과만 홈 필터에 사용한다.
+  const categoryMatches = useMemo(
+    function matchCategory() {
+      if (!category) return null;
+      return findCategoryMedicines(data, category);
+    },
+    [category, data],
+  );
   // 검색 결과를 계산하되 화면 크기 변경으로 상태를 초기화하지 않는다.
   const items = useMemo(
     // 현재 검색어와 일치하는 포장만 반환한다.
     function filtered() {
-      return findPackages(data.packages, query);
+      const found = findPackages(data.packages, query);
+      return categoryMatches
+        ? found.filter(function inCategory(item) {
+            return categoryMatches.packageIds.has(item.package_id);
+          })
+        : found;
     },
-    [data.packages, query],
+    [data.packages, query, categoryMatches],
   );
   // 현재 선택이 검색 결과에서 사라질 때만 첫 결과로 이동한다.
   const active =
@@ -121,11 +136,7 @@ export default function Home({
         card.scrollIntoView({ block: 'nearest', behavior: 'instant' });
     scrollTarget.current = list.current?.scrollTop ?? null;
   }
-  // 검색어와 바로가기 선택을 함께 변경한다.
-  function shortcut(value: string) {
-    setQuery(value === '전체' ? '' : value);
-  }
-  // 수동 검색 시 바로가기 강조를 해제한다.
+  // 검색어는 분류 선택과 독립적으로 적용한다.
   function search(value: string) {
     setQuery(value);
   }
@@ -139,7 +150,8 @@ export default function Home({
   }
   // 검색 필터를 해제해 전체 목록으로 돌아간다.
   function clear() {
-    shortcut('전체');
+    setQuery('');
+    setCategory('');
   }
 
   return (
@@ -169,21 +181,22 @@ export default function Home({
       </div>
       <div className="home-filters">
         <div className="chips">
-          {/* 효능 검색은 보유 약품을 찾는 기능이며 복용 추천이 아니다. */}
-          {['전체', '두통', '복통'].map(
-            /* 검색 바로가기 버튼을 표시한다. */ function chip(label) {
+          {/* 분류는 효능 원문 검색이며 개인별 복용 추천이 아니다. */}
+          {['전체', ...careCategories].map(
+            /* 케어 가이드와 같은 분류를 독립적으로 표시한다. */ function chip(
+              label,
+            ) {
               // 버튼에 해당하는 검색 조건을 적용한다.
               function choose() {
-                shortcut(label);
+                setCategory(label === '전체' ? '' : label);
               }
               return (
                 <button
                   key={label}
-                  className={`chip ${filter === label && (label === '전체' ? !query : query === label) ? 'active' : ''}`}
+                  className={`chip ${(label === '전체' ? !category : category === label) ? 'active' : ''}`}
                   onClick={choose}
                   aria-pressed={
-                    filter === label &&
-                    (label === '전체' ? !query : query === label)
+                    label === '전체' ? !category : category === label
                   }
                 >
                   {label}
@@ -192,7 +205,7 @@ export default function Home({
             },
           )}
         </div>
-        <span>약 이름 또는 효능·효과로 검색</span>
+        <span>분류는 효능 문구를 기준으로 검색해요.</span>
       </div>
       <div className="home-grid">
         <div className="scene-column">
@@ -236,7 +249,7 @@ export default function Home({
               <h2>
                 {catalogOnly
                   ? '포장 위치 정보가 아직 없어요'
-                  : query
+                  : query || category
                     ? '검색 결과가 없어요'
                     : '아직 보관된 약품이 없어요'}
               </h2>
@@ -252,7 +265,11 @@ export default function Home({
           </p>
         </div>
         {catalogOnly ? (
-          <CatalogMedicines kit={kit} query={query} />
+          <CatalogMedicines
+            kit={kit}
+            query={query}
+            medicineIds={categoryMatches?.medicineIds}
+          />
         ) : (
           <section className="inventory" aria-label="보관 약품 목록">
             <div className="inventory-heading">
@@ -315,12 +332,12 @@ export default function Home({
               ) : (
                 <EmptyState
                   title={
-                    query
+                    query || category
                       ? '일치하는 약품이 없어요'
                       : '첫 약품을 기다리고 있어요'
                   }
                   action={
-                    query ? (
+                    query || category ? (
                       <button className="secondary-button" onClick={clear}>
                         검색 초기화
                       </button>
@@ -331,7 +348,7 @@ export default function Home({
                     )
                   }
                 >
-                  {query
+                  {query || category
                     ? '약 이름이나 다른 검색어로 다시 찾아보세요.'
                     : '약 포장을 보관함 카메라에 보여주면 자동 등록돼요. 지금은 시연 데이터로 먼저 둘러볼 수 있어요.'}
                 </EmptyState>
@@ -340,7 +357,13 @@ export default function Home({
           </section>
         )}
       </div>
-      {!catalogOnly && <CatalogMedicines kit={kit} query={query} />}
+      {!catalogOnly && (
+        <CatalogMedicines
+          kit={kit}
+          query={query}
+          medicineIds={categoryMatches?.medicineIds}
+        />
+      )}
     </div>
   );
 }

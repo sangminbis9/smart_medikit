@@ -1,5 +1,5 @@
 import { dayKey, findCatalogMedicines, type Data, type Package } from './data';
-import type { MedicineCategory } from './careGuides';
+import { careGuides, type MedicineCategory } from './careGuides';
 
 export type CareStatus = '보유' | '미보유' | '확인 필요' | '사용 주의';
 export type CareMatch = {
@@ -112,6 +112,20 @@ export function findIndicationMedicines(data: Data, symptomId: string) {
     if (evidence) matches.push({ ...candidate, evidence });
   }
   return { matches, unavailableCount };
+}
+
+// 홈 분류에 속한 증상의 효능 검색 결과를 제품과 포장별로 모은다.
+export function findCategoryMedicines(data: Data, category: string) {
+  const packageIds = new Set<string>();
+  const medicineIds = new Set<string>();
+  for (const guide of careGuides) {
+    if (guide.category !== category) continue;
+    for (const match of findIndicationMedicines(data, guide.id).matches) {
+      medicineIds.add(match.medicine.medicine_id);
+      for (const item of match.packages) packageIds.add(item.package_id);
+    }
+  }
+  return { packageIds, medicineIds };
 }
 
 // 조회 성공과 보관 재고의 완성 여부를 구분해 미확인 사유를 안내한다.

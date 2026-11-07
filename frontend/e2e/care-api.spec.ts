@@ -349,3 +349,59 @@ test('제품 캐시만 있으면 보유 여부와 사용정보 부족을 알린�
   await page.goto('/alerts');
   await expect(page.getByText(/알림 이력이 아직 연결되지/)).toBeVisible();
 });
+
+// 긴 제품 정보가 작은 화면에서 스크롤되고 닫기 버튼을 유지하는지 확인한다.
+test('제품 정보 팝업이 화면 크기에 맞는다', async function responsiveDialog({
+  page,
+}) {
+  const medicine = syntheticPackage().medicines[0];
+  medicine.product_info!.precautions = Array(50)
+    .fill('합성 주의사항을 확인하세요.')
+    .join('\n');
+  // 개인 정보 없이 긴 제품 정보를 제공한다.
+  await page.route('**/api/**', async function respond(route) {
+    await route.fulfill({
+      json: route.request().url().includes('/inventory')
+        ? {
+            box: { box_id: 'test-box' },
+            packages: [],
+            inventory_status: 'CONFIRMED',
+            catalog_medicines: [medicine],
+            catalog_complete: true,
+          }
+        : { alerts: [], alerts_status: 'UNAVAILABLE' },
+    });
+  });
+  for (const viewport of [
+    { width: 320, height: 500 },
+    { width: 768, height: 700 },
+    { width: 1440, height: 960 },
+  ]) {
+    await page.setViewportSize(viewport);
+    await page.goto('/');
+    await page
+      .getByRole('button', { name: '검증 전용 합성 제품 · 사용법 상세' })
+      .click();
+    const dialog = page.getByRole('dialog');
+    await expect(dialog.getByText('주요 효능·효과')).toBeVisible();
+    await expect(dialog.getByText('용법·용량', { exact: true })).toBeVisible();
+    const bounds = await dialog.boundingBox();
+    expect(bounds).not.toBeNull();
+    expect(bounds!.x).toBeGreaterThanOrEqual(0);
+    expect(bounds!.y).toBeGreaterThanOrEqual(0);
+    expect(bounds!.x + bounds!.width).toBeLessThanOrEqual(viewport.width);
+    expect(bounds!.y + bounds!.height).toBeLessThanOrEqual(viewport.height);
+    // 스크롤한 후에도 닫기 버튼이 팝업 안에 남는지 확인한다.
+    await dialog.evaluate(function scrollToEnd(element) {
+      element.scrollTop = element.scrollHeight;
+    });
+    const close = dialog.getByRole('button', { name: '닫기', exact: true });
+    const closeBounds = await close.boundingBox();
+    expect(closeBounds!.y).toBeGreaterThanOrEqual(bounds!.y);
+    expect(closeBounds!.y + closeBounds!.height).toBeLessThanOrEqual(
+      bounds!.y + bounds!.height,
+    );
+    await close.click();
+    await expect(dialog).toHaveCount(0);
+  }
+});

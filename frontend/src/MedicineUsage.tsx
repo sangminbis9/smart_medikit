@@ -37,27 +37,27 @@ export default function MedicineUsage({ medicine }: { medicine: Medicine }) {
         <p>보관함에 등록된 제품 정보</p>
       )}
       {!complete && <Badge tone="amber">의약품 사용정보 확인 필요</Badge>}
-      <dl className="detail-fields">
-        <div>
+      <dl className="detail-fields medicine-usage-fields">
+        <div className="usage-indications">
           <dt>주요 효능·효과</dt>
           <dd>
             {formatProductText(info?.indications) || '효능·효과 확인 필요'}
           </dd>
         </div>
-        <div>
+        <div className="usage-dosage">
           <dt>용법·용량</dt>
           <dd>
             {formatProductText(info?.dosage) || '허가된 용법·용량 확인 필요'}
           </dd>
         </div>
-        <div>
+        <div className="usage-precautions">
           <dt>사용 시 주의사항</dt>
           <dd>
             {formatProductText(info?.precautions) ||
               '사용 시 주의사항 확인 필요'}
           </dd>
         </div>
-        <div>
+        <div className="usage-ingredients">
           <dt>주요 성분</dt>
           <dd>{medicine.ingredients.join(', ') || '성분 정보 확인 필요'}</dd>
         </div>

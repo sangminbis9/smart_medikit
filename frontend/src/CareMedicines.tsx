@@ -122,7 +122,11 @@ export default function CareMedicines({
         )}
       </ul>
       {selected && (
-        <Dialog title="제품 사용정보" onClose={close}>
+        <Dialog
+          title="제품 사용정보"
+          onClose={close}
+          className="product-info-dialog"
+        >
           <MedicineUsage medicine={selected.medicine} />
         </Dialog>
       )}

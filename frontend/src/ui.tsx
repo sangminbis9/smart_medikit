@@ -84,10 +84,12 @@ export function Dialog({
   title,
   children,
   onClose,
+  className = '',
 }: {
   title: string;
   children: ReactNode;
   onClose: () => void;
+  className?: string;
 }) {
   const ref = useRef<HTMLDialogElement>(null);
   // 대화상자를 열고 닫힐 때 이전 키보드 초점으로 복귀한다.
@@ -104,7 +106,7 @@ export function Dialog({
   return (
     <dialog
       ref={ref}
-      className="dialog"
+      className={`dialog ${className}`}
       onCancel={onClose}
       aria-labelledby="dialog-title"
     >

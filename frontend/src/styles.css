@@ -523,6 +523,34 @@
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
+.medicine-usage-fields {
+  margin: 20px 0;
+  gap: 12px;
+}
+.medicine-usage-fields > div {
+  padding: 18px 20px;
+  border-color: #dfebe5;
+  background: #f8fbf9;
+}
+.medicine-usage-fields dt {
+  color: #206d5c;
+  font-size: 14px;
+  font-weight: 700;
+  line-height: 1.5;
+}
+.medicine-usage-fields dd {
+  margin-top: 10px;
+  color: #29483f;
+  font-size: 14px;
+  line-height: 1.8;
+}
+.medicine-usage-fields .usage-precautions {
+  border-color: #efdeca;
+  background: #fffbf5;
+}
+.medicine-usage-fields .usage-precautions dt {
+  color: #965b24;
+}
 @media (max-width: 1000px) {
   .care-detail-grid {
     grid-template-columns: minmax(0, 1fr);
@@ -1609,6 +1637,26 @@ dd {
 .dialog .primary-button {
   width: 100%;
 }
+.product-info-dialog {
+  box-sizing: border-box;
+  width: min(760px, calc(100vw - 32px));
+  max-width: calc(100vw - 32px);
+  max-height: calc(100dvh - 32px);
+  overscroll-behavior: contain;
+}
+.product-info-dialog .dialog-heading {
+  position: sticky;
+  top: -24px;
+  z-index: 1;
+  margin: -24px -24px 20px;
+  padding: 20px 24px;
+  border-bottom: 1px solid #e5eee8;
+  background: #fff;
+}
+.product-info-dialog .dialog-heading h2 {
+  font-size: 18px;
+  font-weight: 700;
+}
 .edit-form {
   display: flex;
   flex-direction: column;
@@ -2043,6 +2091,14 @@ input[type='radio'] {
   }
   .dialog {
     padding: 20px;
+  }
+  .product-info-dialog .dialog-heading {
+    top: -20px;
+    margin: -20px -20px 16px;
+    padding: 16px 20px;
+  }
+  .medicine-usage-fields > div {
+    padding: 16px;
   }
   .edit-form input,
   .edit-form textarea {

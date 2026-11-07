@@ -72,7 +72,11 @@ export default function CatalogMedicines({
         )}
       </ul>
       {selectedMedicine && (
-        <Dialog title="제품 사용정보" onClose={closeMedicine}>
+        <Dialog
+          title="제품 사용정보"
+          onClose={closeMedicine}
+          className="product-info-dialog"
+        >
           <Note>
             실제 보관 상태와 유효기간은 확인되지 않았어요. 제품 정보이며 개인별
             사용 권장이 아니에요.

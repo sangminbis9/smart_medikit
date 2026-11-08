@@ -252,6 +252,16 @@ describe('케어 콘텐츠', function content() {
         expect(step.description.length).toBeGreaterThan(20);
     }
   });
+  // 원문 대조가 끝난 항목만 질병관리청 출처와 확인일을 표시한다.
+  it('검토 범위에 따라 출처와 확인일을 구분한다', function sourceAttribution() {
+    for (const item of careGuides) {
+      const updated = ['cuts', 'burns', 'sunburn'].includes(item.id);
+      expect(item.sources[0].url).toContain(
+        updated ? 'health.kdca.go.kr' : 'www.nhs.uk',
+      );
+      expect(item.sourceCheckedAt).toBe(updated ? '2026-11-07' : '2026-11-02');
+    }
+  });
   // 검색과 분류를 함께 적용하고 공백 검색도 지원한다.
   it('증상과 카테고리 검색이 동작한다', function search() {
     expect(findCareGuides('두통')[0].id).toBe('headache');

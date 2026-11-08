@@ -400,7 +400,7 @@ export function useMedicationPlans(demo: boolean) {
     storageLabel: demo
       ? '시연 기록 · 새로고침하면 초기화돼요'
       : publicAccess
-        ? 'AWS 공개 시연 목록 · 누구나 조회·수정·삭제할 수 있어요'
+        ? ''
         : 'AWS에 저장 · 공통 비밀번호로 같은 목록을 사용해요',
     save,
     remove,

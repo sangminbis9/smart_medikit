@@ -505,7 +505,7 @@ export function MedicationPlanForm({
             </label>
           </section>
           <p className="medication-hint">처방받은 내용을 직접 입력해 주세요.</p>
-          <p className="medication-hint">{storageLabel}</p>
+          {storageLabel && <p className="medication-hint">{storageLabel}</p>}
           {initial.title && (
             <p className="medication-hint">
               약 구성이나 일정을 바꾸면 이 묶음의 복용 확인 기록이 초기화돼요.

@@ -245,7 +245,6 @@ export default function MedicationPlans({
           <h2 id="medication-plans-title">
             복용 중인 약 <span>{active.length}</span>
           </h2>
-          <p>처방받은 여러 약을 하나의 묶음으로 관리하세요.</p>
         </div>
         <button
           type="button"
@@ -257,7 +256,7 @@ export default function MedicationPlans({
           복용약 등록
         </button>
       </div>
-      <p className="medication-storage-label">{storageLabel}</p>
+      {storageLabel && <p className="medication-storage-label">{storageLabel}</p>}
       {disabled && !editing && (
         <p className="medication-hint" role="status">
           변경사항을 저장하고 있어요…

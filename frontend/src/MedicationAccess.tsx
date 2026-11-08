@@ -2,19 +2,21 @@ import { useRef, useState, type FormEvent } from 'react';
 import { Icon } from './ui';
 import './medicationPlans.css';
 
-// 공통 비밀번호로 보호된 복용약 목록의 연결·잠금 상태를 안내한다.
+// 복용약 목록의 연결 상태와 비공개 모드의 잠금을 안내한다.
 export default function MedicationAccess({
   status,
   error,
   busy,
   onUnlock,
   onReload,
+  publicAccess,
 }: {
   status: 'unconfigured' | 'locked' | 'loading' | 'ready' | 'error';
   error: string;
   busy: boolean;
   onUnlock: (password: string) => Promise<boolean>;
   onReload: () => Promise<void>;
+  publicAccess: boolean;
 }) {
   const [password, setPassword] = useState('');
   const [pending, setPending] = useState(false);
@@ -83,8 +85,9 @@ export default function MedicationAccess({
         <div className="medication-access-message">
           <strong>복용약 저장 API 연결을 준비 중이에요</strong>
           <p>
-            연결이 완료되면 공통 비밀번호로 목록을 열고, 여러 기기에서 같은
-            복용약을 관리할 수 있어요.
+            {publicAccess
+              ? '연결이 완료되면 비밀번호 없이 공개 시연 목록을 관리할 수 있어요.'
+              : '연결이 완료되면 공통 비밀번호로 목록을 열고, 여러 기기에서 같은 복용약을 관리할 수 있어요.'}
           </p>
         </div>
       ) : status === 'locked' ? (

@@ -38,6 +38,7 @@ function configuredApi(): string {
   }
 }
 const apiUrl = configuredApi();
+const publicAccess = import.meta.env.VITE_MEDICATION_PUBLIC_DEMO === 'true';
 
 class ApiError extends Error {
   status: number;
@@ -48,7 +49,7 @@ class ApiError extends Error {
   }
 }
 
-// 인증된 별도 API에만 요청하며 비밀번호·토큰·복용약을 캐시나 로그에 남기지 않는다.
+// 별도 복용약 API에 요청하며 비밀번호·토큰·복용약을 캐시나 로그에 남기지 않는다.
 async function request(
   path: string,
   method: string,
@@ -74,8 +75,9 @@ async function request(
     });
     if (!response.ok) {
       const messages: Record<number, string> = {
-        401:
-          path === '/session'
+        401: publicAccess
+          ? '공개 시연 목록에 연결하지 못했어요. 잠시 후 다시 시도해주세요.'
+          : path === '/session'
             ? '공통 비밀번호를 확인해주세요.'
             : '잠금 해제 시간이 만료됐어요. 입력을 확인한 뒤 잠그고 다시 열어주세요.',
         403: '이 복용약 목록에 접근할 수 없어요.',
@@ -127,7 +129,7 @@ export function useMedicationPlans(demo: boolean) {
   });
   const [demoState, setDemoState] = useState(emptyMedicationState);
   const [status, setStatus] = useState<MedicationAccessStatus>(
-    apiUrl ? 'locked' : 'unconfigured',
+    apiUrl ? (publicAccess ? 'loading' : 'locked') : 'unconfigured',
   );
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
@@ -137,6 +139,11 @@ export function useMedicationPlans(demo: boolean) {
   const generation = useRef(0);
   const saving = useRef(false);
 
+  // 잠금이나 화면 전환 전에 시작한 요청의 응답을 무효화한다.
+  const invalidateRequests = useCallback(function invalidateRequests() {
+    generation.current++;
+  }, []);
+
   // 서버가 확인한 응답만 화면과 다음 변경의 기준으로 반영한다.
   const accept = useCallback(function accept(next: Snapshot) {
     current.current = next;
@@ -145,7 +152,13 @@ export function useMedicationPlans(demo: boolean) {
   // 화면 복귀나 새로고침 버튼으로 최신 공유 목록을 읽는다.
   const reload = useCallback(
     async function reload() {
-      if (!token.current || saving.current) return;
+      if (
+        !apiUrl ||
+        demo ||
+        (!publicAccess && !token.current) ||
+        saving.current
+      )
+        return;
       const session = generation.current;
       const revision = current.current.revision;
       try {
@@ -162,18 +175,34 @@ export function useMedicationPlans(demo: boolean) {
         setStatus('ready');
         setError('');
       } catch (cause) {
-        if (session === generation.current)
+        if (session === generation.current) {
           setError(
             cause instanceof Error
               ? cause.message
               : '목록을 불러오지 못했어요.',
           );
+          // 최초 공개 조회 실패만 오류 화면으로 바꾸고 이미 받은 목록은 유지한다.
+          if (publicAccess)
+            setStatus(function preserveKnownState(previous) {
+              return previous === 'ready' ? previous : 'error';
+            });
+        }
       }
     },
-    [accept],
+    [accept, demo],
   );
 
-  // 인증된 화면이 보일 때만 최신 목록을 조회한다.
+  // 공개 시연은 비밀번호 없이 시작하고 시연 데이터에서 돌아올 때도 AWS를 다시 읽는다.
+  useEffect(
+    function openPublicList() {
+      if (!publicAccess || demo || !apiUrl) return;
+      void reload();
+      return invalidateRequests;
+    },
+    [demo, reload, invalidateRequests],
+  );
+
+  // 목록이 열린 화면이 보일 때만 최신 상태를 조회한다.
   useEffect(
     function watchVisibility() {
       if (demo || status !== 'ready') return;
@@ -196,7 +225,7 @@ export function useMedicationPlans(demo: boolean) {
 
   // 비밀번호를 서버에서 검증하고 짧은 세션 토큰은 메모리에만 둔다.
   async function unlock(password: string): Promise<boolean> {
-    if (!apiUrl || saving.current) return false;
+    if (publicAccess || !apiUrl || saving.current) return false;
     saving.current = true;
     setBusy(true);
     setError('');
@@ -234,11 +263,11 @@ export function useMedicationPlans(demo: boolean) {
   }
   // 화면의 목록과 세션을 지우고 AWS에 저장한 데이터는 유지한다.
   function lock() {
-    generation.current++;
+    invalidateRequests();
     token.current = '';
     accept({ revision: 0, state: emptyMedicationState() });
     setError('');
-    setStatus(apiUrl ? 'locked' : 'unconfigured');
+    setStatus(apiUrl ? (publicAccess ? 'loading' : 'locked') : 'unconfigured');
   }
 
   // 버전이 일치하는 서버 쓰기의 성공 응답을 받은 뒤에만 변경을 확정한다.
@@ -257,7 +286,7 @@ export function useMedicationPlans(demo: boolean) {
         setDemoState(next);
         return true;
       }
-      if (!token.current)
+      if (!publicAccess && !token.current)
         throw new Error('공통 비밀번호로 목록을 먼저 열어주세요.');
       const nextState = transform(current.current.state);
       const next = parseSnapshot(
@@ -367,9 +396,12 @@ export function useMedicationPlans(demo: boolean) {
     status: demo ? ('ready' as const) : status,
     error,
     busy,
+    publicAccess,
     storageLabel: demo
       ? '시연 기록 · 새로고침하면 초기화돼요'
-      : 'AWS에 저장 · 공통 비밀번호로 같은 목록을 사용해요',
+      : publicAccess
+        ? 'AWS 공개 시연 목록 · 누구나 조회·수정·삭제할 수 있어요'
+        : 'AWS에 저장 · 공통 비밀번호로 같은 목록을 사용해요',
     save,
     remove,
     toggleEnded,

@@ -246,21 +246,28 @@ def prompt_credentials():
     return password_hash, encode_secret(os.urandom(32))
 
 
-# 기존 인증정보를 유지하며 명시적인 비밀번호 교체 때만 세션도 함께 만료시킨다.
-def build_environment(function, box_id, origin, rotate_password):
+# 접근 모드는 명시적 공개 선택 때만 바꾸고 재배포에서는 기존 설정과 인증정보를 유지한다.
+def build_environment(function, box_id, origin, rotate_password, public_demo=False):
     variables = dict((function or {}).get("Configuration", {}).get("Environment", {}).get("Variables", {}))
-    password_hash = variables.get("MEDKIT_PASSWORD_HASH")
-    signing_secret = variables.get("MEDKIT_SESSION_SECRET")
-    if rotate_password or not password_hash or not signing_secret:
-        password_hash, signing_secret = prompt_credentials()
-    elif not re.fullmatch(r"pbkdf2_sha256\$200000\$[A-Za-z0-9_-]{22}\$[A-Za-z0-9_-]{43}", password_hash) or not re.fullmatch(r"[A-Za-z0-9_-]{43,}", signing_secret):
-        raise RuntimeError("기존 인증 설정이 예상 형식과 다릅니다. 확인 후 비밀번호 교체 옵션을 사용하세요.")
+    if public_demo:
+        variables["MEDKIT_MEDICATION_PUBLIC_DEMO"] = "true"
+    else:
+        variables.setdefault("MEDKIT_MEDICATION_PUBLIC_DEMO", "false")
+    is_public = variables["MEDKIT_MEDICATION_PUBLIC_DEMO"] == "true"
+    if is_public and rotate_password:
+        raise RuntimeError("공개 시연에서는 비밀번호 교체 옵션을 함께 사용할 수 없습니다.")
+    if not is_public:
+        password_hash = variables.get("MEDKIT_PASSWORD_HASH")
+        signing_secret = variables.get("MEDKIT_SESSION_SECRET")
+        if rotate_password or not password_hash or not signing_secret:
+            password_hash, signing_secret = prompt_credentials()
+        elif not re.fullmatch(r"pbkdf2_sha256\$200000\$[A-Za-z0-9_-]{22}\$[A-Za-z0-9_-]{43}", password_hash) or not re.fullmatch(r"[A-Za-z0-9_-]{43,}", signing_secret):
+            raise RuntimeError("기존 인증 설정이 예상 형식과 다릅니다. 확인 후 비밀번호 교체 옵션을 사용하세요.")
+        variables.update({"MEDKIT_PASSWORD_HASH": password_hash, "MEDKIT_SESSION_SECRET": signing_secret})
     variables.update({
         "MEDKIT_MEDICATION_TABLE": TABLE,
         "MEDKIT_BOX_ID": box_id,
         "MEDKIT_ALLOWED_ORIGIN": origin,
-        "MEDKIT_PASSWORD_HASH": password_hash,
-        "MEDKIT_SESSION_SECRET": signing_secret,
     })
     # 공개 재고 API의 인증 생략 설정을 새 함수에 상속하지 않는다.
     variables.pop("MEDKIT_DEMO_PUBLIC_READ", None)
@@ -419,11 +426,12 @@ def invoke_medications(lambdas, origin, token, method, body=None):
         "headers": {
             "origin": origin,
             "content-type": "application/json",
-            "authorization": f"Bearer {token}",
         },
         "requestContext": {"http": {"method": method}},
         "body": None if body is None else json.dumps(body, separators=(",", ":")),
     }
+    if token:
+        event["headers"]["authorization"] = f"Bearer {token}"
     result = lambdas.invoke(FunctionName=NAME, Payload=json.dumps(event).encode("utf-8"))
     response = json.load(result["Payload"])
     if result.get("FunctionError") or response.get("statusCode") != 200:
@@ -460,6 +468,26 @@ def verify_storage(lambdas, origin, environment):
     if persisted["revision"] < 1 or (persisted["revision"] == 1 and persisted["state"] != empty_state):
         raise RuntimeError("초기 빈 항목을 저장한 뒤 다시 읽는 검증에 실패했습니다.")
     print("PERSISTENCE_GET_STATUS=200", flush=True)
+
+
+# 공개 접근과 입력 검증만 확인하며 빈 항목 생성이나 기존 데이터 쓰기는 수행하지 않는다.
+def verify_public_demo(lambdas, origin):
+    invoke_medications(lambdas, origin, None, "GET")
+    print("PUBLIC_GET_STATUS=200", flush=True)
+    # 음수 revision은 어떤 저장 상태에서도 유효하지 않아 테이블 쓰기 전에 거부된다.
+    event = {
+        "version": "2.0",
+        "rawPath": "/medications",
+        "headers": {"origin": origin, "content-type": "application/json"},
+        "requestContext": {"http": {"method": "PUT"}},
+        "body": json.dumps({"expected_revision": -1, "state": {"version": 1, "plans": [], "records": []}}),
+    }
+    result = lambdas.invoke(FunctionName=NAME, Payload=json.dumps(event).encode("utf-8"))
+    response = json.load(result["Payload"])
+    body = json.loads(response.get("body", "null"))
+    if result.get("FunctionError") or response.get("statusCode") != 422 or not isinstance(body, dict) or body.get("code") != "INVALID_STATE":
+        raise RuntimeError("공개 시연의 저장 입력 검증을 확인하지 못했습니다. API 연결을 중단합니다.")
+    print("PUBLIC_INVALID_PUT_STATUS=422", flush=True)
 
 
 # 이미 있는 호출 권한은 범위를 대조하고 다른 권한을 조용히 덮어쓰지 않는다.
@@ -547,7 +575,7 @@ def ensure_api(gateway, lambdas, existing, account, region, origin, function_arn
 
 
 # 조회만 하는 사전 점검과 승인 후 적용을 분리하며 기존 재고 API는 접근하지 않는다.
-def deploy(account, region, box_id, origin, apply=False, rotate_password=False):
+def deploy(account, region, box_id, origin, apply=False, rotate_password=False, public_demo=False):
     import boto3
 
     validate_options(account, region, box_id, origin)
@@ -574,18 +602,25 @@ def deploy(account, region, box_id, origin, apply=False, rotate_password=False):
         print("READ_ONLY: 변경하지 않았습니다. 검토 후 --apply로 적용하세요.", flush=True)
         return
     # 사용자 입력을 완료하기 전에는 AWS 자원을 만들거나 갱신하지 않는다.
-    environment = build_environment(function, box_id, origin, rotate_password)
+    environment = build_environment(function, box_id, origin, rotate_password, public_demo)
     ensure_table(dynamodb, table, account)
     if not logs_exist:
         logs.create_log_group(logGroupName=LOG_GROUP, tags=TAGS)
     logs.put_retention_policy(logGroupName=LOG_GROUP, retentionInDays=7)
     function_arn = ensure_function(lambdas, function, role["Arn"], environment, archive)
-    verify_deny(lambdas, origin)
-    verify_storage(lambdas, origin, environment)
+    is_public = environment["Variables"]["MEDKIT_MEDICATION_PUBLIC_DEMO"] == "true"
+    if is_public:
+        verify_public_demo(lambdas, origin)
+    else:
+        verify_deny(lambdas, origin)
+        verify_storage(lambdas, origin, environment)
     endpoint = ensure_api(gateway, lambdas, api, account, region, origin, function_arn)
     print(f"MEDICATION_API_URL={endpoint}", flush=True)
     print(f"TABLE={TABLE}\nBOX_ID={box_id}", flush=True)
-    print("DEPLOYED: 인증과 실제 저장소 접근 확인. 최초 빈 항목만 조건부 생성하며 기존 항목·IAM·재고 API·Amplify 설정은 변경하지 않았습니다.", flush=True)
+    if is_public:
+        print("DEPLOYED: 공개 시연 조회·입력 검증 확인. 목록을 누구나 조회·수정·삭제할 수 있습니다. 배포 중 데이터 항목은 변경하지 않았습니다.", flush=True)
+    else:
+        print("DEPLOYED: 인증과 실제 저장소 접근 확인. 최초 빈 항목만 조건부 생성하며 기존 항목·IAM·재고 API·Amplify 설정은 변경하지 않았습니다.", flush=True)
 
 
 # 비밀번호를 인수나 파일로 받지 않고 명시적 적용 옵션을 제공한다.
@@ -597,9 +632,10 @@ def main():
     parser.add_argument("--origin", required=True, help="끝의 / 없는 정확한 Amplify HTTPS origin")
     parser.add_argument("--apply", action="store_true", help="확인한 전용 AWS 자원 생성·갱신을 적용")
     parser.add_argument("--rotate-password", action="store_true", help="공통 비밀번호 교체와 기존 세션 만료")
+    parser.add_argument("--public-demo", action="store_true", help="누구나 복용약을 조회·수정·삭제하는 공개 시연으로 명시 전환")
     args = parser.parse_args()
     try:
-        deploy(args.account, args.region, args.box_id, args.origin, args.apply, args.rotate_password)
+        deploy(args.account, args.region, args.box_id, args.origin, args.apply, args.rotate_password, args.public_demo)
     except (RuntimeError, KeyboardInterrupt) as error:
         message = str(error) if isinstance(error, RuntimeError) else "사용자가 배포를 중단했습니다."
         print(f"중단: {message}", file=sys.stderr)

@@ -83,7 +83,7 @@ class MedicationApiTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.password = "synthetic-test-password"
-        salt = b"synthetic-salt-16"
+        salt = b"synthetic-salt16"
         digest = hashlib.pbkdf2_hmac("sha256", cls.password.encode(), salt, 200000)
         cls.environment = {
             "MEDKIT_MEDICATION_TABLE": api.TABLE_NAME,
@@ -407,6 +407,103 @@ class MedicationApiTests(unittest.TestCase):
         event = self.event()
         event["headers"]["authorization"] = f"Bearer {payload}.{signature}"
         self.assertEqual(self.call(event)[0]["statusCode"], 401)
+
+
+class MedicationPublicDemoTests(unittest.TestCase):
+    # 공개 모드에는 비밀번호와 서명키가 없어도 명시된 범위만 설정한다.
+    def setUp(self):
+        self.environment = {
+            "MEDKIT_MEDICATION_TABLE": api.TABLE_NAME,
+            "MEDKIT_BOX_ID": "synthetic-box",
+            "MEDKIT_ALLOWED_ORIGIN": "https://synthetic.example.com",
+            "MEDKIT_MEDICATION_PUBLIC_DEMO": "true",
+        }
+        environment = patch.dict(os.environ, self.environment, clear=True)
+        environment.start()
+        self.addCleanup(environment.stop)
+        self.table = FakeTable()
+        table = patch.object(api, "get_table", return_value=self.table)
+        self.table_mock = table.start()
+        self.addCleanup(table.stop)
+
+    # 토큰을 보내지 않는 공개 시연 요청을 호출한다.
+    def call(self, method="GET", body=None, path="/medications", origin=None):
+        event = {
+            "rawPath": path,
+            "requestContext": {"http": {"method": method}},
+            "headers": {"content-type": "application/json", "origin": origin or self.environment["MEDKIT_ALLOWED_ORIGIN"]},
+            "body": None if body is None else json.dumps(body),
+        }
+        response = api.lambda_handler(event, None)
+        return response, json.loads(response["body"])
+
+    # 명시적 공개 모드에서는 누구나 조회·수정하고 빈 목록으로 삭제할 수 있다.
+    def test_public_read_create_update_and_delete_without_credentials(self):
+        response, body = self.call()
+        self.assertEqual(response["statusCode"], 200)
+        self.assertEqual(body, {"revision": 0, "state": state()})
+        value = state(plan())
+        response, body = self.call("PUT", {"expected_revision": 0, "state": value})
+        self.assertEqual(response["statusCode"], 200)
+        self.assertEqual(body["revision"], 1)
+        value["plans"][0]["notes"] = "합성 공개 시연 수정"
+        response, body = self.call("PUT", {"expected_revision": 1, "state": value})
+        self.assertEqual(response["statusCode"], 200)
+        self.assertEqual(body["state"]["plans"][0]["notes"], "합성 공개 시연 수정")
+        response, body = self.call("PUT", {"expected_revision": 2, "state": state()})
+        self.assertEqual(response["statusCode"], 200)
+        self.assertEqual(body, {"revision": 3, "state": state()})
+        self.assertEqual(response["headers"]["Cache-Control"], "no-store")
+
+    # 누락·거짓·비슷한 문자열은 공개 승인으로 취급하지 않는다.
+    def test_public_flag_requires_exact_true_and_default_auth_stays_closed(self):
+        MedicationApiTests.setUpClass()
+        for value in (None, "false", "TRUE", "1", " true ", ""):
+            with self.subTest(value=value):
+                environment = dict(MedicationApiTests.environment)
+                if value is not None:
+                    environment["MEDKIT_MEDICATION_PUBLIC_DEMO"] = value
+                with patch.dict(os.environ, environment, clear=True):
+                    self.assertEqual(self.call()[0]["statusCode"], 401)
+        with patch.dict(os.environ, {"MEDKIT_MEDICATION_PUBLIC_DEMO": "false"}):
+            self.assertEqual(self.call()[0]["statusCode"], 503)
+        self.table_mock.assert_not_called()
+
+    # 공개 시연은 불필요한 비밀번호 세션 발급 경로를 닫는다.
+    def test_public_session_is_unavailable(self):
+        response, body = self.call("POST", {"password": "unused-synthetic-password"}, "/session")
+        self.assertEqual(response["statusCode"], 404)
+        self.assertEqual(body["code"], "SESSION_NOT_AVAILABLE")
+        self.table_mock.assert_not_called()
+
+    # 인증 생략과 무관하게 기존·동시 저장의 revision 충돌을 막는다.
+    def test_public_stale_and_racing_writes_are_rejected(self):
+        self.assertEqual(self.call("PUT", {"expected_revision": 0, "state": state(plan())})[0]["statusCode"], 200)
+        response, body = self.call("PUT", {"expected_revision": 0, "state": state()})
+        self.assertEqual(response["statusCode"], 409)
+        self.assertEqual(body["code"], "REVISION_CONFLICT")
+        self.table.concurrent_write = True
+        self.assertEqual(self.call("PUT", {"expected_revision": 1, "state": state()})[0]["statusCode"], 409)
+        self.assertEqual(len(self.table.writes), 1)
+
+    # 공개 상태에서도 손상 항목을 읽거나 빈 상태로 덮어쓰지 않는다.
+    def test_public_corrupt_data_and_malformed_state_fail(self):
+        response, _ = self.call("PUT", {"expected_revision": 0, "state": {"version": 1, "plans": "invalid", "records": []}})
+        self.assertEqual(response["statusCode"], 422)
+        self.table.item = {"revision": 1, "state": {"version": 1, "plans": None, "records": []}}
+        self.assertEqual(self.call()[1]["code"], "STORED_DATA_INVALID")
+        self.assertEqual(self.call("PUT", {"expected_revision": 1, "state": state()})[1]["code"], "STORED_DATA_INVALID")
+        self.assertEqual(self.table.writes, [])
+
+    # 공개 시연에서도 출처와 배열 크기 제한은 그대로 적용한다.
+    def test_public_origin_and_size_limits_remain(self):
+        self.assertEqual(self.call(origin="https://other.example.com")[0]["statusCode"], 403)
+        oversized = state()
+        oversized["plans"] = [plan(f"p{index}") for index in range(101)]
+        response, body = self.call("PUT", {"expected_revision": 0, "state": oversized})
+        self.assertEqual(response["statusCode"], 422)
+        self.assertEqual(body["code"], "LIMIT_EXCEEDED")
+        self.assertEqual(self.table.writes, [])
 
 
 # 파일 직접 실행과 unittest 모듈 실행에서 같은 합성 검증을 제공한다.

@@ -46,7 +46,7 @@ frontend/    # React·TypeScript·Tailwind CSS·PWA·Three.js 반응형 웹
 ## 웹/PWA와 AWS 역할
 
 - **Pi → S3 → ECR Lambda(PaddleOCR+OpenCV) → DynamoDB**의 촬영·식별·상태 처리와 API Gateway·WebSocket·EventBridge Scheduler를 유지한다. 예상 재고·복약·DUR·유효기간 정책은 `plan.md`를 따른다.
-- 수동 복용약은 묶음별 공통 일정과 약마다 다른 복용법을 기록한다. **공통 비밀번호로 여는 AWS 공유 목록**으로 설계하며 전용 `inha-capstone-02-medkit-medications` 테이블과 `smart-medikit-medication-api`를 사용한다. 비밀번호를 아는 팀원은 같은 목록을 조회·수정·삭제할 수 있고 개인별로 분리되지 않는다. 비밀번호·2시간 접근 토큰·복용약은 브라우저 영구 저장소에 남기지 않으며 새로고침 후 다시 잠금을 해제한다. 공개 재고 API에는 전송하지 않고 앱 시연 모드 기록은 메모리에서만 관리한다. 배포·검증 상태는 [프론트엔드 안내](frontend/README.md)와 [백엔드 안내](backend/README.md)를 따른다.
+- 수동 복용약은 묶음별 공통 일정과 약마다 다른 복용법을 기록한다. 사용자가 승인한 **비밀번호 없는 공개 시연용 AWS 단일 목록**으로, 전용 `inha-capstone-02-medkit-medications` 테이블과 `smart-medikit-medication-api`를 사용한다. 공개 모드에서는 누구나 약 이름·일정·복용 기록·메모를 조회·수정·삭제할 수 있으므로 **합성 시연 데이터만 입력하고 개인정보는 입력하지 않는다.** 기존 재고 API와 분리하며 브라우저 영구 저장은 사용하지 않는다. 서버 공개 플래그의 기본값은 비공개이고 기존 비밀번호 경로를 유지한다. 메모리 시연은 AWS 공개 목록과 별개다. 배포·검증 상태는 [프론트엔드 안내](frontend/README.md)와 [백엔드 안내](backend/README.md)를 따른다.
 - 기존 웹 처방전 보완 OCR·약봉투 재고 연결은 과거 설계로 보존하며, 수동 복용약 등록의 필수 흐름으로 사용하지 않는다.
 - **Lambda → Web Push(VAPID) → Service Worker**로 알림을 보내고 DynamoDB에 브라우저별 구독을 저장한다. 알림 허용·구독 완료 대상 모두에 발송하며 권한 거부·미지원 환경에서도 웹 알림 이력은 조회할 수 있다.
 - iPhone 푸시는 **iOS 16.4 이상에서 홈 화면에 추가한 PWA를 열고 사용자 동작으로 알림을 허용·구독**해야 한다. 일반 Safari 탭은 기본 웹 기능을 제공하고 홈 화면 설치를 안내한다. 환경별 제약과 공식 근거는 [`plan.md` 7절](plan.md#7-react-반응형-웹pwa-및-다중-기기)을 참고한다.

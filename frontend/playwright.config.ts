@@ -3,7 +3,9 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 const apiMode = process.env.MEDKIT_E2E_API === '1';
-const medicationMode = process.env.MEDKIT_E2E_MEDICATION === '1';
+const publicMedicationMode = process.env.MEDKIT_E2E_MEDICATION_PUBLIC === '1';
+const medicationMode =
+  process.env.MEDKIT_E2E_MEDICATION === '1' || publicMedicationMode;
 const baseURL = medicationMode
   ? 'http://127.0.0.1:4175'
   : apiMode
@@ -50,6 +52,7 @@ export default defineConfig({
     env: medicationMode
       ? {
           VITE_MEDICATION_API_URL: `${baseURL}/medication-api`,
+          VITE_MEDICATION_PUBLIC_DEMO: publicMedicationMode ? 'true' : 'false',
           VITE_API_URL: '',
           VITE_BOX_ID: 'test-box',
         }

@@ -1,4 +1,4 @@
-"""공통 비밀번호로 접근하는 팀 복용약을 별도 DynamoDB 항목에 조건부 저장한다."""
+"""승인된 접근 모드에 따라 팀 복용약을 별도 DynamoDB 항목에 조건부 저장한다."""
 
 import base64
 import hashlib
@@ -49,19 +49,12 @@ def decode_urlsafe(value):
     return decoded
 
 
-# 비공개 저장과 인증에 필요한 환경변수가 모두 있어야 요청을 처리한다.
+# 공개 시연은 정확한 명시 설정만 허용하고 기본 모드는 비밀번호 인증을 요구한다.
 def configuration():
     try:
         table_name = os.environ["MEDKIT_MEDICATION_TABLE"]
         box_id = os.environ["MEDKIT_BOX_ID"]
         origin = os.environ["MEDKIT_ALLOWED_ORIGIN"]
-        password_hash = os.environ["MEDKIT_PASSWORD_HASH"]
-        secret = decode_urlsafe(os.environ["MEDKIT_SESSION_SECRET"])
-        parts = password_hash.split("$")
-        if len(parts) != 4 or parts[0] != "pbkdf2_sha256":
-            raise ValueError("INVALID_PASSWORD_HASH")
-        iterations = int(parts[1])
-        salt, digest = decode_urlsafe(parts[2]), decode_urlsafe(parts[3])
         parsed_origin = urlsplit(origin)
         valid_port = parsed_origin.port is None or 1 <= parsed_origin.port <= 65535
         if (
@@ -77,21 +70,33 @@ def configuration():
             or "*" in origin
             or any(character.isspace() for character in origin)
             or not valid_port
-            or len(secret) < 32
-            or not 200000 <= iterations <= 1000000
-            or len(salt) < 16
-            or len(digest) != 32
         ):
             raise ValueError("INVALID_CONFIGURATION")
-        return {
+        config = {
             "table_name": table_name,
             "box_id": box_id,
             "origin": origin,
+            "public_demo": os.environ.get("MEDKIT_MEDICATION_PUBLIC_DEMO") == "true",
+        }
+        # 공개 모드에도 테이블·보관함·출처 설정은 필수이며 비밀번호만 요구하지 않는다.
+        if config["public_demo"]:
+            return config
+        password_hash = os.environ["MEDKIT_PASSWORD_HASH"]
+        secret = decode_urlsafe(os.environ["MEDKIT_SESSION_SECRET"])
+        parts = password_hash.split("$")
+        if len(parts) != 4 or parts[0] != "pbkdf2_sha256":
+            raise ValueError("INVALID_PASSWORD_HASH")
+        iterations = int(parts[1])
+        salt, digest = decode_urlsafe(parts[2]), decode_urlsafe(parts[3])
+        if len(secret) < 32 or not 200000 <= iterations <= 1000000 or len(salt) < 16 or len(digest) != 32:
+            raise ValueError("INVALID_CONFIGURATION")
+        config.update({
             "secret": secret,
             "iterations": iterations,
             "salt": salt,
             "digest": digest,
-        }
+        })
+        return config
     except (KeyError, TypeError, ValueError, OverflowError):
         raise ApiError(503, "SERVICE_NOT_CONFIGURED", "복용약 저장 서비스 설정을 확인해 주세요.") from None
 
@@ -492,7 +497,7 @@ def require_session(config, headers):
         raise ApiError(401, "SESSION_REQUIRED", "접근 시간이 만료되었거나 인증이 필요해요. 공통 비밀번호를 다시 입력해 주세요.") from None
 
 
-# 공개 재고 API와 분리된 세 경로만 처리하고 인증 없는 읽기·쓰기를 거부한다.
+# 별도 복용약 경로에만 접근 모드를 적용하고 입력 검증과 조건부 저장은 공통으로 유지한다.
 def lambda_handler(event, context):
     allowed_origin = None
     try:
@@ -513,12 +518,16 @@ def lambda_handler(event, context):
         if method == "OPTIONS":
             return respond(204, None, allowed_origin)
         if path == "/session":
+            if config["public_demo"]:
+                raise ApiError(404, "SESSION_NOT_AVAILABLE", "공개 시연에서는 비밀번호 세션을 사용하지 않아요.")
             if method != "POST":
                 raise ApiError(405, "METHOD_NOT_ALLOWED", "지원하지 않는 요청 방식이에요.")
             return respond(200, create_session(config, request_body(event, headers)), allowed_origin)
         if method not in ("GET", "PUT"):
             raise ApiError(405, "METHOD_NOT_ALLOWED", "지원하지 않는 요청 방식이에요.")
-        require_session(config, headers)
+        # 공개 시연은 누구나 읽고 수정할 수 있으며 출처 제한은 인증을 대신하지 않는다.
+        if not config["public_demo"]:
+            require_session(config, headers)
         if method == "GET":
             snapshot = read_snapshot(get_table(), config["box_id"])
         else:

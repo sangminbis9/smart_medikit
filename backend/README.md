@@ -2,7 +2,7 @@
 
 `read_api.py`는 서울(`ap-northeast-2`)의 **`inha-capstone-02-medkit-data`**를 읽는 별도 Lambda 진입점이다. 기존 OCR Lambda·Pi·테이블·`pk`/`sk`·저장 구조를 변경하지 않는다. 웹의 기존 `useMedkit.ts`가 호출하는 `GET /inventory`, `GET /alerts` 응답으로 변환한다.
 
-수동 등록한 복용약은 아래 [별도 수동 복용약 API](#별도-수동-복용약-api-2026-11-08)에서 공통 비밀번호로 접근하는 전용 테이블에 저장한다. 기존 공개 재고 API에는 개인 복용약·복용 기록·메모를 포함하지 않는다.
+수동 등록한 복용약은 아래 [별도 수동 복용약 API](#별도-수동-복용약-api-2026-11-08)의 전용 테이블에 저장한다. 사용자는 후속으로 비밀번호 없는 공개 시연을 선택했으며 기본 비공개 경로도 유지한다. 기존 공개 재고 API의 데이터·접근 정책은 바꾸지 않는다.
 
 ## 확인한 실제 환경 (2026-11-02)
 
@@ -80,19 +80,19 @@ AGENTS.md 5절의 **“IAM 권한 변경, 서비스 공개 설정은 팀 승인 
 
 ## 별도 수동 복용약 API (2026-11-08)
 
-`medication_api.py`와 `deploy_medication_api.py`는 처방 묶음·여러 약·공통/약별 일정·전체/일부 복용 확인을 **AWS 팀 공유 목록**으로 저장한다. **전용 테이블·Lambda·HTTP API 배포와 초기 빈 상태 저장·재조회, HTTPS 인증 경계 검증을 완료했다.** Amplify 공개 변수 연결도 확인했으며, 새 프론트엔드의 실제 웹사이트 화면 검증은 아래 별도 남은 항목을 따른다.
+`medication_api.py`와 `deploy_medication_api.py`는 처방 묶음·여러 약·공통/약별 일정·전체/일부 복용 확인을 **AWS 단일 공유 목록**으로 저장한다. 비밀번호 모드의 배포·초기 빈 상태 저장·HTTPS 인증 검증은 완료했다. **후속 승인된 공개 시연으로의 전환은 아직 실제 배포·검증 전**이며 아래 과거 배포 기록과 구분한다.
 
 | 구분 | 구성 |
 |---|---|
 | 전용 Lambda·HTTP API | `smart-medikit-medication-api`, Python 3.12, 256MB, 제한 시간 10초 |
 | 전용 DynamoDB | `inha-capstone-02-medkit-medications`, 요청 기반 과금·삭제 보호 |
 | 공유 항목 | `pk=BOX#<서버 box_id>`, `sk=MEDICATION_STATE`, `revision`, `state`, `updated_at` |
-| 인증 | 공통 비밀번호를 서버 솔트 해시로 검증, 2시간 서명된 Bearer 접근 토큰 |
+| 접근 모드 | 기본 비공개: 공통 비밀번호·2시간 Bearer 토큰. 서버 `MEDKIT_MEDICATION_PUBLIC_DEMO=true`인 공개 시연만 무인증 GET/PUT |
 | 경로 | `POST /session`, `GET /medications`, `PUT /medications` |
 | 충돌 방지 | `PUT`의 `expected_revision`과 DynamoDB 조건부 쓰기, 충돌 시 `409` |
 | 제한 | 요청/상태 각각 300KiB, 묶음 100개·묶음당 약 30개·일정당 시각 12개·전체 기록 2,000개 |
 
-공통 비밀번호를 아는 팀원은 같은 목록 전체를 조회·수정·삭제한다. 개인 계정별 소유권이나 변경자 식별 기능은 없다. 복용약 입력은 재고·3D·OCR·자동 차감·DUR 검사·푸시 예약을 생성하지 않는다. 필드와 오류의 상세 계약은 [CONTRACTS.md 10.3절](../docs/CONTRACTS.md#103-수동-처방-묶음과-aws-공유-복약-기록-2026-11-08)을 따른다.
+공개 시연에서는 **누구나 같은 목록의 약 이름·일정·복용 기록·메모를 조회·수정·삭제**할 수 있다. **합성 시연 데이터만 입력하고 개인정보는 입력하지 않는다.** 비공개 모드는 공통 비밀번호를 아는 사람만 접근하며 어느 모드든 개인별 소유권·변경자 식별은 제공하지 않는다. 복용약 입력은 재고·3D·OCR·자동 차감·DUR 검사·푸시 예약을 생성하지 않는다. 필드와 오류의 상세 계약은 [CONTRACTS.md 10.3절](../docs/CONTRACTS.md#103-수동-처방-묶음과-aws-공유-복약-기록-2026-11-08)을 따른다.
 
 ### 복용약 API 사전 점검과 배포
 
@@ -102,35 +102,38 @@ AGENTS.md 5절의 **“IAM 권한 변경, 서비스 공개 설정은 팀 승인 
 python backend/deploy_medication_api.py --account 842544789367 --region ap-northeast-2 --box-id inha-capstone-02-medkit --origin https://main.d3t4nvt3phq6xc.amplifyapp.com
 ```
 
-승인된 배포를 적용할 때는 같은 명령에 `--apply`를 붙인다.
+승인된 공개 시연으로 전환할 때는 `--apply --public-demo`를 명시한다. `--public-demo`를 생략하면 기존 배포의 모드를 보존하며 새 배포의 기본값은 비공개다.
 
 ```sh
-python backend/deploy_medication_api.py --account 842544789367 --region ap-northeast-2 --box-id inha-capstone-02-medkit --origin https://main.d3t4nvt3phq6xc.amplifyapp.com --apply
+python backend/deploy_medication_api.py --account 842544789367 --region ap-northeast-2 --box-id inha-capstone-02-medkit --origin https://main.d3t4nvt3phq6xc.amplifyapp.com --apply --public-demo
 ```
 
-- **최초 공통 비밀번호는 사람이 터미널에서 직접 입력**한다. `getpass`의 숨김 입력으로 12~256자 비밀번호를 두 번 받으며, 숨김 입력을 지원하지 않으면 중단한다. 비밀번호를 채팅·명령 인수·스크립트·파일·빌드 변수에 넣지 않는다. 기존 설정이 있으면 유지하며 명시적으로 `--apply --rotate-password`를 사용할 때만 비밀번호와 서명키를 함께 교체해 기존 토큰을 만료시킨다.
+- 서버의 `MEDKIT_MEDICATION_PUBLIC_DEMO`가 **정확히 문자열 `true`일 때만** GET/PUT의 세션 검사를 생략한다. 미설정·`false`를 비롯한 다른 값은 기존 비밀번호 경로다. 공개 모드에서도 입력·상태 전이·크기 제한·revision 충돌 검사는 유지하며 공개 재고 API의 `MEDKIT_DEMO_PUBLIC_READ`와 별개의 설정이다.
+- **비공개 모드의 최초 공통 비밀번호는 사람이 터미널에서 직접 입력**한다. `getpass`의 숨김 입력으로 12~256자 비밀번호를 두 번 받으며, 숨김 입력을 지원하지 않으면 중단한다. 비밀번호를 채팅·명령 인수·스크립트·파일·빌드 변수에 넣지 않는다. 기존 설정이 있으면 유지하며 명시적으로 `--apply --rotate-password`를 사용할 때만 비밀번호와 서명키를 함께 교체해 기존 토큰을 만료시킨다.
 - 학교 제공 `SafeRole-inha-capstone-02`를 재사용하고 **IAM 정책은 변경하지 않는다**. 앞선 학교 정책 조회 제한 때문에 역할 전체가 전용 테이블 최소 권한이라고 보증하지 않는다. 배포 도구는 역할 계정·Lambda 신뢰와 대상 자원 설정을 확인하지만 정책 전체의 권한 범위를 확정하는 도구는 아니다.
 - 테이블 생성에는 `ManagedBy` 태그를 전달하지 않는다. 학교 자동 태그 **`username=inha-capstone-02`와 `group=inha-capstone` 두 값 모두**, 정확한 계정·리전·테이블 ARN·키 구조·인덱스·과금 설정을 확인한다. 기존 `ManagedBy` 태그가 있으면 그 값도 대조한다. Lambda·API·로그 그룹은 계속 `ManagedBy=smart-medikit-medication-api`를 요구하며 역할·연결 경로가 다르면 중단한다. 기존 재고 테이블·API·OCR·Pi·Amplify 설정은 수정하지 않는다. 함수 로그 보존은 7일, API 경로별 초당 2회/버스트 5회 제한을 적용하고 계정 여유가 있을 때만 Lambda 동시 실행 2개를 예약한다.
-- 배포 도구는 인증 없는 GET/PUT의 `401`과 인증된 저장소 조회를 확인한다. **항목이 없는 `revision=0`인 경우에만** 빈 상태를 조건부로 최초 저장하고 다시 읽는다. 기존 항목은 비어 있어도 검증을 이유로 수정하지 않으며 기존 항목에서는 쓰기 검증을 생략한다. 이번 최초 배포의 실제 AWS 저장·재조회 결과는 아래에 기록했다.
-- 배포 검증용 토큰은 메모리에서만 만들고 2분 뒤 만료되도록 한다. 토큰·비밀번호·복용약 응답 본문·AWS 예외 원문을 로그나 터미널에 출력하지 않는다. 운영 요청도 Bearer 인증·만료·대상 범위를 검사하며 응답은 `Cache-Control: no-store`다. CORS는 지정한 정확한 HTTPS origin으로 제한하지만 인증을 대신하지 않는다.
-- 성공 시 출력된 공개 `MEDICATION_API_URL`만 Amplify `main`의 **`VITE_MEDICATION_API_URL`**에 입력하고 프론트엔드를 재빌드한다. 기존 `VITE_API_URL`은 공개 재고용으로 유지한다. 비밀번호·접근 토큰·서명키는 `VITE_` 변수에 넣지 않는다.
-- 프론트엔드는 접근 토큰을 메모리에서만 사용하므로 새로고침 후 다시 잠금을 해제한다. AWS 목록은 유지되지만 브라우저 영구 저장·실패 시 로컬 저장 대체는 제공하지 않는다. 잠금 해제된 화면에서 30초마다·화면 복귀 시 재조회하며 쓰기 실패·충돌은 저장 완료로 표시하지 않는다.
+- 배포 도구는 선택한 모드의 접근 정책과 저장소 조회를 확인한다. **항목이 없는 `revision=0`인 경우에만** 빈 상태를 조건부로 최초 저장하고 다시 읽는다. 기존 항목은 비어 있어도 검증을 이유로 수정하지 않는다. 비밀번호 모드 최초 배포의 실제 AWS 저장·재조회 결과는 아래에 기록했다.
+- 비공개 배포의 검증용 토큰은 메모리에서만 만들고 2분 뒤 만료되도록 한다. 토큰·비밀번호·복용약 응답 본문·AWS 예외 원문을 로그나 터미널에 출력하지 않는다. 공개 모드는 토큰 없이 GET/PUT을 사용하며 응답은 계속 `Cache-Control: no-store`다. CORS는 지정한 HTTPS origin으로 제한하지만 공개 데이터의 접근 보호 수단은 아니다.
+- 성공 시 출력된 공개 `MEDICATION_API_URL`을 Amplify `main`의 **`VITE_MEDICATION_API_URL`**에 입력한다. 공개 화면에는 **`VITE_MEDICATION_PUBLIC_DEMO=true`**도 설정하고 재빌드한다. 웹 플래그만 바꿔도 서버 인증은 유지되므로 서버 공개 전환을 함께 확인한다. 기존 `VITE_API_URL`은 재고용으로 유지하고 비밀번호·접근 토큰·서명키는 `VITE_` 변수에 넣지 않는다.
+- 공개 화면은 잠금 없이 즉시 자동 조회하고 새로고침 후에도 AWS 목록을 불러온다. 비공개 화면은 메모리 토큰을 사용하므로 새로고침 후 다시 잠금을 해제한다. 두 모드 모두 브라우저 영구 저장·실패 시 로컬 저장 대체는 제공하지 않는다. 조회 가능한 화면에서 30초마다·화면 복귀 시 재조회하며 쓰기 실패·충돌은 저장 완료로 표시하지 않는다.
 
 ### 복용약 API 검증 범위
 
 저장소 루트의 `python -m unittest backend.test_medication_api -v`는 합성 입력과 가상 DynamoDB로 인증 누락·잘못된/변조된/만료된 토큰, 날짜·일정·약 구성, 전체/일부 복용 기록, revision 충돌, 저장 실패·정보 노출 방지 등을 검사한다. 실제 환자 정보나 AWS를 호출하지 않는다.
 
-2026-11-08: **로컬 Python 3.14에서 API 합성 단위 테스트 25개와 배포 도구 테스트 11개 통과**, 배포 파일을 포함한 Python 3.12 문법 호환 검사도 통과했다. 배포 검사는 `python -m unittest backend.test_deploy_medication_api -v`로 실행하며 학교 자동 태그·ARN·키 구조·생성 요청과 코드 활성화 완료 후 최신 `RevisionId` 사용·동시 환경 변경 거부를 가상 AWS에서 확인한다. 프론트엔드 타입 검사·린트·빌드·단위 테스트 55개, PC·모바일의 AWS API 모의 응답 E2E 12개, 기존 화면 회귀 검사 13개도 통과했고 회귀 검사 1개는 제외됐다. 화면 검사 범위는 [프론트엔드 검증 기록](../frontend/README.md#파일과-검증)을 따른다.
+2026-11-08 비밀번호 모드 검증(공개 전환 이전): **로컬 Python 3.14에서 API 합성 단위 테스트 25개와 배포 도구 테스트 11개 통과**, 배포 파일을 포함한 Python 3.12 문법 호환 검사도 통과했다. 배포 검사는 `python -m unittest backend.test_deploy_medication_api -v`로 실행하며 학교 자동 태그·ARN·키 구조·생성 요청과 코드 활성화 완료 후 최신 `RevisionId` 사용·동시 환경 변경 거부를 가상 AWS에서 확인한다. 프론트엔드 타입 검사·린트·빌드·단위 테스트 55개, PC·모바일의 AWS API 모의 응답 E2E 12개, 기존 화면 회귀 검사 13개도 통과했고 회귀 검사 1개는 제외됐다. 화면 검사 범위는 [프론트엔드 검증 기록](../frontend/README.md#파일과-검증)을 따른다.
 
-### 복용약 API 실제 배포·연결 검증 (2026-11-08)
+### 복용약 API 비밀번호 모드 실제 배포·연결 검증 (2026-11-08)
 
-- 전용 DynamoDB **`inha-capstone-02-medkit-medications`**, Lambda·HTTP API **`smart-medikit-medication-api`**를 서울 리전에 배포했다. 공개 API 기본 주소는 `https://wda2durbx5.execute-api.ap-northeast-2.amazonaws.com`이며 데이터 조회·쓰기는 Bearer 인증을 요구한다.
+- 전용 DynamoDB **`inha-capstone-02-medkit-medications`**, Lambda·HTTP API **`smart-medikit-medication-api`**를 서울 리전에 배포했다. API 기본 주소는 `https://wda2durbx5.execute-api.ap-northeast-2.amazonaws.com`이며 당시 데이터 조회·쓰기는 Bearer 인증을 요구했다.
 - 실제 Lambda → DynamoDB에서 `AUTHENTICATED_GET_STATUS=200`, `INITIAL_EMPTY_PUT_STATUS=200`, `PERSISTENCE_GET_STATUS=200`을 확인했다. 새 공유 항목의 빈 상태만 조건부 저장했으며 기존 재고 테이블·항목은 변경하지 않았다.
 - 실제 HTTPS에서 무인증 `GET /medications`와 `PUT /medications`는 **401**, 사전 요청 `OPTIONS`는 **204**, 짧은 메모리 검증 토큰의 인증된 `GET /medications`는 **200**을 확인했다. 허용 origin이 정확히 일치했고 OPTIONS를 제외한 응답의 `Cache-Control: no-store`도 검증했다. 토큰·응답 데이터 원문은 로그에 남기지 않았다.
 - Amplify `main`의 기존 환경변수를 보존하고 **`VITE_MEDICATION_API_URL`**에 위 주소를 추가한 뒤 재조회해 일치를 확인했다. 비밀번호·서명키·토큰은 프론트엔드 변수에 넣지 않았다. 사용자가 터미널에 직접 설정한 공통 비밀번호는 유지했으며 IAM 정책은 변경하지 않았다.
 - 최초 테이블 생성의 `dynamodb:TagResource` 거부는 테이블에 수동 관리 태그를 전달하지 않고 학교 자동 소유 태그를 확인하는 방식으로 해결했다. Lambda 생성 후 자동 태그 지연으로 일시적인 `GetFunction` 거부가 발생할 때는 태그 반영 후 같은 배포 명령을 다시 실행해 기존 비밀번호를 유지했다. 코드 활성화 완료 후 최신 `RevisionId`를 사용하되 다른 실행자가 환경을 바꿨으면 중단한다.
 
-**남은 실제 화면 검증:** 새 프론트엔드의 `main` 빌드·게시 후 웹사이트에서 공통 비밀번호 잠금 해제, 처방 묶음 등록·수정·복용 확인·삭제, 새로고침 재접속과 여러 기기 공유를 확인해야 한다. 위 Lambda·HTTPS·환경변수 검증을 새 웹 화면의 검증 완료로 해석하지 않는다.
+공개 시연 전환 로컬 검증(2026-11-08): **API·배포 도구 단위 테스트 총 47개**와 Python 3.12 문법 호환 검사가 통과했다. 프론트엔드 타입 검사·린트·빌드·단위 테스트 **55개**, PC·모바일의 **공개 모드 API 모의 응답 E2E 6개**도 통과했다. 비밀번호 모드 회귀 E2E는 최초 실행에서 11개 통과·개발 서버 HMR로 1개 실패했으며, 실패 항목을 코드 변경 없이 단독 재실행해 통과하여 **총 12개 항목을 확인**했다.
+
+**공개 시연 실제 배포·검증 대기:** 현재 AWS 공유 상태는 `revision=1`, 처방 묶음 0개·복용 기록 0개이다. 공개 모드의 실제 AWS 배포와 배포 웹 검증은 아직 대기 중이며, 공개 상태에서 실제 등록·수정·삭제는 실행하지 않았다. 위 공개 모드 동작 검증은 모의 API에 대한 결과이며, 이전 비밀번호 모드의 실제 배포 결과와 구분한다.
 
 ## 기존 조회 API 로컬 검증
 

@@ -3,10 +3,14 @@
 import contextlib
 import copy
 import io
+import json
+import os
 import unittest
 from unittest.mock import Mock, patch
 
 from backend import deploy_medication_api as deploy
+from backend import medication_api as api
+from backend import test_medication_api as fixtures
 
 
 class AwsFailure(Exception):
@@ -143,6 +147,86 @@ class MedicationDeploymentTableTests(unittest.TestCase):
             self.assertIn(expected, output.getvalue())
             self.assertNotIn("합성 원문", output.getvalue())
             self.assertNotIn("secret with spaces", output.getvalue())
+
+
+class MedicationPublicDeploymentTests(unittest.TestCase):
+    # 실제 비밀번호 대신 기존 합성 해시를 사용하는 배포 입력을 준비한다.
+    def setUp(self):
+        fixtures.MedicationApiTests.setUpClass()
+        self.variables = dict(fixtures.MedicationApiTests.environment)
+        self.origin = self.variables["MEDKIT_ALLOWED_ORIGIN"]
+
+    # 최초 공개 배포는 비밀번호 입력이나 인증정보 생성을 요구하지 않는다.
+    def test_first_public_deployment_does_not_prompt_for_password(self):
+        with patch.object(deploy, "prompt_credentials") as prompt:
+            result = deploy.build_environment(None, "synthetic-box", self.origin, False, True)["Variables"]
+        prompt.assert_not_called()
+        self.assertEqual(result["MEDKIT_MEDICATION_PUBLIC_DEMO"], "true")
+        self.assertNotIn("MEDKIT_PASSWORD_HASH", result)
+        self.assertNotIn("MEDKIT_SESSION_SECRET", result)
+
+    # 명시 전환 뒤 옵션 없는 재배포도 공개 flag와 기존 비밀값을 조용히 바꾸지 않는다.
+    def test_public_selection_and_redeployment_preserve_existing_secrets(self):
+        function = {"Configuration": {"Environment": {"Variables": self.variables}}}
+        with patch.object(deploy, "prompt_credentials") as prompt:
+            environment = deploy.build_environment(function, "synthetic-box", self.origin, False, True)
+            redeployed = deploy.build_environment({"Configuration": {"Environment": environment}}, "synthetic-box", self.origin, False)
+        prompt.assert_not_called()
+        self.assertEqual(redeployed["Variables"]["MEDKIT_MEDICATION_PUBLIC_DEMO"], "true")
+        for key in ("MEDKIT_PASSWORD_HASH", "MEDKIT_SESSION_SECRET"):
+            self.assertEqual(redeployed["Variables"][key], self.variables[key])
+
+    # 공개 선택이 없으면 기존 비밀번호 모드를 유지하며 새 비공개 배포만 비밀번호를 요청한다.
+    def test_private_default_remains_password_protected(self):
+        function = {"Configuration": {"Environment": {"Variables": self.variables}}}
+        credentials = (self.variables["MEDKIT_PASSWORD_HASH"], self.variables["MEDKIT_SESSION_SECRET"])
+        with patch.object(deploy, "prompt_credentials", return_value=credentials) as prompt:
+            existing = deploy.build_environment(function, "synthetic-box", self.origin, False)
+            prompt.assert_not_called()
+            new = deploy.build_environment(None, "synthetic-box", self.origin, False)
+            prompt.assert_called_once()
+        self.assertEqual(existing["Variables"]["MEDKIT_MEDICATION_PUBLIC_DEMO"], "false")
+        self.assertEqual(new["Variables"]["MEDKIT_MEDICATION_PUBLIC_DEMO"], "false")
+
+    # 공개 검증은 토큰 없이 읽고 반드시 실패할 입력만 보내 실제 항목을 쓰지 않는다.
+    def test_public_verification_never_creates_or_changes_snapshot(self):
+        for initial in (None, {"revision": 7, "state": fixtures.state(fixtures.plan())}):
+            with self.subTest(existing=initial is not None):
+                table = fixtures.FakeTable(initial)
+                client = Mock()
+
+                # 네트워크 없이 같은 핸들러를 실행하고 인증 헤더가 없는지 확인한다.
+                def invoke(**request):
+                    event = json.loads(request["Payload"])
+                    self.assertNotIn("authorization", event["headers"])
+                    response = api.lambda_handler(event, None)
+                    return {"Payload": io.BytesIO(json.dumps(response).encode())}
+
+                client.invoke.side_effect = invoke
+                output = io.StringIO()
+                with patch.dict(os.environ, {**self.variables, "MEDKIT_MEDICATION_PUBLIC_DEMO": "true"}, clear=True), patch.object(api, "get_table", return_value=table), contextlib.redirect_stdout(output):
+                    deploy.verify_public_demo(client, self.origin)
+                self.assertEqual(client.invoke.call_count, 2)
+                self.assertEqual(table.item, initial)
+                self.assertEqual(table.writes, [])
+                self.assertIn("PUBLIC_GET_STATUS=200", output.getvalue())
+                self.assertIn("PUBLIC_INVALID_PUT_STATUS=422", output.getvalue())
+                self.assertNotIn("합성 처방", output.getvalue())
+
+    # 비공개 배포의 무인증 거부 검증은 공개 기능 추가 뒤에도 그대로 동작한다.
+    def test_private_deny_verification_remains_unchanged(self):
+        client = Mock()
+
+        # 실제 핸들러로 무인증 요청의 결과만 반환한다.
+        def invoke(**request):
+            response = api.lambda_handler(json.loads(request["Payload"]), None)
+            return {"Payload": io.BytesIO(json.dumps(response).encode())}
+
+        client.invoke.side_effect = invoke
+        with patch.dict(os.environ, self.variables, clear=True), patch.object(api, "get_table") as table:
+            deploy.verify_deny(client, self.origin)
+        self.assertEqual(client.invoke.call_count, 2)
+        table.assert_not_called()
 
 
 class MedicationDeploymentRevisionTests(unittest.TestCase):

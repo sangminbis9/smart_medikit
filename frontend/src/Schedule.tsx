@@ -145,7 +145,9 @@ export default function Schedule({
           {!kit.demo && (
             <div className="medication-server-actions">
               <p className="caption">
-                새로고침하면 다시 잠겨요. 저장한 목록은 AWS에 유지돼요.
+                {medications.publicAccess
+                  ? '누구나 조회·수정·삭제할 수 있는 공개 시연 목록이에요. 실제 개인 복용 정보는 입력하지 마세요.'
+                  : '새로고침하면 다시 잠겨요. 저장한 목록은 AWS에 유지돼요.'}
               </p>
               <button
                 className="text-button"
@@ -154,13 +156,15 @@ export default function Schedule({
               >
                 복용약 새로고침
               </button>
-              <button
-                className="soft-button"
-                onClick={medications.lock}
-                disabled={medications.busy}
-              >
-                복용약 잠그기
-              </button>
+              {!medications.publicAccess && (
+                <button
+                  className="soft-button"
+                  onClick={medications.lock}
+                  disabled={medications.busy}
+                >
+                  복용약 잠그기
+                </button>
+              )}
             </div>
           )}
           <MedicationPlans
@@ -180,6 +184,7 @@ export default function Schedule({
           busy={medications.busy}
           onUnlock={medications.unlock}
           onReload={medications.reload}
+          publicAccess={medications.publicAccess}
         />
       )}
       <div className="schedule-grid">

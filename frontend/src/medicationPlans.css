@@ -1,0 +1,593 @@
+/* 수동 복용약은 기존 민트 색상 안에서 독립적인 등록 영역으로 구분한다. */
+.medication-plans {
+  margin: 0 0 32px;
+  padding: 28px;
+  border: 1px solid #d9e7df;
+  border-radius: 24px;
+  background: #f1f7f3;
+}
+.medication-plans-heading,
+.medication-plan-top,
+.medication-section-title,
+.medication-card-actions,
+.medication-form-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.medication-plans-heading {
+  justify-content: space-between;
+}
+.medication-eyebrow {
+  color: #426e60;
+  font-size: 12px;
+  margin-bottom: 6px;
+}
+.medication-plans-heading h2 {
+  font-size: 22px;
+  font-weight: 700;
+}
+.medication-plans-heading h2 span {
+  margin-left: 6px;
+  color: #548071;
+  font-size: 18px;
+}
+.medication-plans-heading p,
+.medication-storage-label {
+  color: #63736c;
+  font-size: 13px;
+  line-height: 1.8;
+}
+.medication-plans-heading p {
+  margin-top: 6px;
+}
+.medication-plans-heading > .primary-button {
+  flex: none;
+  font-size: 14px;
+}
+.medication-plans-heading > .primary-button .icon {
+  filter: brightness(0) invert(1);
+}
+.medication-storage-label {
+  margin: 16px 0;
+}
+.medication-storage-note {
+  margin: -16px 0 28px;
+}
+.medication-storage-error {
+  margin-bottom: 24px;
+  flex-wrap: wrap;
+}
+.medication-plan-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+}
+.medication-plan-card {
+  min-width: 0;
+  padding: 20px;
+  border: 1px solid #dfe9e2;
+  border-radius: 18px;
+  background: white;
+  overflow-wrap: anywhere;
+}
+.medication-plan-top {
+  justify-content: space-between;
+  margin-bottom: 12px;
+}
+.medication-plan-icon {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 42px;
+  height: 42px;
+  border-radius: 14px;
+  background: #e5f0e9;
+}
+.medication-plan-icon .icon img {
+  width: 24px;
+  height: 24px;
+}
+.medication-plan-card h3 {
+  font-size: 17px;
+  font-weight: 700;
+  margin-bottom: 10px;
+}
+.medication-plan-timing {
+  color: #285f4f;
+  font-size: 14px;
+  line-height: 1.7;
+}
+.medication-plan-dates {
+  color: #738078;
+  font-size: 12px;
+  margin-top: 5px;
+}
+.medication-plan-details {
+  margin-top: 16px;
+  padding-top: 14px;
+  border-top: 1px solid #edf1ed;
+}
+.medication-plan-details summary {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  cursor: pointer;
+  font-size: 13px;
+}
+.medication-plan-details summary > span:last-child {
+  color: #63736c;
+  font-size: 12px;
+}
+.medication-plan-details[open] summary {
+  margin-bottom: 14px;
+}
+.medication-item-list {
+  display: grid;
+  gap: 12px;
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+.medication-item-list li {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 12px;
+  border-radius: 10px;
+  background: #f6f8f5;
+  font-size: 13px;
+}
+.medication-item-list small {
+  color: #63736c;
+  line-height: 1.7;
+}
+.medication-plan-notes {
+  font-size: 12px;
+  margin-top: 14px;
+  line-height: 1.8;
+}
+.medication-plan-notes p {
+  white-space: pre-wrap;
+  color: #63736c;
+  margin-top: 4px;
+}
+.medication-card-actions {
+  margin-top: 16px;
+  gap: 4px;
+  flex-wrap: wrap;
+}
+.medication-card-actions .text-button {
+  font-size: 12px;
+}
+.medication-delete {
+  margin-left: auto;
+  color: #86665a;
+}
+.medication-plans-empty {
+  display: flex;
+  gap: 16px;
+  align-items: center;
+  padding: 24px;
+  border: 1px dashed #cadcd0;
+  border-radius: 16px;
+  background: #fff;
+}
+.medication-plans-empty strong {
+  font-size: 15px;
+}
+.medication-plans-empty p {
+  margin-top: 6px;
+  color: #63736c;
+  font-size: 13px;
+  line-height: 1.8;
+}
+.medication-ended {
+  margin-top: 20px;
+}
+.medication-ended > summary {
+  color: #63736c;
+  cursor: pointer;
+  font-size: 13px;
+}
+.medication-ended[open] > summary {
+  margin-bottom: 16px;
+}
+.medication-ended .medication-plan-card {
+  background: #fbfcfb;
+}
+.medication-dialog {
+  width: min(740px, calc(100vw - 32px));
+  max-width: calc(100vw - 32px);
+  max-height: calc(100dvh - 32px);
+  box-sizing: border-box;
+  overscroll-behavior: contain;
+}
+.medication-dialog .dialog-heading {
+  position: sticky;
+  top: -24px;
+  z-index: 2;
+  margin: -24px -24px 20px;
+  padding: 18px 24px;
+  border-bottom: 1px solid #e4ece7;
+  background: #fff;
+}
+.medication-dialog .dialog-heading h2 {
+  font-size: 20px;
+  font-weight: 700;
+}
+.medication-form {
+  display: grid;
+  gap: 24px;
+}
+.medication-form-body {
+  border: 0;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+}
+.medication-form-body:disabled {
+  opacity: 0.75;
+}
+.medication-server-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+.medication-confirm-fields {
+  border: 0;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+}
+.medication-confirm-fields:disabled {
+  opacity: 0.75;
+}
+.medication-access-heading {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+.medication-access-heading h2 {
+  font-size: 22px;
+  font-weight: 700;
+}
+.medication-access-form {
+  display: grid;
+  gap: 16px;
+  max-width: 440px;
+  margin-top: 22px;
+}
+.medication-access-form > p {
+  font-size: 14px;
+  line-height: 1.8;
+}
+.medication-access-form > .medication-hint {
+  font-size: 12px;
+  margin-top: -8px;
+}
+.medication-access-message {
+  display: grid;
+  gap: 14px;
+  margin-top: 24px;
+  font-size: 14px;
+  line-height: 1.8;
+}
+.medication-access-message > p {
+  color: #63736c;
+}
+.medication-access-message > .medication-form-error {
+  color: #8b4230;
+}
+.medication-access-message > button {
+  justify-self: start;
+}
+.medication-form-intro {
+  color: #63736c;
+  font-size: 14px;
+  line-height: 1.8;
+}
+.medication-form-section {
+  display: grid;
+  gap: 16px;
+  min-width: 0;
+}
+.medication-form-section + .medication-form-section {
+  border-top: 1px solid #e4ece7;
+  padding-top: 24px;
+}
+.medication-section-title {
+  gap: 8px;
+}
+.medication-section-title > span {
+  display: grid;
+  place-items: center;
+  background: #e5f0e9;
+  color: #206d5c;
+  width: 25px;
+  height: 25px;
+  border-radius: 9px;
+  font-size: 12px;
+  font-weight: 700;
+}
+.medication-section-title h3 {
+  font-size: 16px;
+  font-weight: 700;
+}
+.medication-section-title small {
+  font-size: 12px;
+  color: #7c8a81;
+}
+.medication-field {
+  display: block;
+  min-width: 0;
+  font-size: 13px;
+  font-weight: 500;
+}
+.medication-field input,
+.medication-field select,
+.medication-field textarea,
+.medication-time input {
+  display: block;
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 0;
+  min-height: 46px;
+  margin-top: 8px;
+  border: 1px solid #cbd9ce;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: #fff;
+  color: #163c34;
+  font-size: 14px;
+  font-weight: 400;
+}
+.medication-field textarea {
+  resize: vertical;
+}
+.medication-field small {
+  display: block;
+  margin-top: 6px;
+  color: #738078;
+  font-size: 12px;
+  font-weight: 400;
+}
+.medication-required,
+.medication-optional {
+  font-size: 11px;
+  font-weight: 400;
+  margin-left: 5px;
+}
+.medication-required {
+  color: #206d5c;
+}
+.medication-optional {
+  color: #7c8a81;
+}
+.medication-field-pair {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+.medication-timing {
+  display: grid;
+  gap: 14px;
+  min-width: 0;
+  border: 0;
+  padding: 0;
+  margin: 0;
+}
+.medication-timing > legend {
+  font-size: 13px;
+  font-weight: 700;
+  padding-bottom: 12px;
+}
+.medication-checkbox {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  font-size: 13px;
+  cursor: pointer;
+}
+.medication-checkbox input {
+  width: 18px;
+  height: 18px;
+  flex: none;
+  accent-color: #206d5c;
+}
+.medication-schedule-fields {
+  display: grid;
+  gap: 18px;
+  padding: 16px;
+  border-radius: 12px;
+  background: #f4f8f5;
+  min-width: 0;
+}
+.medication-days,
+.medication-times {
+  border: 0;
+  margin: 0;
+  padding: 0;
+  min-width: 0;
+}
+.medication-days > legend,
+.medication-times > legend {
+  padding-bottom: 10px;
+  font-size: 13px;
+  font-weight: 500;
+}
+.medication-weekdays {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.medication-weekdays button {
+  min-width: 36px;
+  min-height: 36px;
+  border: 1px solid #d6e2d9;
+  border-radius: 10px;
+  font-size: 13px;
+  background: #fff;
+}
+.medication-weekdays button[aria-pressed='true'] {
+  color: #fff;
+  border-color: #206d5c;
+  background: #206d5c;
+}
+.medication-weekdays .medication-everyday {
+  padding: 0 10px;
+  margin-left: 2px;
+  color: #206d5c;
+}
+.medication-time-list {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: end;
+  gap: 10px;
+}
+.medication-time {
+  display: flex;
+  align-items: end;
+  min-width: 0;
+}
+.medication-time input {
+  width: 140px;
+}
+.medication-time .text-button {
+  font-size: 12px;
+  padding: 12px 7px;
+}
+.medication-time-list > .soft-button {
+  min-height: 46px;
+}
+.medication-hint {
+  color: #63736c;
+  font-size: 12px;
+  line-height: 1.8;
+}
+.medication-item-editors {
+  display: grid;
+  gap: 16px;
+}
+.medication-item-editor {
+  position: relative;
+  display: grid;
+  gap: 16px;
+  min-width: 0;
+  border: 1px solid #dce6de;
+  border-radius: 14px;
+  padding: 20px 16px 16px;
+  margin: 0;
+}
+.medication-item-editor > legend {
+  padding: 0 6px;
+  font-size: 13px;
+  font-weight: 700;
+}
+.medication-remove {
+  position: absolute;
+  top: -20px;
+  right: 10px;
+  font-size: 12px;
+  background: white;
+}
+.medication-add-item {
+  width: 100%;
+  min-height: 44px;
+  border: 1px dashed #bad2c5;
+  font-size: 14px;
+}
+.medication-form-actions {
+  align-items: stretch;
+  border-top: 1px solid #e4ece7;
+  padding-top: 16px;
+}
+.medication-form-actions .secondary-button {
+  flex: 1;
+}
+.medication-form-actions .primary-button {
+  flex: 2;
+  width: auto;
+}
+.medication-form-error {
+  padding: 12px 14px;
+  border: 1px solid #efd8ce;
+  border-radius: 12px;
+  background: #fff3ed;
+  color: #8b4230;
+  font-size: 13px;
+  line-height: 1.8;
+}
+.medication-delete-description {
+  font-size: 14px;
+  line-height: 1.9;
+  margin-bottom: 20px;
+  overflow-wrap: anywhere;
+}
+@media (max-width: 767px) {
+  .medication-plans {
+    padding: 20px 16px;
+    border-radius: 18px;
+    margin-bottom: 24px;
+  }
+  .medication-plans-heading {
+    align-items: stretch;
+    flex-direction: column;
+    gap: 16px;
+  }
+  .medication-plans-heading h2 {
+    font-size: 20px;
+  }
+  .medication-plans-heading > .primary-button {
+    align-self: flex-start;
+    min-height: 44px;
+  }
+  .medication-plan-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .medication-plan-card {
+    padding: 16px;
+  }
+  .medication-plans-empty {
+    align-items: flex-start;
+    padding: 16px;
+  }
+  .medication-plans-empty .medication-plan-icon {
+    display: none;
+  }
+  .medication-dialog {
+    padding: 20px 16px;
+    width: calc(100vw - 20px);
+    max-width: calc(100vw - 20px);
+    max-height: calc(100dvh - 20px);
+    border-radius: 18px;
+  }
+  .medication-dialog .dialog-heading {
+    top: -20px;
+    margin: -20px -16px 20px;
+    padding: 16px;
+  }
+  .medication-field input,
+  .medication-field select,
+  .medication-field textarea,
+  .medication-time input {
+    font-size: 16px;
+  }
+  .medication-field-pair {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .medication-schedule-fields {
+    padding: 12px;
+  }
+  .medication-item-editor {
+    padding-left: 12px;
+    padding-right: 12px;
+  }
+  .medication-form-actions .primary-button,
+  .medication-form-actions .secondary-button {
+    font-size: 14px;
+    padding: 12px;
+  }
+}

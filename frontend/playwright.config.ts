@@ -3,11 +3,20 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 const apiMode = process.env.MEDKIT_E2E_API === '1';
-const baseURL = apiMode ? 'http://127.0.0.1:4174' : 'http://127.0.0.1:4173';
+const medicationMode = process.env.MEDKIT_E2E_MEDICATION === '1';
+const baseURL = medicationMode
+  ? 'http://127.0.0.1:4175'
+  : apiMode
+    ? 'http://127.0.0.1:4174'
+    : 'http://127.0.0.1:4173';
 
 export default defineConfig({
   testDir: './e2e',
-  testMatch: apiMode ? '**/care-api.spec.ts' : '**/!(care-api).spec.ts',
+  testMatch: medicationMode
+    ? '**/medication.spec.ts'
+    : apiMode
+      ? '**/care-api.spec.ts'
+      : '**/!(care-api|medication).spec.ts',
   fullyParallel: false,
   retries: 0,
   reporter: 'list',
@@ -32,13 +41,21 @@ export default defineConfig({
     },
   ],
   webServer: {
-    command: apiMode
-      ? 'npm run dev -- --port 4174 --strictPort'
-      : 'npm run preview -- --port 4173 --strictPort',
+    command: medicationMode
+      ? 'npm run dev -- --port 4175 --strictPort'
+      : apiMode
+        ? 'npm run dev -- --port 4174 --strictPort'
+        : 'npm run preview -- --port 4173 --strictPort',
     url: baseURL,
-    env: apiMode
-      ? { VITE_API_URL: `${baseURL}/api`, VITE_BOX_ID: 'test-box' }
-      : {},
+    env: medicationMode
+      ? {
+          VITE_MEDICATION_API_URL: `${baseURL}/medication-api`,
+          VITE_API_URL: '',
+          VITE_BOX_ID: 'test-box',
+        }
+      : apiMode
+        ? { VITE_API_URL: `${baseURL}/api`, VITE_BOX_ID: 'test-box' }
+        : {},
     reuseExistingServer: !process.env.CI,
   },
 });

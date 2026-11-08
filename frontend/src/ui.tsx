@@ -85,11 +85,13 @@ export function Dialog({
   children,
   onClose,
   className = '',
+  closeDisabled = false,
 }: {
   title: string;
   children: ReactNode;
   onClose: () => void;
   className?: string;
+  closeDisabled?: boolean;
 }) {
   const ref = useRef<HTMLDialogElement>(null);
   // 대화상자를 열고 닫힐 때 이전 키보드 초점으로 복귀한다.
@@ -103,16 +105,26 @@ export function Dialog({
       previous?.focus();
     };
   }, []);
+  // 저장 중에는 Escape로 대화상자가 닫히지 않게 한다.
+  function cancel(event: React.SyntheticEvent<HTMLDialogElement>) {
+    event.preventDefault();
+    if (!closeDisabled) onClose();
+  }
   return (
     <dialog
       ref={ref}
       className={`dialog ${className}`}
-      onCancel={onClose}
+      onCancel={cancel}
       aria-labelledby="dialog-title"
     >
       <div className="dialog-heading">
         <h2 id="dialog-title">{title}</h2>
-        <button type="button" className="text-button" onClick={onClose}>
+        <button
+          type="button"
+          className="text-button"
+          onClick={onClose}
+          disabled={closeDisabled}
+        >
           닫기
         </button>
       </div>

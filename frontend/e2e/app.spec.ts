@@ -22,7 +22,10 @@ test('빈 시작 화면 → 시연 → 검색 → 상세 수정 → 종료', asy
   await expect(
     page.getByText('시연 데이터 · 실제 약품·기록이 아니에요'),
   ).toBeVisible();
-  await page.getByRole('button', { name: '두통', exact: true }).click();
+  await page
+    .getByRole('searchbox', { name: '보관 약품 검색', exact: true })
+    .filter({ visible: true })
+    .fill('타이레놀');
   await expect(page.locator('.package-card')).toHaveCount(1);
   await page.getByRole('link', { name: '타이레놀정 500mg 상세 보기' }).click();
   await expect(
@@ -145,7 +148,10 @@ test('좁은 휴대폰·태블릿·PC 전환에서도 선택 유지', async func
     .getByRole('button', { name: '시연 데이터 보기', exact: true })
     .last()
     .click();
-  await page.getByRole('button', { name: '두통', exact: true }).click();
+  await page
+    .getByRole('searchbox', { name: '보관 약품 검색', exact: true })
+    .filter({ visible: true })
+    .fill('타이레놀');
   for (const width of [320, 768, 1199, 1200]) {
     await page.setViewportSize({ width, height: 844 });
     await expect(page.locator('.package-card')).toHaveCount(1);

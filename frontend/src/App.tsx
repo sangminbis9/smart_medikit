@@ -9,6 +9,7 @@ import {
 } from 'react-router-dom';
 import { timeLabel } from './data';
 import { useMedkit } from './useMedkit';
+import { useMedicationPlans } from './useMedicationPlans';
 import { Badge, Icon } from './ui';
 import Home, { Search } from './Home';
 import Schedule from './Schedule';
@@ -33,6 +34,7 @@ const destinations = [
 // 화면 이동과 반응형 재배치에도 검색과 선택을 유지한다.
 export default function App() {
   const kit = useMedkit();
+  const medications = useMedicationPlans(kit.demo);
   const [query, setQuery] = useState('');
   const [selected, setSelected] = useState<string | null>(null);
   const navigate = useNavigate();
@@ -74,6 +76,7 @@ export default function App() {
   function toggleDemo() {
     setQuery('');
     setSelected(null);
+    medications.resetDemo();
     kit.toggleDemo();
   }
 
@@ -172,7 +175,10 @@ export default function App() {
                 />
               }
             />
-            <Route path="/schedule" element={<Schedule kit={kit} />} />
+            <Route
+              path="/schedule"
+              element={<Schedule kit={kit} medications={medications} />}
+            />
             <Route path="/care" element={<CareIndex />} />
             <Route path="/care/:symptomId" element={<CareDetail kit={kit} />} />
             <Route path="/alerts" element={<Alerts kit={kit} />} />

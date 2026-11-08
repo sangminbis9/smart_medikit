@@ -2,6 +2,11 @@ import { useState, type FormEvent } from 'react';
 import { dayKey, displayMedicineName, timeLabel, type Dose } from './data';
 import type { Medkit } from './useMedkit';
 import { Badge, Dialog, EmptyState, Icon, Note } from './ui';
+import MedicationPlans from './MedicationPlansSection';
+import MedicationAccess from './MedicationAccess';
+import MedicationDose from './MedicationDose';
+import { occurrencesOnDay } from './medicationPlans';
+import type { MedicationPlansStore } from './useMedicationPlans';
 
 const labels: Record<Dose['result'], string> = {
   SCHEDULED: '예정',
@@ -13,7 +18,13 @@ const labels: Record<Dose['result'], string> = {
 };
 
 // 한국 날짜 기준 달력과 확인 근거가 다른 복약 기록을 보여준다.
-export default function Schedule({ kit }: { kit: Medkit }) {
+export default function Schedule({
+  kit,
+  medications,
+}: {
+  kit: Medkit;
+  medications: MedicationPlansStore;
+}) {
   const [day, setDay] = useState(dayKey);
   const [month, setMonth] = useState(day.slice(0, 7));
   const [editing, setEditing] = useState<Dose | null>(null);
@@ -27,12 +38,42 @@ export default function Schedule({ kit }: { kit: Medkit }) {
   doses.sort(function byTime(a, b) {
     return Date.parse(a.scheduled_at) - Date.parse(b.scheduled_at);
   });
+  const manualDoses = occurrencesOnDay(medications.state, day);
+  const entries = [
+    ...doses.map(
+      // 기존 API 일정은 포장 연결을 유지한다.
+      function legacy(dose) {
+        return {
+          kind: 'legacy' as const,
+          dose,
+          time: Date.parse(dose.scheduled_at),
+        };
+      },
+    ),
+    ...manualDoses.map(
+      // 수동 일정의 한국 시각을 기존 일정과 같은 기준으로 정렬한다.
+      function manual(dose) {
+        return {
+          kind: 'manual' as const,
+          dose,
+          time: Date.parse(`${dose.date}T${dose.time}:00+09:00`),
+        };
+      },
+    ),
+  ].sort(
+    // 출처와 관계없이 선택한 날의 실제 시각 순으로 표시한다.
+    function byTime(a, b) {
+      return a.time - b.time;
+    },
+  );
   let confirmed = 0;
   let estimated = 0;
   for (const dose of doses) {
     if (dose.result === 'CONFIRMED') confirmed++;
     if (dose.result === 'ESTIMATED') estimated++;
   }
+  for (const dose of manualDoses)
+    if (dose.record?.result === 'all') confirmed++;
   const [year, monthNumber] = month.split('-').map(Number);
   const start = new Date(Date.UTC(year, monthNumber - 1, 1));
   const offset = (start.getUTCDay() + 6) % 7;
@@ -99,6 +140,48 @@ export default function Schedule({ kit }: { kit: Medkit }) {
           오늘
         </button>
       </div>
+      {medications.status === 'ready' ? (
+        <>
+          {!kit.demo && (
+            <div className="medication-server-actions">
+              <p className="caption">
+                새로고침하면 다시 잠겨요. 저장한 목록은 AWS에 유지돼요.
+              </p>
+              <button
+                className="text-button"
+                onClick={medications.reload}
+                disabled={medications.busy}
+              >
+                복용약 새로고침
+              </button>
+              <button
+                className="soft-button"
+                onClick={medications.lock}
+                disabled={medications.busy}
+              >
+                복용약 잠그기
+              </button>
+            </div>
+          )}
+          <MedicationPlans
+            plans={medications.state.plans}
+            onSave={medications.save}
+            onDelete={medications.remove}
+            onEnd={medications.toggleEnded}
+            storageLabel={medications.storageLabel}
+            busy={medications.busy}
+            error={medications.error}
+          />
+        </>
+      ) : (
+        <MedicationAccess
+          status={medications.status}
+          error={medications.error}
+          busy={medications.busy}
+          onUnlock={medications.unlock}
+          onReload={medications.reload}
+        />
+      )}
       <div className="schedule-grid">
         <div className="calendar-column">
           <section className="calendar" aria-label="복약 달력">
@@ -161,21 +244,31 @@ export default function Schedule({ kit }: { kit: Medkit }) {
             </div>
           </section>
           <div className="schedule-summary">
-            <h2>선택한 날 {doses.length}회 일정</h2>
+            <h2>선택한 날 {entries.length}회 일정</h2>
             <p>
               사용자 확인 {confirmed} / 복용 추정 {estimated} / 그 외{' '}
-              {doses.length - confirmed - estimated}
+              {entries.length - confirmed - estimated}
             </p>
             <div className="evidence-bars">
               {/* 수량이 아닌 각 회차의 확인 근거를 표현한다. */}
-              {doses.map(
+              {entries.map(
                 /* 일정별 확인 상태를 요약 막대로 표시한다. */ function bar(
-                  dose,
+                  entry,
                 ) {
                   return (
                     <span
-                      key={dose.dose_id}
-                      className={dose.result.toLowerCase()}
+                      key={
+                        entry.kind === 'manual'
+                          ? entry.dose.id
+                          : entry.dose.dose_id
+                      }
+                      className={
+                        entry.kind === 'manual'
+                          ? entry.dose.record?.result === 'all'
+                            ? 'confirmed'
+                            : 'scheduled'
+                          : entry.dose.result.toLowerCase()
+                      }
                     />
                   );
                 },
@@ -194,11 +287,20 @@ export default function Schedule({ kit }: { kit: Medkit }) {
               {Number(day.slice(5, 7))}월 {Number(day.slice(8))}일
             </Badge>
           </div>
-          {doses.length ? (
-            doses.map(
+          {entries.length ? (
+            entries.map(
               /* 일정과 확인 결과를 시간 순서로 표시한다. */ function row(
-                dose,
+                entry,
               ) {
+                if (entry.kind === 'manual')
+                  return (
+                    <MedicationDose
+                      key={entry.dose.id}
+                      occurrence={entry.dose}
+                      onRecord={medications.record}
+                    />
+                  );
+                const dose = entry.dose;
                 // 연결된 포장을 찾아 처방약 표시를 통일한다.
                 const item = kit.data.packages.find(function linked(item) {
                   return item.package_id === dose.package_id;
@@ -256,7 +358,7 @@ export default function Schedule({ kit }: { kit: Medkit }) {
             )
           ) : (
             <EmptyState title="등록된 복약 일정이 없어요">
-              보관함에서 인식한 처방 정보와 복용 시작일을 확인하면 일정이
+              위에서 복용약을 등록하고 요일과 시간을 설정하면 이곳에 일정이
               표시돼요.
             </EmptyState>
           )}

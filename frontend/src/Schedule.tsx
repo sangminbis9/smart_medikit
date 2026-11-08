@@ -144,11 +144,11 @@ export default function Schedule({
         <>
           {!kit.demo && (
             <div className="medication-server-actions">
-              <p className="caption">
-                {medications.publicAccess
-                  ? '누구나 조회·수정·삭제할 수 있는 공개 시연 목록이에요. 실제 개인 복용 정보는 입력하지 마세요.'
-                  : '새로고침하면 다시 잠겨요. 저장한 목록은 AWS에 유지돼요.'}
-              </p>
+              {!medications.publicAccess && (
+                <p className="caption">
+                  새로고침하면 다시 잠겨요. 저장한 목록은 AWS에 유지돼요.
+                </p>
+              )}
               <button
                 className="text-button"
                 onClick={medications.reload}

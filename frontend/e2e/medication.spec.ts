@@ -647,7 +647,9 @@ test.describe('완전 공개 시연 모드', function publicModeTests() {
     await openPublicSchedule(page);
     await expect(page).toHaveTitle(/MEDKIT|메디킷|약품/i);
     await expect(page.locator('vite-error-overlay')).toHaveCount(0);
-    await expect(page.getByText(/공개 시연/).first()).toBeVisible();
+    await expect(
+      page.getByRole('button', { name: '복용약 등록' }),
+    ).toBeVisible();
     await registerSimplePlan(page, '합성 공개 처방');
     const card = page.getByRole('article', {
       name: '합성 공개 처방',

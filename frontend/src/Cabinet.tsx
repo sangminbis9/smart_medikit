@@ -19,6 +19,17 @@ type Props = {
   onSelect: (id: string) => void;
 };
 
+// 보관함의 세 치수를 같은 비율로 축소한다.
+export function cabinetSceneSize(size: Dimensions) {
+  const scale = 4 / Math.max(size.width, size.depth, size.height);
+  return {
+    scale,
+    width: size.width * scale,
+    depth: size.depth * scale,
+    height: size.height * scale,
+  };
+}
+
 // React의 포장 선택을 실제 Three.js 장면과 연결한다.
 export default function Cabinet({
   items,
@@ -65,11 +76,14 @@ export default function Cabinet({
       renderer.setClearColor(0xffffff, 0);
       container.appendChild(renderer.domElement);
       const scene = new THREE.Scene();
+      // 치수가 없으면 단위 없는 예시 외곽만 그리고 약품 위치를 만들어내지 않는다.
+      const size = dimensions || { width: 300, depth: 240, height: 120 };
+      const { scale, width, depth, height } = cabinetSceneSize(size);
       const camera = new THREE.PerspectiveCamera(34, 1, 0.1, 100);
-      camera.position.set(3.6, 4, 4.6);
+      camera.position.set(4.7, height / 2 + 4.7, 7.3);
       const orbit = new OrbitControls(camera, renderer.domElement);
       controls.current = orbit;
-      orbit.target.set(0, 0, 0);
+      orbit.target.set(0, height / 2, 0);
       orbit.enableDamping = true;
       orbit.enablePan = false;
       orbit.minDistance = 4;
@@ -82,16 +96,10 @@ export default function Cabinet({
       const light = new THREE.DirectionalLight(0xffffff, 1.5);
       light.position.set(-3, 8, 5);
       scene.add(light);
-      // 치수가 없으면 단위 없는 예시 외곽만 그리고 약품 위치를 만들어내지 않는다.
-      const size = dimensions || { width: 300, depth: 240, height: 120 };
-      const scale = 4 / Math.max(size.width, size.depth, size.height);
-      const width = size.width * scale;
-      const depth = size.depth * scale;
-      const height = Math.min(size.height * scale, 2.6);
       const geometries: THREE.BufferGeometry[] = [];
       const materials: THREE.Material[] = [];
 
-      // 박스의 바닥과 낮은 벽을 같은 재질로 구성한다.
+      // 박스의 바닥과 투명한 벽을 구성한다.
       function addBox(
         w: number,
         h: number,
@@ -118,11 +126,58 @@ export default function Cabinet({
         return mesh;
       }
       addBox(width, 0.1, depth, 0, -0.06, 0, '#e2ebde');
-      const wall = Math.max(0.18, height * 0.25);
-      addBox(width, wall, 0.045, 0, wall / 2, -depth / 2, '#c5d9c5', 0.62);
-      addBox(0.045, wall, depth, -width / 2, wall / 2, 0, '#d3e1ce', 0.62);
-      addBox(width, wall, 0.045, 0, wall / 2, depth / 2, '#a4c3ac', 0.62);
-      addBox(0.045, wall, depth, width / 2, wall / 2, 0, '#aac6ae', 0.62);
+      // 벽 두께를 외곽 안쪽에 두어 입력한 폭·깊이·높이를 유지한다.
+      const wall = 0.035;
+      addBox(
+        width,
+        height,
+        wall,
+        0,
+        height / 2,
+        -(depth - wall) / 2,
+        '#c5d9c5',
+        0.14,
+      );
+      addBox(
+        wall,
+        height,
+        depth,
+        -(width - wall) / 2,
+        height / 2,
+        0,
+        '#d3e1ce',
+        0.14,
+      );
+      addBox(
+        width,
+        height,
+        wall,
+        0,
+        height / 2,
+        (depth - wall) / 2,
+        '#a4c3ac',
+        0.1,
+      );
+      addBox(
+        wall,
+        height,
+        depth,
+        (width - wall) / 2,
+        height / 2,
+        0,
+        '#aac6ae',
+        0.1,
+      );
+      // 투명한 벽도 실제 높이의 외곽을 알아볼 수 있게 표시한다.
+      const frameBox = new THREE.BoxGeometry(width, height, depth);
+      const frameGeometry = new THREE.EdgesGeometry(frameBox);
+      frameBox.dispose();
+      const frameMaterial = new THREE.LineBasicMaterial({ color: '#8dab96' });
+      const outlineBox = new THREE.LineSegments(frameGeometry, frameMaterial);
+      outlineBox.position.y = height / 2;
+      scene.add(outlineBox);
+      geometries.push(frameGeometry);
+      materials.push(frameMaterial);
       const shadowGeometry = new THREE.CircleGeometry(width * 0.49, 64);
       const shadowMaterial = new THREE.MeshBasicMaterial({
         color: '#dfe8df',

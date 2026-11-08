@@ -43,7 +43,7 @@ export function makeDemo(): Data {
       size_class: 'MEDIUM',
       base_color: '#e8e4d5',
       inventory: { stock_enabled: true },
-      position: { x: 77, y: 160, z_estimated: 0, certainty: 'UNCERTAIN' },
+      position: { x: 77, y: 130, z_estimated: 0, certainty: 'UNCERTAIN' },
       note: '확인 필요  유효기간을 확인해주세요.\n포장 정보를 아직 확인하지 못했어요.',
     }),
     packageSchema.parse({
@@ -68,7 +68,7 @@ export function makeDemo(): Data {
     catalog_complete: false,
     box: {
       box_id: 'demo-box',
-      dimensions: { width: 300, depth: 240, height: 120 },
+      dimensions: { width: 305, depth: 165, height: 190 },
       device_status: 'UNKNOWN',
     },
     packages,

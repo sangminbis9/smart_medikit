@@ -61,6 +61,11 @@ export type MedicationProducts = {
     code: string,
     expected: MedicationIdentity,
   ) => Promise<ProductLink>;
+  autoLink: (
+    planId: string,
+    medicineId: string,
+    expected: MedicationIdentity,
+  ) => Promise<ProductLink>;
 };
 
 // 제품 검색 응답을 검증해 신뢰할 수 없는 후보는 표시하지 않는다.

@@ -281,6 +281,113 @@ class MedicationProductTests(unittest.TestCase):
             event["headers"]["origin"] = "https://not-allowed.example.com"
             self.assertEqual(api.lambda_handler(event, None)["statusCode"], 403)
 
+    # 공백과 구분 기호만 다른 유일 품목을 연결하되 기록과 버전은 보존한다.
+    def test_auto_link_normalized_unique_name_preserves_state(self):
+        self.med["name"] = "합성 제품"
+        self.table = FakeTable(self.snapshot)
+        request = {"planId": self.plan["id"], "medicineId": self.med["id"], "expectedRevision": 1}
+        result = api.auto_link_mfds_product(self.table, "synthetic-box", request)
+        self.assertEqual(result["productCode"], "000000001")
+        self.assertEqual(api.read_snapshot(self.table, "synthetic-box"), {"revision": 1, "state": self.snapshot})
+        self.assertEqual(self.mfds.names, ["합성"])
+
+    # 식약처 품목명이나 성분에서 명시된 동일 수치와 단위만 함량을 확인한다.
+    def test_auto_match_strength_checks_name_or_ingredient(self):
+        med = {"name": "합성 캡슐", "strength": "300mg"}
+        self.assertTrue(api.auto_product_matches(med, "합성캡슐300밀리그램(합성성분)"))
+        self.assertFalse(api.auto_product_matches(med, "합성캡슐150밀리그램(합성성분)"))
+        self.assertFalse(api.auto_product_matches(med, "합성캡슐(합성성분)"))
+        self.assertTrue(api.auto_product_matches(med, "합성캡슐(합성성분)", ingredients=[{"amount": "300", "unit": "밀리그램", "basis": "1캡슐 중"}]))
+        self.assertFalse(api.auto_product_matches(med, "합성캡슐(합성성분)", ingredients=[{"amount": "300", "unit": "mg", "basis": None}]))
+        self.assertFalse(api.auto_product_matches(med, "합성캡슐(합성성분)", ingredients=[{"amount": "300", "unit": "mg", "basis": "100ml 중"}]))
+        self.assertFalse(api.auto_product_matches(med, "합성캡슐(합성성분)", ingredients=[{"amount": "300", "unit": "ml", "basis": "1캡슐 중"}]))
+        self.assertFalse(api.auto_product_matches({"name": "합성 캡슐", "strength": "1정"}, "합성캡슐"))
+
+    # 괄호 속 함량과 제형을 무시해 서로 다른 제품을 같은 제품으로 만들지 않는다.
+    def test_auto_match_keeps_form_and_parenthetical_amount(self):
+        med = {"name": "합성정", "strength": ""}
+        self.assertFalse(api.auto_product_matches(med, "합성정(300mg)"))
+        self.assertFalse(api.auto_product_matches(med, "합성정(서방형)"))
+        self.assertFalse(api.auto_product_matches(med, "합성서방정"))
+        self.assertTrue(api.auto_product_matches(med, "합성정(합성성분)"))
+        self.assertFalse(api.auto_product_matches({"name": "합성정(가상성분)", "strength": ""}, "합성정(다른성분)"))
+        self.assertTrue(api.auto_product_matches({"name": "합성정(가상성분)", "strength": ""}, "합성정(가상성분)"))
+        self.assertFalse(api.auto_product_matches({"name": "합성정(가상성분)", "strength": ""}, "합성정"))
+        self.assertTrue(api.auto_product_matches({"name": "합성정(가상성분)", "strength": ""}, "합성정", ingredients=[{"name": "가상성분"}]))
+
+    # 가장 비슷해 보여도 다른 이름과 여러 동일 후보는 연결하지 않는다.
+    def test_auto_match_ambiguous_or_different_names_are_not_linked(self):
+        self.med["name"] = "합성 제품"
+        self.table = FakeTable(self.snapshot)
+        request = {"planId": self.plan["id"], "medicineId": self.med["id"], "expectedRevision": 1}
+        with patch.object(self.mfds, "search", return_value=[{"ITEM_SEQ": "000000001", "ITEM_NAME": "합성서방제품", "ENTP_NAME": "합성"}]):
+            with self.assertRaises(api.ApiError) as error:
+                api.auto_link_mfds_product(self.table, "synthetic-box", request)
+            self.assertEqual(error.exception.code, "AUTO_MATCH_UNCERTAIN")
+        with patch.object(self.mfds, "search", return_value=[{"ITEM_SEQ": "000000001", "ITEM_NAME": "합성 제품", "ENTP_NAME": "A"}, {"ITEM_SEQ": "000000002", "ITEM_NAME": "합성제품", "ENTP_NAME": "B"}]):
+            with self.assertRaises(api.ApiError) as error:
+                api.auto_link_mfds_product(self.table, "synthetic-box", request)
+            self.assertEqual(error.exception.code, "AUTO_MATCH_UNCERTAIN")
+        self.assertEqual(self.table.writes, [])
+
+    # 상세의 다른 함량 또는 이름은 검색 결과가 일치해도 저장하지 않는다.
+    def test_auto_match_rechecks_detail_before_saving(self):
+        self.med["name"] = "합성 제품"
+        self.med["strength"] = "300mg"
+        self.table = FakeTable(self.snapshot)
+        request = {"planId": self.plan["id"], "medicineId": self.med["id"], "expectedRevision": 1}
+        with self.assertRaises(api.ApiError) as error:
+            api.auto_link_mfds_product(self.table, "synthetic-box", request)
+        self.assertEqual(error.exception.code, "AUTO_MATCH_UNCERTAIN")
+        self.assertNotIn("product_links", self.table.items[("BOX#synthetic-box", "MEDICATION_STATE")])
+
+    # 품목명에 없는 함량을 공식 성분에서 확인하면 자동 연결한다.
+    def test_auto_link_confirms_strength_in_ingredient(self):
+        self.med["name"] = "합성 제품"
+        self.med["strength"] = "300mg"
+        self.table = FakeTable(self.snapshot)
+        request = {"planId": self.plan["id"], "medicineId": self.med["id"], "expectedRevision": 1}
+        with patch.object(self.mfds, "ingredients", return_value=[{"name": "합성 성분", "amount": "300", "unit": "mg", "basis": "1캡슐 중"}]):
+            result = api.auto_link_mfds_product(self.table, "synthetic-box", request)
+        self.assertEqual(result["productCode"], "000000001")
+        self.assertEqual(api.read_snapshot(self.table, "synthetic-box")["state"], self.snapshot)
+
+    # 검색 이후 다른 기기의 기록 변경은 자동 연결을 조건부 충돌로 거부한다.
+    def test_auto_link_cannot_overwrite_concurrent_snapshot(self):
+        self.med["name"] = "합성 제품"
+        self.table = FakeTable(self.snapshot)
+        request = {"planId": self.plan["id"], "medicineId": self.med["id"], "expectedRevision": 1}
+        def changed(item):
+            item["revision"] = 2
+        self.table.before_state_put = changed
+        with self.assertRaises(api.ApiError) as error:
+            api.auto_link_mfds_product(self.table, "synthetic-box", request)
+        self.assertEqual(error.exception.status, 409)
+        self.assertNotIn("product_links", self.table.items[("BOX#synthetic-box", "MEDICATION_STATE")])
+
+    # HTTP 자동 연결은 공개 모드에서도 본문 검증과 동일한 저장 경계를 사용한다.
+    def test_auto_link_http_route(self):
+        self.med["name"] = "합성 제품"
+        self.table = FakeTable(self.snapshot)
+        environment = {"MEDKIT_MEDICATION_TABLE": api.TABLE_NAME, "MEDKIT_BOX_ID": "synthetic-box",
+                       "MEDKIT_ALLOWED_ORIGIN": "https://synthetic.example.com", "MEDKIT_MEDICATION_PUBLIC_DEMO": "true"}
+        body = {"planId": self.plan["id"], "medicineId": self.med["id"], "expectedRevision": 1}
+        event = {"rawPath": "/medicine-products/auto-link", "requestContext": {"http": {"method": "POST"}},
+                 "headers": {"content-type": "application/json", "origin": "https://synthetic.example.com"}, "body": json.dumps(body)}
+        with patch.dict(os.environ, environment, clear=True), patch.object(api, "get_table", return_value=self.table):
+            response = api.lambda_handler(event, None)
+        self.assertEqual(response["statusCode"], 200)
+        self.assertEqual(json.loads(response["body"])["productCode"], "000000001")
+
+    # 다른 기기가 먼저 연결한 제품은 자동 조회가 덮어쓰지 않는다.
+    def test_auto_link_returns_existing_without_external_calls(self):
+        api.link_mfds_product(self.table, "synthetic-box", self.request)
+        calls = self.mfds.detail_calls
+        result = api.auto_link_mfds_product(self.table, "synthetic-box", {key: self.request[key] for key in ("planId", "medicineId", "expectedRevision")})
+        self.assertEqual(result["productCode"], "000000001")
+        self.assertEqual(self.mfds.detail_calls, calls)
+        self.assertEqual(self.mfds.names, [])
+
 
 if __name__ == "__main__":
     unittest.main()

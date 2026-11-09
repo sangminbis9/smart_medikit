@@ -234,6 +234,27 @@ export function useMedicationPlans(demo: boolean) {
             throw new Error('연결된 제품 정보를 확인하지 못했어요.');
           return result;
         },
+        // 저장된 약 이름과 함량으로 서버에서 일치하는 품목을 자동 연결한다.
+        async autoLink(
+          planId: string,
+          medicineId: string,
+          expected: MedicationIdentity,
+        ) {
+          if (!isCurrent(planId, medicineId, expected))
+            throw new Error(
+              '복용약이 변경됐어요. 최신 목록에서 다시 확인해 주세요.',
+            );
+          const result = parseProductLink(
+            await productRequest('/medicine-products/auto-link', 'POST', {
+              planId,
+              medicineId,
+              expectedRevision: current.current.revision,
+            }),
+          );
+          if (result.planId !== planId || result.medicineId !== medicineId)
+            throw new Error('연결된 제품 정보를 확인하지 못했어요.');
+          return result;
+        },
       };
     },
     [demo, productRequest, status],

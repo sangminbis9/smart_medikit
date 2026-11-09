@@ -7,11 +7,6 @@ import {
   type MedicationSchedule,
   type MedicationTiming,
 } from './medicationPlans';
-import { MedicationProductSearch } from './MedicationProductInfo';
-import type {
-  MedicationProducts,
-  ProductCandidate,
-} from './medicationProducts';
 import { Dialog, Icon } from './ui';
 
 const weekdayLabels = ['일', '월', '화', '수', '목', '금', '토'];
@@ -232,9 +227,6 @@ export function MedicationPlanForm({
   onSave,
   onClose,
   storageLabel,
-  products,
-  onLinkProducts,
-  onProductLinkFailure,
   saveError = '',
 }: {
   initial: MedicationPlan;
@@ -244,12 +236,6 @@ export function MedicationPlanForm({
   ) => Promise<boolean>;
   onClose: () => void;
   storageLabel: string;
-  products: MedicationProducts;
-  onLinkProducts: (
-    plan: MedicationPlan,
-    selections: Record<string, ProductCandidate>,
-  ) => Promise<number>;
-  onProductLinkFailure: (count: number) => void;
   saveError?: string;
 }) {
   // 입력 중인 복사본을 만들어 저장 전 원래 목록을 바꾸지 않는다.
@@ -258,9 +244,6 @@ export function MedicationPlanForm({
   });
   const [error, setError] = useState('');
   const [pending, setPending] = useState(false);
-  const [selections, setSelections] = useState<
-    Record<string, ProductCandidate>
-  >({});
   const pendingRef = useRef(false);
 
   // 묶음의 표시 이름을 입력한다.
@@ -308,16 +291,8 @@ export function MedicationPlanForm({
     setError('');
     try {
       // 서버가 저장을 확인하기 전에는 입력창과 기존 목록을 유지한다.
-      if (await onSave(next, initial)) {
-        let failed = 0;
-        try {
-          failed = await onLinkProducts(next, selections);
-        } catch {
-          failed = Object.keys(selections).length || 1;
-        }
-        if (failed) onProductLinkFailure(failed);
-        onClose();
-      } else
+      if (await onSave(next, initial)) onClose();
+      else
         setError(
           '저장하지 못했어요. 입력 내용은 유지돼요. 다른 기기에서 변경했다면 닫고 최신 내용을 다시 열어주세요.',
         );
@@ -391,30 +366,12 @@ export function MedicationPlanForm({
                 function medicineFields(medicine, index) {
                   // 현재 약의 입력값만 교체한다.
                   function updateMedicine(patch: Partial<MedicationItem>) {
-                    // 이름·함량이 바뀌면 이전에 고른 품목을 재확인한다.
-                    if (
-                      (patch.name !== undefined &&
-                        patch.name !== medicine.name) ||
-                      (patch.strength !== undefined &&
-                        patch.strength !== medicine.strength)
-                    ) {
-                      setSelections(function clearSelection(previous) {
-                        const next = { ...previous };
-                        delete next[medicine.id];
-                        return next;
-                      });
-                    }
                     const medicines = [...draft.medicines];
                     medicines[index] = { ...medicine, ...patch };
                     setDraft({ ...draft, medicines });
                   }
                   // 현재 약 정보 행을 삭제한다.
                   function removeMedicine() {
-                    setSelections(function clearSelection(previous) {
-                      const next = { ...previous };
-                      delete next[medicine.id];
-                      return next;
-                    });
                     const medicines = [...draft.medicines];
                     medicines.splice(index, 1);
                     setDraft({ ...draft, medicines });
@@ -498,28 +455,6 @@ export function MedicationPlanForm({
                           />
                         </label>
                       </div>
-                      {products.available && (
-                        <details className="medication-product-lookup">
-                          <summary>식약처 제품 정보 연결</summary>
-                          <MedicationProductSearch
-                            key={`${medicine.id}:${medicine.name}:${medicine.strength}`}
-                            name={medicine.name}
-                            products={products}
-                            selected={selections[medicine.id] ?? null}
-                            onSelect={function selectProduct(candidate) {
-                              setSelections(function saveSelection(previous) {
-                                return {
-                                  ...previous,
-                                  [medicine.id]: candidate,
-                                };
-                              });
-                            }}
-                          />
-                          <p className="medication-hint">
-                            제품 연결은 복용약 저장 후 완료돼요.
-                          </p>
-                        </details>
-                      )}
                       <label className="medication-checkbox">
                         <input
                           type="checkbox"

@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
   createMedicationPlan,
   type MedicationItem,
@@ -7,14 +7,23 @@ import {
 } from './medicationPlans';
 import { MedicationPlanForm } from './MedicationPlanForm';
 import { MedicationProductDialog } from './MedicationProductInfo';
-import type {
-  MedicationProducts,
-  ProductCandidate,
-} from './medicationProducts';
+import type { MedicationProducts } from './medicationProducts';
 import { Badge, Dialog, Icon } from './ui';
 import './medicationPlans.css';
 
 const weekdays = ['일', '월', '화', '수', '목', '금', '토'];
+
+// 같은 약이라도 이름이나 함량을 수정하면 다시 식별한다.
+function productAttemptKey(planId: string, medicine: MedicationItem): string {
+  return JSON.stringify([
+    planId,
+    medicine.id,
+    medicine.name,
+    medicine.strength,
+  ]);
+}
+
+type ProductMatchState = 'checking' | 'matched' | 'review' | 'unavailable';
 
 // 사용자가 입력한 복용 방식과 일정만 읽기 쉬운 문장으로 표시한다.
 export function medicationTimingLabel(timing: MedicationTiming): string {
@@ -57,12 +66,125 @@ export default function MedicationPlans({
   } | null>(null);
   const [pending, setPending] = useState(false);
   const pendingRef = useRef(false);
+  const attempted = useRef(new Set<string>());
+  const workerRunning = useRef(false);
+  const latestPlans = useRef(plans);
+  const latestProducts = useRef(products);
+  const [matchStates, setMatchStates] = useState<
+    Record<string, ProductMatchState>
+  >({});
+  const [retryGeneration, setRetryGeneration] = useState(0);
+  latestPlans.current = plans;
+  latestProducts.current = products;
   const disabled = busy || pending;
   const active: MedicationPlan[] = [];
   const ended: MedicationPlan[] = [];
   for (const plan of plans) {
     if (plan.endedOn) ended.push(plan);
     else active.push(plan);
+  }
+
+  // 이미 연결된 품목은 건너뛰고 미연결 약만 한 번씩 순서대로 조회한다.
+  useEffect(
+    function autoMatchProducts() {
+      if (!products.available || workerRunning.current) return;
+      workerRunning.current = true;
+      async function run() {
+        const knownIdentities = new Set<string>();
+        for (const plan of latestPlans.current) {
+          for (const medicine of plan.medicines)
+            knownIdentities.add(productAttemptKey(plan.id, medicine));
+        }
+        let links;
+        try {
+          links = await products.links();
+        } catch {
+          // 목록 연결 상태를 모르면 중복 연결하지 않고 명시적 재시도를 기다린다.
+          for (const plan of latestPlans.current) {
+            for (const medicine of plan.medicines) {
+              const key = productAttemptKey(plan.id, medicine);
+              if (!attempted.current.has(key)) {
+                attempted.current.add(key);
+                setMatchStates(function markUnavailable(previous) {
+                  return { ...previous, [key]: 'unavailable' };
+                });
+              }
+            }
+          }
+          workerRunning.current = false;
+          return;
+        }
+        while (latestProducts.current.available) {
+          let target:
+            | { planId: string; medicine: MedicationItem; key: string }
+            | undefined;
+          for (const plan of latestPlans.current) {
+            for (const medicine of plan.medicines) {
+              const key = productAttemptKey(plan.id, medicine);
+              if (attempted.current.has(key)) continue;
+              if (
+                knownIdentities.has(key) &&
+                links.some(function same(link) {
+                  return (
+                    link.planId === plan.id && link.medicineId === medicine.id
+                  );
+                })
+              ) {
+                attempted.current.add(key);
+                setMatchStates(function markMatched(previous) {
+                  return { ...previous, [key]: 'matched' };
+                });
+                continue;
+              }
+              target = { planId: plan.id, medicine, key };
+              break;
+            }
+            if (target) break;
+          }
+          if (!target) break;
+          const { planId, medicine, key } = target;
+          attempted.current.add(key);
+          setMatchStates(function markChecking(previous) {
+            return { ...previous, [key]: 'checking' };
+          });
+          try {
+            await latestProducts.current.autoLink(
+              planId,
+              medicine.id,
+              medicine,
+            );
+            setMatchStates(function markMatched(previous) {
+              return { ...previous, [key]: 'matched' };
+            });
+          } catch (cause) {
+            const review = Boolean(
+              cause &&
+              typeof cause === 'object' &&
+              'status' in cause &&
+              cause.status === 422,
+            );
+            setMatchStates(function markFailed(previous) {
+              return { ...previous, [key]: review ? 'review' : 'unavailable' };
+            });
+          }
+        }
+        workerRunning.current = false;
+      }
+      void run();
+    },
+    [plans, products, retryGeneration],
+  );
+
+  // 사용자가 요청한 약만 자동 식별을 한 번 더 시도한다.
+  function retryProduct(planId: string, medicine: MedicationItem) {
+    const key = productAttemptKey(planId, medicine);
+    attempted.current.delete(key);
+    setMatchStates(function markChecking(previous) {
+      return { ...previous, [key]: 'checking' };
+    });
+    setRetryGeneration(function next(value) {
+      return value + 1;
+    });
   }
   // 열린 제품 창의 약이 다른 기기에서 바뀌었는지 확인한다.
   const currentProductMedicine = productTarget
@@ -90,34 +212,6 @@ export default function MedicationPlans({
   // 입력 중인 등록창을 닫는다.
   function closeEditor() {
     setEditing(null);
-  }
-  // 저장된 약에 선택한 품목을 각각 연결하며 실패 건수를 반환한다.
-  async function linkSavedProducts(
-    plan: MedicationPlan,
-    selections: Record<string, ProductCandidate>,
-  ) {
-    let failed = 0;
-    for (const medicine of plan.medicines) {
-      const candidate = selections[medicine.id];
-      if (!candidate) continue;
-      try {
-        await products.link(
-          plan.id,
-          medicine.id,
-          candidate.productCode,
-          medicine,
-        );
-      } catch {
-        failed++;
-      }
-    }
-    return failed;
-  }
-  // 복용약 저장과 제품 연결의 부분 실패를 구분해서 알린다.
-  function productLinkFailed(count: number) {
-    setActionError(
-      `복용약은 저장됐지만 제품 정보 ${count}건을 연결하지 못했어요. 각 약의 제품 사용정보에서 다시 연결해 주세요.`,
-    );
   }
   // 삭제 확인창을 닫고 이전 오류를 지운다.
   function closeDelete() {
@@ -247,15 +341,25 @@ export default function MedicationPlans({
                         </small>
                       )}
                       {products.available && (
-                        <button
-                          type="button"
-                          className="text-button medication-product-open"
-                          onClick={showProduct}
-                          disabled={disabled}
-                          aria-label={`${medicine.name} 제품 사용정보`}
-                        >
-                          제품 사용정보 확인
-                        </button>
+                        <>
+                          <button
+                            type="button"
+                            className="text-button medication-product-open"
+                            onClick={showProduct}
+                            disabled={disabled}
+                            aria-label={`${medicine.name} 제품 사용정보`}
+                          >
+                            제품 사용정보 확인
+                          </button>
+                          {(matchStates[
+                            productAttemptKey(plan.id, medicine)
+                          ] === 'review' ||
+                            matchStates[
+                              productAttemptKey(plan.id, medicine)
+                            ] === 'unavailable') && (
+                            <small>제품 정보 확인 필요</small>
+                          )}
+                        </>
                       )}
                     </li>
                   );
@@ -368,9 +472,6 @@ export default function MedicationPlans({
           onSave={onSave}
           onClose={closeEditor}
           storageLabel={storageLabel}
-          products={products}
-          onLinkProducts={linkSavedProducts}
-          onProductLinkFailure={productLinkFailed}
           saveError={error}
         />
       )}
@@ -380,6 +481,14 @@ export default function MedicationPlans({
           medicine={productTarget.medicine}
           products={products}
           stale={productStale}
+          matchState={
+            matchStates[
+              productAttemptKey(productTarget.planId, productTarget.medicine)
+            ] ?? 'checking'
+          }
+          onRetry={function retry() {
+            retryProduct(productTarget.planId, productTarget.medicine);
+          }}
           onClose={function closeProduct() {
             setProductTarget(null);
           }}

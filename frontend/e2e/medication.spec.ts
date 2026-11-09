@@ -811,7 +811,7 @@ test.describe('완전 공개 시연 모드', function publicModeTests() {
     expect(server.authorizationHeaders).toBe(0);
   });
 
-  // 합성 제품 후보와 별도 연결을 제공하며 실제 식약처와 AWS는 호출하지 않는다.
+  // 제품 자동 연결 요청과 식약처 상세를 합성 응답으로 대체한다.
   async function mockProducts(context: BrowserContext, server: MockApi) {
     const saved: {
       planId: string;
@@ -821,32 +821,19 @@ test.describe('완전 공개 시연 모드', function publicModeTests() {
       name: string;
       strength: string;
     }[] = [];
-    const productServer = { saved, rejectLink: false, searches: 0 };
+    const products = {
+      saved,
+      rejectLink: false,
+      attempts: 0,
+      active: 0,
+      maxActive: 0,
+    };
     await context.route(
       '**/medication-api/medicine-products/**',
       async function respondProduct(route) {
         const request = route.request();
         const path = new URL(request.url()).pathname;
-        if (path.endsWith('/search')) {
-          productServer.searches++;
-          expect(Object.keys(request.postDataJSON())).toEqual(['name']);
-          await route.fulfill({
-            json: {
-              candidates: [
-                {
-                  productCode: '000000001',
-                  productName: '합성 제품 A',
-                  manufacturer: '합성 업체 A',
-                },
-                {
-                  productCode: '000000002',
-                  productName: '합성 제품 B',
-                  manufacturer: '합성 업체 B',
-                },
-              ],
-            },
-          });
-        } else if (path.endsWith('/links')) {
+        if (path.endsWith('/links')) {
           const links = saved
             .filter(function current(link) {
               const medicine = server.state.plans
@@ -870,17 +857,20 @@ test.describe('완전 공개 시연 모드', function publicModeTests() {
               };
             });
           await route.fulfill({ json: { links } });
-        } else if (path.endsWith('/link')) {
+        } else if (path.endsWith('/auto-link')) {
+          products.attempts++;
+          products.active++;
+          products.maxActive = Math.max(products.maxActive, products.active);
           const body = request.postDataJSON() as {
             planId: string;
             medicineId: string;
-            productCode: string;
             expectedRevision: number;
           };
-          if (productServer.rejectLink) {
-            await route.fulfill({ status: 503, json: { code: 'UNAVAILABLE' } });
-            return;
-          }
+          expect(Object.keys(body).sort()).toEqual([
+            'expectedRevision',
+            'medicineId',
+            'planId',
+          ]);
           expect(body.expectedRevision).toBe(server.revision);
           const medicine = server.state.plans
             .find(function plan(item) {
@@ -891,14 +881,24 @@ test.describe('완전 공개 시연 모드', function publicModeTests() {
             });
           if (!medicine) {
             await route.fulfill({ status: 409 });
+            products.active--;
+            return;
+          }
+          if (products.rejectLink) {
+            await route.fulfill({
+              status: 422,
+              json: { code: 'MATCH_UNCERTAIN' },
+            });
+            products.active--;
             return;
           }
           const link = {
-            ...body,
+            planId: body.planId,
+            medicineId: body.medicineId,
+            productCode: '000000001',
+            productName: '합성 제품',
             name: medicine.name,
             strength: medicine.strength,
-            productName:
-              body.productCode === '000000002' ? '합성 제품 B' : '합성 제품 A',
           };
           saved.push(link);
           await route.fulfill({
@@ -909,12 +909,13 @@ test.describe('완전 공개 시연 모드', function publicModeTests() {
               productName: link.productName,
             },
           });
+          products.active--;
         } else {
           await route.fulfill({
             json: {
               productCode: path.split('/').pop(),
-              productName: '합성 제품 B',
-              manufacturer: '합성 업체 B',
+              productName: '합성 제품',
+              manufacturer: '합성 업체',
               ingredients: [
                 { name: '합성 성분', amount: null, unit: null, basis: null },
               ],
@@ -928,14 +929,14 @@ test.describe('완전 공개 시연 모드', function publicModeTests() {
         }
       },
     );
-    return productServer;
+    return products;
   }
 
-  // 저장 전 후보만 고르고 저장 성공 후 연결하며 새로고침 후에도 상세를 읽는다.
-  test('식약처 후보 선택과 제품 사용정보 연결', async function selectProduct({
+  // 등록한 두 약은 수동 선택 없이 순차 연결하고 새로고침해도 사용정보를 보여준다.
+  test('식약처 제품 자동 연결과 제품 사용정보', async function autoProduct({
     page,
     context,
-  }, testInfo) {
+  }) {
     const server = await mockMedicationApi(context);
     const products = await mockProducts(context, server);
     await openPublicSchedule(page);
@@ -947,31 +948,39 @@ test.describe('완전 공개 시연 모드', function publicModeTests() {
       .getByLabel('묶음 이름', { exact: false })
       .fill('합성 연결 처방');
     await editor.getByRole('button', { name: '약 추가', exact: true }).click();
-    await editor.getByLabel('약 이름', { exact: false }).fill('합성 약 A');
+    await editor
+      .getByLabel('약 이름', { exact: false })
+      .first()
+      .fill('합성 약 A');
     await editor
       .getByLabel('1회 복용량', { exact: false })
+      .first()
       .fill('사용자 입력량');
-    await editor.getByText('식약처 제품 정보 연결').click();
-    await editor.getByRole('button', { name: '식약처 제품 검색' }).click();
+    await editor.getByRole('button', { name: '약 추가', exact: true }).click();
     await editor
-      .getByRole('button', { name: /합성 제품 B.*합성 업체 B/ })
-      .click();
-    await expect(editor.getByText(/선택: 합성 제품 B/)).toBeVisible();
-    await editor.getByLabel('함량·제형', { exact: false }).fill('변경한 함량');
-    await expect(editor.getByText(/선택: 합성 제품 B/)).toHaveCount(0);
-    await editor.getByRole('button', { name: '식약처 제품 검색' }).click();
-    await editor
-      .getByRole('button', { name: /합성 제품 B.*합성 업체 B/ })
-      .click();
-    expect(products.saved).toHaveLength(0);
+      .getByLabel('약 이름', { exact: false })
+      .last()
+      .fill('합성 약 B');
+    await expect(editor.getByText('식약처 제품 정보 연결')).toHaveCount(0);
     await editor
       .getByRole('button', { name: '복용약 등록', exact: true })
       .click();
     await expect(editor).toHaveCount(0);
-    expect(products.saved).toHaveLength(1);
-    expect(products.saved[0].productCode).toBe('000000002');
+    await expect
+      .poll(function savedCount() {
+        return products.saved.length;
+      })
+      .toBe(2);
+    expect(products.maxActive).toBe(1);
     expect(server.state.plans[0].medicines[0].dose).toBe('사용자 입력량');
+    // 기존 서버에 등록된 미연결 약도 새 진입에서 자동 처리한다.
+    products.saved.splice(0);
     await page.reload();
+    await expect
+      .poll(function existingSavedCount() {
+        return products.saved.length;
+      })
+      .toBe(2);
     const card = page.getByRole('article', {
       name: '합성 연결 처방',
       exact: true,
@@ -982,24 +991,11 @@ test.describe('완전 공개 시연 모드', function publicModeTests() {
     await expect(productDialog.getByText('합성 효능')).toBeVisible();
     await expect(productDialog.getByText('합성 성분')).toBeVisible();
     await expect(productDialog.getByText('합성 주의사항')).toBeVisible();
-    await expect(
-      productDialog.getByText(
-        '처방받은 복용법과 아래 제품 허가정보는 다를 수 있어요.',
-        { exact: false },
-      ),
-    ).toBeVisible();
-    await expect(
-      productDialog.getByText(/출처: 식품의약품안전처/),
-    ).toBeVisible();
-    const evidenceDir = resolve('..', 'local_data', 'medication-product-qa');
-    await mkdir(evidenceDir, { recursive: true });
-    await page.screenshot({
-      path: resolve(evidenceDir, `${testInfo.project.name}-product.png`),
-    });
+    await expect(productDialog.getByText(/자동 연결된 제품/)).toBeVisible();
   });
 
-  // 제품 연결만 실패해도 복용약 저장 성공을 취소하거나 중복 저장하지 않는다.
-  test('식약처 연결 실패 시 저장된 복용약 보존', async function failedLink({
+  // 불명확한 품목을 임의 연결하지 않고 복약 저장과 기존 입력을 유지한다.
+  test('자동 연결 불명확 시 복용약을 보존하고 재조회', async function uncertainProduct({
     page,
     context,
   }) {
@@ -1016,18 +1012,38 @@ test.describe('완전 공개 시연 모드', function publicModeTests() {
       .fill('합성 연결 실패');
     await editor.getByRole('button', { name: '약 추가', exact: true }).click();
     await editor.getByLabel('약 이름', { exact: false }).fill('합성 약 A');
-    await editor.getByText('식약처 제품 정보 연결').click();
-    await editor.getByRole('button', { name: '식약처 제품 검색' }).click();
-    await editor
-      .getByRole('button', { name: /합성 제품 B.*합성 업체 B/ })
-      .click();
     await editor
       .getByRole('button', { name: '복용약 등록', exact: true })
       .click();
     await expect(editor).toHaveCount(0);
-    await expect(page.getByRole('alert')).toContainText('복용약은 저장됐지만');
+    await expect
+      .poll(function attemptCount() {
+        return products.attempts;
+      })
+      .toBe(1);
+    await page.getByRole('button', { name: '복용약 새로고침' }).click();
+    await expect(
+      page.getByRole('button', { name: '복용약 등록' }),
+    ).toBeEnabled();
+    expect(products.attempts).toBe(1);
     expect(server.state.plans).toHaveLength(1);
     expect(server.acceptedWrites).toBe(1);
+    const card = page.getByRole('article', {
+      name: '합성 연결 실패',
+      exact: true,
+    });
+    await card.getByText('상세보기').click();
+    await card.getByRole('button', { name: '합성 약 A 제품 사용정보' }).click();
+    await expect(
+      page.getByRole('dialog').getByText(/정확한 품목을 확인하지 못했어요/),
+    ).toBeVisible();
     expect(products.saved).toHaveLength(0);
+    products.rejectLink = false;
+    await page
+      .getByRole('dialog')
+      .getByRole('button', { name: '다시 조회' })
+      .click();
+    await expect(page.getByRole('dialog').getByText('합성 효능')).toBeVisible();
+    expect(products.attempts).toBe(2);
   });
 });

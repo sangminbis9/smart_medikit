@@ -173,6 +173,7 @@ export default function Schedule({
             onDelete={medications.remove}
             onEnd={medications.toggleEnded}
             storageLabel={medications.storageLabel}
+            products={medications.products}
             busy={medications.busy}
             error={medications.error}
           />

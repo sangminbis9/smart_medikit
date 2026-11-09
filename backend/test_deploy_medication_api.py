@@ -6,6 +6,7 @@ import io
 import json
 import os
 import unittest
+import zipfile
 from unittest.mock import Mock, patch
 
 from backend import deploy_medication_api as deploy
@@ -19,6 +20,55 @@ class AwsFailure(Exception):
         super().__init__("출력하면 안 되는 합성 원문")
         self.response = {"Error": {"Code": code}}
         self.operation_name = operation
+
+
+class MedicationMfdsKeyTests(unittest.TestCase):
+    # 다른 계정·리전·함수의 키는 읽지 않고 승인된 함수만 확인한다.
+    def test_only_named_same_account_and_region_source_is_read(self):
+        lambdas = Mock()
+        synthetic_key = "synthetic-test-key"
+        lambdas.get_function_configuration.return_value = {
+            "FunctionArn": f"arn:aws:lambda:ap-northeast-2:{deploy.TABLE_OWNER_ACCOUNT}:function:{deploy.MFDS_KEY_SOURCE_FUNCTION}",
+            "Environment": {"Variables": {"MFDS_API_KEY": synthetic_key}},
+        }
+        self.assertEqual(deploy.read_mfds_key_from_ocr(lambdas, deploy.TABLE_OWNER_ACCOUNT, "ap-northeast-2", deploy.MFDS_KEY_SOURCE_FUNCTION), synthetic_key)
+        for account, region, name in (("000000000000", "ap-northeast-2", deploy.MFDS_KEY_SOURCE_FUNCTION),
+                                      (deploy.TABLE_OWNER_ACCOUNT, "us-east-1", deploy.MFDS_KEY_SOURCE_FUNCTION),
+                                      (deploy.TABLE_OWNER_ACCOUNT, "ap-northeast-2", "unrelated")):
+            with self.assertRaises(RuntimeError) as error:
+                deploy.read_mfds_key_from_ocr(lambdas, account, region, name)
+            self.assertNotIn(synthetic_key, str(error.exception))
+        self.assertEqual(lambdas.get_function_configuration.call_count, 1)
+
+    # 함수 ARN 불일치나 키 누락은 키 원문 없이 실패한다.
+    def test_invalid_source_and_missing_key_fail_closed(self):
+        lambdas = Mock()
+        lambdas.get_function_configuration.return_value = {
+            "FunctionArn": "arn:aws:lambda:ap-northeast-2:000000000000:function:unrelated",
+            "Environment": {"Variables": {"MFDS_API_KEY": "synthetic-secret"}},
+        }
+        with self.assertRaises(RuntimeError) as error:
+            deploy.read_mfds_key_from_ocr(lambdas, deploy.TABLE_OWNER_ACCOUNT, "ap-northeast-2", deploy.MFDS_KEY_SOURCE_FUNCTION)
+        self.assertNotIn("synthetic-secret", str(error.exception))
+        lambdas.get_function_configuration.return_value = {
+            "FunctionArn": f"arn:aws:lambda:ap-northeast-2:{deploy.TABLE_OWNER_ACCOUNT}:function:{deploy.MFDS_KEY_SOURCE_FUNCTION}",
+            "Environment": {"Variables": {}},
+        }
+        with self.assertRaises(RuntimeError):
+            deploy.read_mfds_key_from_ocr(lambdas, deploy.TABLE_OWNER_ACCOUNT, "ap-northeast-2", deploy.MFDS_KEY_SOURCE_FUNCTION)
+
+    # 배포 ZIP에는 원본 공식 조회기만 포함하고 환경변수나 키 파일은 넣지 않는다.
+    def test_archive_reuses_original_client_without_secrets(self):
+        with zipfile.ZipFile(io.BytesIO(deploy.source_archive())) as archive:
+            self.assertEqual(set(archive.namelist()), {"medication_api.py", "medkit_mfds.py"})
+            self.assertIn(b"class MfdsClient", archive.read("medkit_mfds.py"))
+
+    # 실제 품목코드가 경로 변수에 들어와도 승인된 API의 GET 경로만 호출하도록 제한한다.
+    def test_product_detail_permission_uses_route_wildcard(self):
+        lambdas = Mock()
+        lambdas.get_policy.return_value = {"Policy": '{"Statement": []}'}
+        deploy.ensure_permission(lambdas, deploy.TABLE_OWNER_ACCOUNT, "ap-northeast-2", "synthetic-api", "GET /medicine-products/{productCode}", "MedicationProductDetail")
+        self.assertEqual(lambdas.add_permission.call_args.kwargs["SourceArn"], f"arn:aws:execute-api:ap-northeast-2:{deploy.TABLE_OWNER_ACCOUNT}:synthetic-api/*/GET/medicine-products/*")
 
 
 class FakeClock:

@@ -22,6 +22,10 @@ MAX_MEDICINES = 30
 MAX_TIMES = 12
 MAX_RECORDS = 2000
 MAX_REVISION = 9007199254740990
+MAX_PRODUCT_LINKS = 300
+MAX_ITEM_BYTES = 380 * 1024
+MFDS_DAILY_LIMIT = 100
+PRODUCT_CACHE_SECONDS = 24 * 60 * 60
 _table = None
 
 
@@ -405,18 +409,88 @@ def prepare_transition(previous, next_state):
     return next_state
 
 
-# 없는 항목만 빈 상태로 표시하고 손상된 서버 데이터를 새 빈 상태로 덮어쓰지 않는다.
-def read_snapshot(table, box_id):
+# 스냅샷과 별도 연결 메타데이터를 한 번에 읽어 일관된 조건부 저장을 준비한다.
+def read_bundle(table, box_id):
     response = table.get_item(Key={"pk": f"BOX#{box_id}", "sk": "MEDICATION_STATE"}, ConsistentRead=True)
     item = response.get("Item")
     if item is None:
-        return {"revision": 0, "state": {"version": 1, "plans": [], "records": []}}
+        return {"revision": 0, "state": {"version": 1, "plans": [], "records": []}}, None
     try:
         revision = integer(item["revision"], "저장 버전", 1, MAX_REVISION)
         state = validate_state(item["state"])
-    except (ApiError, KeyError, TypeError):
+        links = item.get("product_links")
+        if links is not None and not isinstance(links, dict):
+            raise ValueError("INVALID_PRODUCT_LINKS")
+        if links is not None:
+            if len(links) > MAX_PRODUCT_LINKS:
+                raise ValueError("INVALID_PRODUCT_LINKS")
+            for key, link in links.items():
+                if (not isinstance(key, str) or not re.fullmatch(r"[0-9a-f]{64}", key)
+                        or not isinstance(link, dict) or set(link) != {"productCode", "productName", "fingerprint"}
+                        or not isinstance(link["productCode"], str) or not re.fullmatch(r"[0-9]{9}", link["productCode"])
+                        or not isinstance(link["productName"], str) or not link["productName"].strip() or len(link["productName"]) > 200
+                        or not isinstance(link["fingerprint"], str) or not re.fullmatch(r"[0-9a-f]{64}", link["fingerprint"])):
+                    raise ValueError("INVALID_PRODUCT_LINKS")
+    except (ApiError, KeyError, TypeError, ValueError):
         raise ApiError(503, "STORED_DATA_INVALID", "저장된 복용약 데이터 확인이 필요해요. 기존 데이터는 변경하지 않았어요.") from None
-    return {"revision": revision, "state": state}
+    return {"revision": revision, "state": state}, links
+
+
+# 기존 클라이언트에는 연결 메타데이터 없이 기존 스냅샷 계약만 반환한다.
+def read_snapshot(table, box_id):
+    return read_bundle(table, box_id)[0]
+
+
+# 하나의 약을 고유하게 식별하면서 묶음·약 ID 원문을 연결 메타데이터에 저장하지 않는다.
+def product_link_key(plan_id, medicine_id):
+    value = json.dumps([plan_id, medicine_id], ensure_ascii=False, separators=(",", ":"))
+    return hashlib.sha256(value.encode("utf-8")).hexdigest()
+
+
+# 이름이나 함량이 바뀌면 이전 제품 선택을 다시 사용하지 않는다.
+def product_link_fingerprint(medicine):
+    value = json.dumps([medicine["name"], medicine["strength"]], ensure_ascii=False, separators=(",", ":"))
+    return hashlib.sha256(value.encode("utf-8")).hexdigest()
+
+
+# 현재 남아 있고 선택 당시 이름·함량이 일치하는 연결만 유지한다.
+def valid_product_links(state, links):
+    result = {}
+    if links is None:
+        return result
+    for plan in state["plans"]:
+        for medicine in plan["medicines"]:
+            key = product_link_key(plan["id"], medicine["id"])
+            link = links.get(key)
+            if (isinstance(link, dict) and set(link) == {"productCode", "productName", "fingerprint"}
+                    and isinstance(link["productCode"], str) and re.fullmatch(r"[0-9]{9}", link["productCode"])
+                    and isinstance(link["productName"], str) and 0 < len(link["productName"]) <= 200
+                    and link["fingerprint"] == product_link_fingerprint(medicine)):
+                result[key] = link
+    return result
+
+
+# 기존 복약 수정과 제품 연결 수정이 동시에 일어나도 어느 쪽도 덮어쓰지 않는다.
+def snapshot_write_request(box_id, revision, state, links, previous_links, next_revision):
+    item = {"pk": f"BOX#{box_id}", "sk": "MEDICATION_STATE", "revision": next_revision, "state": state, "updated_at": recorded_now()}
+    if links:
+        item["product_links"] = links
+    # 항목의 실제 크기와 요청 본문 크기를 별도로 제한한다.
+    if len(json.dumps(item, ensure_ascii=False, separators=(",", ":")).encode("utf-8")) > MAX_ITEM_BYTES:
+        raise ApiError(413, "PAYLOAD_TOO_LARGE", "저장 공간이 부족해요. 복용약 정보를 확인해 주세요.")
+    request = {"Item": item}
+    if revision == 0:
+        request["ConditionExpression"] = "attribute_not_exists(pk)"
+    else:
+        request["ExpressionAttributeNames"] = {"#revision": "revision", "#links": "product_links"}
+        request["ExpressionAttributeValues"] = {":expected": revision}
+        if previous_links is None:
+            link_condition = "attribute_not_exists(#links)"
+        else:
+            link_condition = "#links = :previous_links"
+            request["ExpressionAttributeValues"][":previous_links"] = previous_links
+        request["ConditionExpression"] = "#revision = :expected AND " + link_condition
+    return request
 
 
 # 현재 버전과 일치할 때에만 공유 스냅샷을 원자적으로 갱신한다.
@@ -424,19 +498,16 @@ def put_snapshot(table, box_id, body):
     exact_object(body, ("expected_revision", "state"), "저장 요청")
     expected = integer(body["expected_revision"], "저장 버전", 0, MAX_REVISION - 1)
     state = validate_state(body["state"])
-    previous = read_snapshot(table, box_id)
+    previous, previous_links = read_bundle(table, box_id)
     if previous["revision"] != expected:
         raise ApiError(409, "REVISION_CONFLICT", "다른 기기에서 복용약이 변경되었어요. 최신 내용을 불러와 확인해 주세요.")
     state = prepare_transition(previous["state"], state)
     # 요청 크기뿐 아니라 정규화·기록 시각 변경 후 실제 저장 크기도 제한한다.
     if len(json.dumps(state, ensure_ascii=False, separators=(",", ":")).encode("utf-8")) > MAX_BYTES:
         raise ApiError(413, "PAYLOAD_TOO_LARGE", "저장할 데이터는 300KB 이하여야 해요.")
-    item = {"pk": f"BOX#{box_id}", "sk": "MEDICATION_STATE", "revision": expected + 1, "state": state, "updated_at": recorded_now()}
-    request = {"Item": item}
-    if expected == 0:
-        request["ConditionExpression"] = "attribute_not_exists(pk)"
-    else:
-        request.update({"ConditionExpression": "#revision = :expected", "ExpressionAttributeNames": {"#revision": "revision"}, "ExpressionAttributeValues": {":expected": expected}})
+    # 약 삭제·이름·함량 변경에 따른 개인별 연결은 스냅샷과 함께 원자적으로 정리한다.
+    links = valid_product_links(state, previous_links)
+    request = snapshot_write_request(box_id, expected, state, links, previous_links, expected + 1)
     try:
         table.put_item(**request)
     except Exception as error:
@@ -444,6 +515,230 @@ def put_snapshot(table, box_id, body):
             raise ApiError(409, "REVISION_CONFLICT", "다른 기기에서 먼저 저장했어요. 최신 내용을 불러와 확인해 주세요.") from None
         raise
     return {"revision": expected + 1, "state": state}
+
+
+# 오류 코드만 분류하고 AWS 오류 원문이나 요청 내용을 외부에 노출하지 않는다.
+def is_conditional_failure(error):
+    return getattr(error, "response", {}).get("Error", {}).get("Code") == "ConditionalCheckFailedException"
+
+
+# 같은 보관함의 외부 요청량을 날짜별 원자 카운터로 제한한다.
+def consume_mfds_budget(table, box_id):
+    today = datetime.now(timezone.utc).date().isoformat()
+    key = {"pk": f"BOX#{box_id}", "sk": "MFDS_DAILY_BUDGET"}
+    # 날짜 변경과 동시 요청 경쟁을 제한 횟수만큼 다시 판정한다.
+    for _ in range(3):
+        try:
+            table.update_item(
+                Key=key,
+                UpdateExpression="SET #count = #count + :one",
+                ConditionExpression="#day = :today AND #count < :limit",
+                ExpressionAttributeNames={"#day": "day", "#count": "count"},
+                ExpressionAttributeValues={":today": today, ":one": 1, ":limit": MFDS_DAILY_LIMIT},
+            )
+            return
+        except Exception as error:
+            if not is_conditional_failure(error):
+                raise ApiError(503, "MFDS_BUDGET_UNAVAILABLE", "식약처 조회 준비 상태를 확인할 수 없어요.") from None
+        try:
+            table.update_item(
+                Key=key,
+                UpdateExpression="SET #day = :today, #count = :one",
+                ConditionExpression="attribute_not_exists(#day) OR #day < :today",
+                ExpressionAttributeNames={"#day": "day", "#count": "count"},
+                ExpressionAttributeValues={":today": today, ":one": 1},
+            )
+            return
+        except Exception as error:
+            if not is_conditional_failure(error):
+                raise ApiError(503, "MFDS_BUDGET_UNAVAILABLE", "식약처 조회 준비 상태를 확인할 수 없어요.") from None
+    raise ApiError(429, "MFDS_DAILY_LIMIT", "오늘의 식약처 조회 한도에 도달했어요. 나중에 다시 시도해 주세요.")
+
+
+# 서버 전용 키와 기존 공식 API 클라이언트를 사용하고 외부 요청마다 예산을 차감한다.
+def mfds_client(table, box_id):
+    key = os.environ.get("MFDS_API_KEY", "")
+    if not key or any(character.isspace() for character in key):
+        raise ApiError(503, "MFDS_NOT_CONFIGURED", "식약처 조회 연결을 준비 중이에요.")
+    try:
+        from medkit_mfds import MfdsClient
+    except ModuleNotFoundError:
+        from importlib import import_module
+        MfdsClient = import_module("ocr-lambda.backend.mfds").MfdsClient
+    client = MfdsClient(key, timeout=2, max_attempts=1, max_pages=1, page_size=100)
+    download = client.transport
+
+    # 키·검색어·응답 원문은 로그에 남기지 않고 요청 직전에 예산을 예약한다.
+    def limited_download(url):
+        consume_mfds_budget(table, box_id)
+        return download(url)
+
+    client.transport = limited_download
+    return client
+
+
+# 사용자 입력명으로 식약처 후보를 찾되 제한된 결과를 완전한 목록으로 오인하지 않는다.
+def search_mfds_products(table, box_id, body):
+    exact_object(body, ("name",), "약품 검색")
+    name = text_field(body["name"], "약 이름", 100, True)
+    if len(name) < 2:
+        raise ApiError(422, "SEARCH_TOO_SHORT", "약 이름을 두 글자 이상 입력해 주세요.")
+    client = mfds_client(table, box_id)
+    try:
+        rows = client.search(name)
+    except ApiError:
+        raise
+    except Exception:
+        raise ApiError(503, "MFDS_SEARCH_UNAVAILABLE", "식약처 검색을 완료하지 못했어요. 잠시 후 다시 시도해 주세요.") from None
+    candidates = []
+    seen = set()
+    for row in rows:
+        code = str(row.get("ITEM_SEQ", ""))
+        product_name = row.get("ITEM_NAME")
+        manufacturer = row.get("ENTP_NAME")
+        if (not re.fullmatch(r"[0-9]{9}", code) or not isinstance(product_name, str)
+                or not product_name.strip() or len(product_name) > 200
+                or (manufacturer is not None and (not isinstance(manufacturer, str) or len(manufacturer) > 200))):
+            raise ApiError(503, "MFDS_SEARCH_INVALID", "식약처 검색 결과를 확인할 수 없어요.")
+        if code not in seen:
+            seen.add(code)
+            candidates.append({"productCode": code, "productName": product_name.strip(), "manufacturer": (manufacturer or "").strip()})
+    return {"candidates": candidates}
+
+
+# 사용자 확인 품목의 공식 상세·성분을 같은 품목코드로 조회한다.
+def fetch_mfds_product(table, box_id, code):
+    client = mfds_client(table, box_id)
+    try:
+        detail = client.details(code)
+        info = client.product_info(code)
+        ingredients = client.ingredients(code)
+    except ApiError:
+        raise
+    except Exception:
+        raise ApiError(503, "MFDS_DETAIL_UNAVAILABLE", "식약처 제품 정보를 확인하지 못했어요. 잠시 후 다시 시도해 주세요.") from None
+    product_name, manufacturer = detail.get("ITEM_NAME"), detail.get("ENTP_NAME")
+    if (str(detail.get("ITEM_SEQ", "")) != code or not isinstance(product_name, str)
+            or not product_name.strip() or len(product_name) > 200
+            or (manufacturer is not None and (not isinstance(manufacturer, str) or len(manufacturer) > 200))
+            or not isinstance(info, dict) or info.get("source") != "MFDS_PERMIT_DETAIL"
+            or not isinstance(ingredients, list)):
+        raise ApiError(503, "MFDS_DETAIL_INVALID", "선택한 제품의 식약처 정보를 확인할 수 없어요.")
+    result_ingredients = []
+    for ingredient in ingredients:
+        if not isinstance(ingredient, dict) or not isinstance(ingredient.get("name"), str) or not ingredient["name"].strip():
+            raise ApiError(503, "MFDS_DETAIL_INVALID", "선택한 제품의 성분 정보를 확인할 수 없어요.")
+        entry = {}
+        for field in ("name", "amount", "unit", "basis"):
+            value = ingredient.get(field)
+            if value is not None and (not isinstance(value, str) or len(value) > 2000):
+                raise ApiError(503, "MFDS_DETAIL_INVALID", "선택한 제품의 성분 정보를 확인할 수 없어요.")
+            entry[field] = value.strip() if isinstance(value, str) else None
+        result_ingredients.append(entry)
+    result = {"productCode": code, "productName": product_name.strip(), "manufacturer": (manufacturer or "").strip(),
+              "ingredients": result_ingredients, "source": "MFDS_PERMIT_DETAIL", "checkedAt": recorded_now()}
+    for field in ("indications", "dosage", "precautions"):
+        value = info.get(field)
+        if value is not None and not isinstance(value, str):
+            raise ApiError(503, "MFDS_DETAIL_INVALID", "선택한 제품의 사용정보를 확인할 수 없어요.")
+        result[field] = value.strip() or None if isinstance(value, str) else None
+    if len(json.dumps(result, ensure_ascii=False, separators=(",", ":")).encode("utf-8")) > MAX_BYTES:
+        raise ApiError(413, "MFDS_DETAIL_TOO_LARGE", "제품 사용정보가 너무 길어 저장할 수 없어요.")
+    return result
+
+
+# 현재 묶음의 실제 약만 선택하고 이름·함량은 사용자 입력을 그대로 유지한다.
+def find_plan_medicine(state, plan_id, medicine_id):
+    for plan in state["plans"]:
+        if plan["id"] == plan_id:
+            for medicine in plan["medicines"]:
+                if medicine["id"] == medicine_id:
+                    return medicine
+    raise ApiError(409, "MEDICINE_CHANGED", "복용약이 변경됐어요. 최신 목록을 다시 확인해 주세요.")
+
+
+# 공식 품목 캐시가 확인된 형식과 최신 시간 범위인 경우에만 재사용한다.
+def reusable_cached_product(table, code):
+    try:
+        product = read_cached_product(table, code)
+        checked = datetime.fromisoformat(product["checkedAt"].replace("Z", "+00:00"))
+        age = (datetime.now(timezone.utc) - checked).total_seconds()
+        return product if 0 <= age <= PRODUCT_CACHE_SECONDS else None
+    except (ApiError, KeyError, TypeError, ValueError, OverflowError):
+        return None
+
+
+# 서버가 식약처 원문을 확인한 품목만 별도 캐시에 두고 사용자 선택을 연결한다.
+def link_mfds_product(table, box_id, body):
+    exact_object(body, ("planId", "medicineId", "expectedRevision", "productCode"), "제품 연결")
+    plan_id = text_field(body["planId"], "묶음 식별자", 200, True)
+    medicine_id = text_field(body["medicineId"], "약 식별자", 200, True)
+    code = text_field(body["productCode"], "품목코드", 9, True)
+    if not re.fullmatch(r"[0-9]{9}", code):
+        raise ApiError(422, "INVALID_PRODUCT_CODE", "선택한 품목코드를 확인해 주세요.")
+    revision = integer(body["expectedRevision"], "저장 버전", 1, MAX_REVISION)
+    before, _ = read_bundle(table, box_id)
+    if before["revision"] != revision:
+        raise ApiError(409, "REVISION_CONFLICT", "복용약 목록이 변경됐어요. 다시 확인해 주세요.")
+    medicine = find_plan_medicine(before["state"], plan_id, medicine_id)
+    fingerprint = product_link_fingerprint(medicine)
+    product = reusable_cached_product(table, code)
+    fresh = product is None
+    if fresh:
+        product = fetch_mfds_product(table, box_id, code)
+    # 검색·외부 조회가 오래 걸리는 동안 약이 바뀌면 확인한 연결을 저장하지 않는다.
+    latest, previous_links = read_bundle(table, box_id)
+    if latest["revision"] != revision or product_link_fingerprint(find_plan_medicine(latest["state"], plan_id, medicine_id)) != fingerprint:
+        raise ApiError(409, "REVISION_CONFLICT", "복용약 목록이 변경됐어요. 다시 확인해 주세요.")
+    links = valid_product_links(latest["state"], previous_links)
+    link_key = product_link_key(plan_id, medicine_id)
+    if link_key not in links and len(links) >= MAX_PRODUCT_LINKS:
+        raise ApiError(413, "PRODUCT_LINK_LIMIT", "연결할 수 있는 약품 수를 초과했어요.")
+    links[link_key] = {"productCode": code, "productName": product["productName"], "fingerprint": fingerprint}
+    # 제품 문서는 개인 연결과 분리해 저장하고 기록·일정은 변경하지 않는다.
+    if fresh:
+        table.put_item(Item={"pk": f"PRODUCT#{code}", "sk": "MFDS", "product": product})
+    request = snapshot_write_request(box_id, revision, latest["state"], links, previous_links, revision)
+    try:
+        table.put_item(**request)
+    except Exception as error:
+        if is_conditional_failure(error):
+            raise ApiError(409, "REVISION_CONFLICT", "다른 기기에서 변경했어요. 목록을 다시 확인해 주세요.") from None
+        raise
+    return {"planId": plan_id, "medicineId": medicine_id, "productCode": code, "productName": product["productName"]}
+
+
+# 기존 약의 ID와 입력 내용이 여전히 일치하는 제품 연결만 반환한다.
+def list_product_links(table, box_id):
+    snapshot, stored = read_bundle(table, box_id)
+    links = valid_product_links(snapshot["state"], stored)
+    result = []
+    for plan in snapshot["state"]["plans"]:
+        for medicine in plan["medicines"]:
+            link = links.get(product_link_key(plan["id"], medicine["id"]))
+            if link:
+                result.append({"planId": plan["id"], "medicineId": medicine["id"], "productCode": link["productCode"], "productName": link["productName"]})
+    return {"links": result}
+
+
+# 이미 확인해 저장한 제품만 반환하며 조회만으로 식약처에 새 요청을 보내지 않는다.
+def read_cached_product(table, code):
+    item = table.get_item(Key={"pk": f"PRODUCT#{code}", "sk": "MFDS"}, ConsistentRead=True).get("Item")
+    product = (item or {}).get("product")
+    if not isinstance(product, dict) or product.get("productCode") != code or product.get("source") != "MFDS_PERMIT_DETAIL":
+        raise ApiError(404, "PRODUCT_NOT_FOUND", "연결된 제품 정보를 찾을 수 없어요. 다시 선택해 주세요.")
+    if (set(product) != {"productCode", "productName", "manufacturer", "ingredients", "indications", "dosage", "precautions", "source", "checkedAt"}
+            or not isinstance(product["productName"], str) or not product["productName"].strip()
+            or not isinstance(product["manufacturer"], str) or not isinstance(product["checkedAt"], str)
+            or not isinstance(product["ingredients"], list)
+            or any(product[field] is not None and not isinstance(product[field], str) for field in ("indications", "dosage", "precautions"))):
+        raise ApiError(503, "PRODUCT_CACHE_INVALID", "저장된 제품 정보를 확인할 수 없어요. 다시 선택해 주세요.")
+    for entry in product["ingredients"]:
+        if (not isinstance(entry, dict) or set(entry) != {"name", "amount", "unit", "basis"}
+                or not isinstance(entry["name"], str) or not entry["name"].strip()
+                or any(entry[field] is not None and not isinstance(entry[field], str) for field in ("amount", "unit", "basis"))):
+            raise ApiError(503, "PRODUCT_CACHE_INVALID", "저장된 제품의 성분 정보를 확인할 수 없어요. 다시 선택해 주세요.")
+    return product
 
 
 # 공통 비밀번호 검증 후 개인 신원 없이 만료되는 팀 접근 토큰만 발급한다.
@@ -513,7 +808,8 @@ def lambda_handler(event, context):
             allowed_origin = origin
         method = ((event.get("requestContext") or {}).get("http") or {}).get("method")
         path = event.get("rawPath")
-        if path not in ("/session", "/medications"):
+        product_match = re.fullmatch(r"/medicine-products/([0-9]{9})", path) if isinstance(path, str) else None
+        if path not in ("/session", "/medications", "/medicine-products/search", "/medicine-products/link", "/medicine-products/links") and not product_match:
             raise ApiError(404, "NOT_FOUND", "지원하지 않는 요청 경로예요.")
         if method == "OPTIONS":
             return respond(204, None, allowed_origin)
@@ -523,16 +819,29 @@ def lambda_handler(event, context):
             if method != "POST":
                 raise ApiError(405, "METHOD_NOT_ALLOWED", "지원하지 않는 요청 방식이에요.")
             return respond(200, create_session(config, request_body(event, headers)), allowed_origin)
-        if method not in ("GET", "PUT"):
+        methods = {"/medications": ("GET", "PUT"), "/medicine-products/search": ("POST",),
+                   "/medicine-products/link": ("POST",), "/medicine-products/links": ("GET",)}
+        if method not in (("GET",) if product_match else methods[path]):
             raise ApiError(405, "METHOD_NOT_ALLOWED", "지원하지 않는 요청 방식이에요.")
         # 공개 시연은 누구나 읽고 수정할 수 있으며 출처 제한은 인증을 대신하지 않는다.
         if not config["public_demo"]:
             require_session(config, headers)
-        if method == "GET":
-            snapshot = read_snapshot(get_table(), config["box_id"])
+        table = get_table()
+        if path == "/medications" and method == "GET":
+            result = read_snapshot(table, config["box_id"])
+        elif path == "/medications" and method == "PUT":
+            result = put_snapshot(table, config["box_id"], request_body(event, headers))
+        elif path == "/medicine-products/search" and method == "POST":
+            result = search_mfds_products(table, config["box_id"], request_body(event, headers))
+        elif path == "/medicine-products/link" and method == "POST":
+            result = link_mfds_product(table, config["box_id"], request_body(event, headers))
+        elif path == "/medicine-products/links" and method == "GET":
+            result = list_product_links(table, config["box_id"])
+        elif product_match and method == "GET":
+            result = read_cached_product(table, product_match.group(1))
         else:
-            snapshot = put_snapshot(get_table(), config["box_id"], request_body(event, headers))
-        return respond(200, snapshot, allowed_origin)
+            raise ApiError(405, "METHOD_NOT_ALLOWED", "지원하지 않는 요청 방식이에요.")
+        return respond(200, result, allowed_origin)
     except ApiError as error:
         return respond(error.status, {"code": error.code, "message": error.message}, allowed_origin)
     except Exception:

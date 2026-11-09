@@ -20,6 +20,7 @@ import zipfile
 NAME = "smart-medikit-medication-api"
 TABLE = "inha-capstone-02-medkit-medications"
 ROLE_NAME = "SafeRole-inha-capstone-02"
+MFDS_KEY_SOURCE_FUNCTION = "inha-capstone-02-ocr"
 HANDLER = "medication_api.lambda_handler"
 LOG_GROUP = f"/aws/lambda/{NAME}"
 TAGS = {"ManagedBy": NAME}
@@ -33,6 +34,10 @@ ROUTES = {
     "POST /session": "MedicationSession",
     "GET /medications": "MedicationRead",
     "PUT /medications": "MedicationWrite",
+    "POST /medicine-products/search": "MedicationProductSearch",
+    "POST /medicine-products/link": "MedicationProductLink",
+    "GET /medicine-products/links": "MedicationProductLinks",
+    "GET /medicine-products/{productCode}": "MedicationProductDetail",
 }
 PASSWORD_ITERATIONS = 200000
 
@@ -274,15 +279,37 @@ def build_environment(function, box_id, origin, rotate_password, public_demo=Fal
     return {"Variables": variables}
 
 
-# API 소스만 메모리 ZIP으로 묶고 비밀번호나 배포 환경을 파일에 남기지 않는다.
+# 명시적으로 승인한 같은 계정·리전의 OCR 함수에서 키만 메모리로 읽는다.
+def read_mfds_key_from_ocr(lambdas, account, region, source_name):
+    if (source_name != MFDS_KEY_SOURCE_FUNCTION or account != TABLE_OWNER_ACCOUNT
+            or region != "ap-northeast-2"):
+        raise RuntimeError("승인된 OCR 함수·계정·리전이 아닙니다.")
+    config = lambdas.get_function_configuration(FunctionName=source_name)
+    expected_arn = f"arn:aws:lambda:{region}:{account}:function:{source_name}"
+    if config.get("FunctionArn") != expected_arn or config.get("Environment", {}).get("Error"):
+        raise RuntimeError("OCR 함수의 계정·리전 또는 환경 설정을 확인하지 못했습니다.")
+    key = config.get("Environment", {}).get("Variables", {}).get("MFDS_API_KEY")
+    if not isinstance(key, str) or not key or len(key) > 2048 or any(character.isspace() for character in key):
+        raise RuntimeError("OCR 함수의 식약처 키 설정을 확인하지 못했습니다.")
+    return key
+
+
+# 기존 식약처 변환기를 재사용하고 비밀번호나 배포 환경을 ZIP에 남기지 않는다.
 def source_archive():
     source = Path(__file__).with_name("medication_api.py")
+    mfds = Path(__file__).with_name("medkit_mfds.py")
+    if not mfds.is_file():
+        mfds = Path(__file__).parent.parent / "ocr-lambda" / "backend" / "mfds.py"
     if not source.is_file():
         raise RuntimeError("같은 디렉터리에 medication_api.py가 필요합니다.")
+    if not mfds.is_file():
+        raise RuntimeError("식약처 조회 모듈을 찾을 수 없습니다.")
     compile(source.read_text(encoding="utf-8"), "medication_api.py", "exec")
+    compile(mfds.read_text(encoding="utf-8"), "medkit_mfds.py", "exec")
     buffer = io.BytesIO()
     with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as archive:
         archive.write(source, "medication_api.py")
+        archive.write(mfds, "medkit_mfds.py")
     return buffer.getvalue()
 
 
@@ -493,6 +520,8 @@ def verify_public_demo(lambdas, origin):
 # 이미 있는 호출 권한은 범위를 대조하고 다른 권한을 조용히 덮어쓰지 않는다.
 def ensure_permission(lambdas, account, region, api_id, route_key, statement_id):
     method, path = route_key.split(" ", 1)
+    # 경로 변수는 실제 품목코드와 일치하는 호출 ARN 패턴으로 제한한다.
+    path = re.sub(r"\{[^/{}]+\}", "*", path)
     source_arn = f"arn:aws:execute-api:{region}:{account}:{api_id}/*/{method}{path}"
     revision = None
     try:
@@ -575,7 +604,7 @@ def ensure_api(gateway, lambdas, existing, account, region, origin, function_arn
 
 
 # 조회만 하는 사전 점검과 승인 후 적용을 분리하며 기존 재고 API는 접근하지 않는다.
-def deploy(account, region, box_id, origin, apply=False, rotate_password=False, public_demo=False):
+def deploy(account, region, box_id, origin, apply=False, rotate_password=False, public_demo=False, mfds_key_from_function=None):
     import boto3
 
     validate_options(account, region, box_id, origin)
@@ -592,17 +621,25 @@ def deploy(account, region, box_id, origin, apply=False, rotate_password=False, 
     logs = session.client("logs")
     table = inspect_table(dynamodb, account)
     function = inspect_function(lambdas, account, box_id)
+    mfds_key = read_mfds_key_from_ocr(lambdas, account, region, mfds_key_from_function) if mfds_key_from_function else None
     function_arn = f"arn:aws:lambda:{region}:{account}:function:{NAME}"
     api = inspect_api(gateway, function_arn)
     logs_exist = inspect_logs(logs)
     print(f"PREFLIGHT_OK: account={account}, region={region}, box={box_id}, origin={origin}", flush=True)
     print("ROLE: 학교 제공 역할을 재사용하며 IAM 정책은 수정하지 않습니다.", flush=True)
     print(f"RESOURCES: table={'existing' if table else 'new'}, lambda={'existing' if function else 'new'}, api={'existing' if api else 'new'}", flush=True)
+    if mfds_key_from_function:
+        print("MFDS_KEY_SOURCE: 승인된 OCR 함수의 키 설정 확인 완료. 키 값은 출력하지 않습니다.", flush=True)
     if not apply:
         print("READ_ONLY: 변경하지 않았습니다. 검토 후 --apply로 적용하세요.", flush=True)
         return
     # 사용자 입력을 완료하기 전에는 AWS 자원을 만들거나 갱신하지 않는다.
     environment = build_environment(function, box_id, origin, rotate_password, public_demo)
+    if mfds_key is not None:
+        existing_key = environment["Variables"].get("MFDS_API_KEY")
+        if existing_key and existing_key != mfds_key:
+            raise RuntimeError("복용약 함수에 다른 식약처 키가 있어 자동 교체하지 않습니다.")
+        environment["Variables"]["MFDS_API_KEY"] = mfds_key
     ensure_table(dynamodb, table, account)
     if not logs_exist:
         logs.create_log_group(logGroupName=LOG_GROUP, tags=TAGS)
@@ -633,9 +670,10 @@ def main():
     parser.add_argument("--apply", action="store_true", help="확인한 전용 AWS 자원 생성·갱신을 적용")
     parser.add_argument("--rotate-password", action="store_true", help="공통 비밀번호 교체와 기존 세션 만료")
     parser.add_argument("--public-demo", action="store_true", help="누구나 복용약을 조회·수정·삭제하는 공개 시연으로 명시 전환")
+    parser.add_argument("--mfds-key-from-function", help="승인된 OCR 함수의 서버 키를 메모리에서 재사용")
     args = parser.parse_args()
     try:
-        deploy(args.account, args.region, args.box_id, args.origin, args.apply, args.rotate_password, args.public_demo)
+        deploy(args.account, args.region, args.box_id, args.origin, args.apply, args.rotate_password, args.public_demo, args.mfds_key_from_function)
     except (RuntimeError, KeyboardInterrupt) as error:
         message = str(error) if isinstance(error, RuntimeError) else "사용자가 배포를 중단했습니다."
         print(f"중단: {message}", file=sys.stderr)

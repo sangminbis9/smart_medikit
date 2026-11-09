@@ -810,4 +810,224 @@ test.describe('완전 공개 시연 모드', function publicModeTests() {
     expect(server.sessionRequests).toBe(0);
     expect(server.authorizationHeaders).toBe(0);
   });
+
+  // 합성 제품 후보와 별도 연결을 제공하며 실제 식약처와 AWS는 호출하지 않는다.
+  async function mockProducts(context: BrowserContext, server: MockApi) {
+    const saved: {
+      planId: string;
+      medicineId: string;
+      productCode: string;
+      productName: string;
+      name: string;
+      strength: string;
+    }[] = [];
+    const productServer = { saved, rejectLink: false, searches: 0 };
+    await context.route(
+      '**/medication-api/medicine-products/**',
+      async function respondProduct(route) {
+        const request = route.request();
+        const path = new URL(request.url()).pathname;
+        if (path.endsWith('/search')) {
+          productServer.searches++;
+          expect(Object.keys(request.postDataJSON())).toEqual(['name']);
+          await route.fulfill({
+            json: {
+              candidates: [
+                {
+                  productCode: '000000001',
+                  productName: '합성 제품 A',
+                  manufacturer: '합성 업체 A',
+                },
+                {
+                  productCode: '000000002',
+                  productName: '합성 제품 B',
+                  manufacturer: '합성 업체 B',
+                },
+              ],
+            },
+          });
+        } else if (path.endsWith('/links')) {
+          const links = saved
+            .filter(function current(link) {
+              const medicine = server.state.plans
+                .find(function plan(item) {
+                  return item.id === link.planId;
+                })
+                ?.medicines.find(function item(value) {
+                  return value.id === link.medicineId;
+                });
+              return (
+                medicine?.name === link.name &&
+                medicine.strength === link.strength
+              );
+            })
+            .map(function publicLink(link) {
+              return {
+                planId: link.planId,
+                medicineId: link.medicineId,
+                productCode: link.productCode,
+                productName: link.productName,
+              };
+            });
+          await route.fulfill({ json: { links } });
+        } else if (path.endsWith('/link')) {
+          const body = request.postDataJSON() as {
+            planId: string;
+            medicineId: string;
+            productCode: string;
+            expectedRevision: number;
+          };
+          if (productServer.rejectLink) {
+            await route.fulfill({ status: 503, json: { code: 'UNAVAILABLE' } });
+            return;
+          }
+          expect(body.expectedRevision).toBe(server.revision);
+          const medicine = server.state.plans
+            .find(function plan(item) {
+              return item.id === body.planId;
+            })
+            ?.medicines.find(function item(value) {
+              return value.id === body.medicineId;
+            });
+          if (!medicine) {
+            await route.fulfill({ status: 409 });
+            return;
+          }
+          const link = {
+            ...body,
+            name: medicine.name,
+            strength: medicine.strength,
+            productName:
+              body.productCode === '000000002' ? '합성 제품 B' : '합성 제품 A',
+          };
+          saved.push(link);
+          await route.fulfill({
+            json: {
+              planId: link.planId,
+              medicineId: link.medicineId,
+              productCode: link.productCode,
+              productName: link.productName,
+            },
+          });
+        } else {
+          await route.fulfill({
+            json: {
+              productCode: path.split('/').pop(),
+              productName: '합성 제품 B',
+              manufacturer: '합성 업체 B',
+              ingredients: [
+                { name: '합성 성분', amount: null, unit: null, basis: null },
+              ],
+              indications: '합성 효능',
+              dosage: null,
+              precautions: '합성 주의사항',
+              source: 'MFDS_PERMIT_DETAIL',
+              checkedAt: '2026-11-10T00:00:00Z',
+            },
+          });
+        }
+      },
+    );
+    return productServer;
+  }
+
+  // 저장 전 후보만 고르고 저장 성공 후 연결하며 새로고침 후에도 상세를 읽는다.
+  test('식약처 후보 선택과 제품 사용정보 연결', async function selectProduct({
+    page,
+    context,
+  }, testInfo) {
+    const server = await mockMedicationApi(context);
+    const products = await mockProducts(context, server);
+    await openPublicSchedule(page);
+    await page
+      .getByRole('button', { name: '복용약 등록', exact: true })
+      .click();
+    const editor = page.getByRole('dialog');
+    await editor
+      .getByLabel('묶음 이름', { exact: false })
+      .fill('합성 연결 처방');
+    await editor.getByRole('button', { name: '약 추가', exact: true }).click();
+    await editor.getByLabel('약 이름', { exact: false }).fill('합성 약 A');
+    await editor
+      .getByLabel('1회 복용량', { exact: false })
+      .fill('사용자 입력량');
+    await editor.getByText('식약처 제품 정보 연결').click();
+    await editor.getByRole('button', { name: '식약처 제품 검색' }).click();
+    await editor
+      .getByRole('button', { name: /합성 제품 B.*합성 업체 B/ })
+      .click();
+    await expect(editor.getByText(/선택: 합성 제품 B/)).toBeVisible();
+    await editor.getByLabel('함량·제형', { exact: false }).fill('변경한 함량');
+    await expect(editor.getByText(/선택: 합성 제품 B/)).toHaveCount(0);
+    await editor.getByRole('button', { name: '식약처 제품 검색' }).click();
+    await editor
+      .getByRole('button', { name: /합성 제품 B.*합성 업체 B/ })
+      .click();
+    expect(products.saved).toHaveLength(0);
+    await editor
+      .getByRole('button', { name: '복용약 등록', exact: true })
+      .click();
+    await expect(editor).toHaveCount(0);
+    expect(products.saved).toHaveLength(1);
+    expect(products.saved[0].productCode).toBe('000000002');
+    expect(server.state.plans[0].medicines[0].dose).toBe('사용자 입력량');
+    await page.reload();
+    const card = page.getByRole('article', {
+      name: '합성 연결 처방',
+      exact: true,
+    });
+    await card.getByText('상세보기').click();
+    await card.getByRole('button', { name: '합성 약 A 제품 사용정보' }).click();
+    const productDialog = page.getByRole('dialog');
+    await expect(productDialog.getByText('합성 효능')).toBeVisible();
+    await expect(productDialog.getByText('합성 성분')).toBeVisible();
+    await expect(productDialog.getByText('합성 주의사항')).toBeVisible();
+    await expect(
+      productDialog.getByText(
+        '처방받은 복용법과 아래 제품 허가정보는 다를 수 있어요.',
+        { exact: false },
+      ),
+    ).toBeVisible();
+    await expect(
+      productDialog.getByText(/출처: 식품의약품안전처/),
+    ).toBeVisible();
+    const evidenceDir = resolve('..', 'local_data', 'medication-product-qa');
+    await mkdir(evidenceDir, { recursive: true });
+    await page.screenshot({
+      path: resolve(evidenceDir, `${testInfo.project.name}-product.png`),
+    });
+  });
+
+  // 제품 연결만 실패해도 복용약 저장 성공을 취소하거나 중복 저장하지 않는다.
+  test('식약처 연결 실패 시 저장된 복용약 보존', async function failedLink({
+    page,
+    context,
+  }) {
+    const server = await mockMedicationApi(context);
+    const products = await mockProducts(context, server);
+    products.rejectLink = true;
+    await openPublicSchedule(page);
+    await page
+      .getByRole('button', { name: '복용약 등록', exact: true })
+      .click();
+    const editor = page.getByRole('dialog');
+    await editor
+      .getByLabel('묶음 이름', { exact: false })
+      .fill('합성 연결 실패');
+    await editor.getByRole('button', { name: '약 추가', exact: true }).click();
+    await editor.getByLabel('약 이름', { exact: false }).fill('합성 약 A');
+    await editor.getByText('식약처 제품 정보 연결').click();
+    await editor.getByRole('button', { name: '식약처 제품 검색' }).click();
+    await editor
+      .getByRole('button', { name: /합성 제품 B.*합성 업체 B/ })
+      .click();
+    await editor
+      .getByRole('button', { name: '복용약 등록', exact: true })
+      .click();
+    await expect(editor).toHaveCount(0);
+    await expect(page.getByRole('alert')).toContainText('복용약은 저장됐지만');
+    expect(server.state.plans).toHaveLength(1);
+    expect(server.acceptedWrites).toBe(1);
+    expect(products.saved).toHaveLength(0);
+  });
 });

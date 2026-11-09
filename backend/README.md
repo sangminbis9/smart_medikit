@@ -88,15 +88,21 @@ AGENTS.md 5절의 **“IAM 권한 변경, 서비스 공개 설정은 팀 승인 
 | 전용 DynamoDB | `inha-capstone-02-medkit-medications`, 요청 기반 과금·삭제 보호 |
 | 공유 항목 | `pk=BOX#<서버 box_id>`, `sk=MEDICATION_STATE`, `revision`, `state`, `updated_at` |
 | 접근 모드 | 기본 비공개: 공통 비밀번호·2시간 Bearer 토큰. 서버 `MEDKIT_MEDICATION_PUBLIC_DEMO=true`인 공개 시연만 무인증 GET/PUT |
-| 경로 | `POST /session`, `GET /medications`, `PUT /medications` |
+| 경로 | `POST /session`, `GET/PUT /medications`, `POST /medicine-products/search`, `POST /medicine-products/link`, `GET /medicine-products/links`, `GET /medicine-products/{productCode}` |
 | 충돌 방지 | `PUT`의 `expected_revision`과 DynamoDB 조건부 쓰기, 충돌 시 `409` |
 | 제한 | 요청/상태 각각 300KiB, 묶음 100개·묶음당 약 30개·일정당 시각 12개·전체 기록 2,000개 |
+
+사용자가 명시적으로 선택한 수동 복용약의 품목은 식약처 제품 허가정보 API에서 상세·성분을 조회해 전용 테이블의 별도 품목 캐시에 저장한다. 약 이름 검색은 POST 본문만 사용하며 약품명·API 키·응답 원문을 로그에 남기지 않는다. 조회 데이터는 기존 재고 테이블이나 OCR을 수정하지 않고 개인 처방량·복용 기록을 변경하지 않는다. 제품 확인·연결 API와 캐시·동시 변경 조건은 [CONTRACTS.md 10.3절](../docs/CONTRACTS.md#103-수동-처방-묶음과-aws-공유-복약-기록-2026-11-08)을 따른다. 이 기능은 서버 측 `MFDS_API_KEY`와 Lambda 제품 API 경로의 배포가 완료된 환경에서만 작동한다.
+
+사용자가 제품명과 제조사·제형·함량을 직접 확인해 선택해야 하며, 허가정보의 용법은 개인 처방량을 대체하지 않는다. 상세 조회는 저장된 확인 시각과 캐시를 반환하고, 24시간이 지난 제품을 다시 연결할 때 식약처에 재조회한다. 복용약 API의 식약처 외부 요청은 보관함별 UTC 날짜 기준 하루 최대 100회이며, OCR과 같은 키를 쓰면 실제 식약처 제공 한도는 공유된다. 공개 시연에서는 누구나 제품 검색·연결도 요청할 수 있다.
 
 공개 시연에서는 **누구나 같은 목록의 약 이름·일정·복용 기록·메모를 조회·수정·삭제**할 수 있다. **합성 시연 데이터만 입력하고 개인정보는 입력하지 않는다.** 비공개 모드는 공통 비밀번호를 아는 사람만 접근하며 어느 모드든 개인별 소유권·변경자 식별은 제공하지 않는다. 복용약 입력은 재고·3D·OCR·자동 차감·DUR 검사·푸시 예약을 생성하지 않는다. 필드와 오류의 상세 계약은 [CONTRACTS.md 10.3절](../docs/CONTRACTS.md#103-수동-처방-묶음과-aws-공유-복약-기록-2026-11-08)을 따른다.
 
 ### 복용약 API 사전 점검과 배포
 
 같은 커밋의 두 Python 파일과 boto3가 있는, MFA를 완료한 학교 AWS 세션에서 저장소 루트 기준으로 실행한다. 아래 첫 명령은 계정·학교 역할·동명 자원 소유 태그·키·기존 연결을 **조회만** 한다.
+
+제품정보 기능 배포에는 기존 `ocr-lambda/backend/mfds.py`도 필요하다. CloudShell에 별도 파일로 올릴 때는 배포 스크립트 옆에 `medkit_mfds.py` 이름으로 둔다. `--mfds-key-from-function inha-capstone-02-ocr` 옵션은 지정된 학교 계정·서울 리전의 OCR 함수에 설정된 식약처 키를 서버 메모리에서 복용약 함수로 재사용하며 기존에 다른 키가 있다면 중단한다. 키를 명령 인수·파일·출력에 넣지 않는다.
 
 ```sh
 python backend/deploy_medication_api.py --account 842544789367 --region ap-northeast-2 --box-id inha-capstone-02-medkit --origin https://main.d3t4nvt3phq6xc.amplifyapp.com

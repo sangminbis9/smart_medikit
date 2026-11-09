@@ -1,10 +1,16 @@
 import { useRef, useState } from 'react';
 import {
   createMedicationPlan,
+  type MedicationItem,
   type MedicationPlan,
   type MedicationTiming,
 } from './medicationPlans';
 import { MedicationPlanForm } from './MedicationPlanForm';
+import { MedicationProductDialog } from './MedicationProductInfo';
+import type {
+  MedicationProducts,
+  ProductCandidate,
+} from './medicationProducts';
 import { Badge, Dialog, Icon } from './ui';
 import './medicationPlans.css';
 
@@ -29,6 +35,7 @@ export default function MedicationPlans({
   onDelete,
   onEnd,
   storageLabel,
+  products,
   busy = false,
   error = '',
 }: {
@@ -37,12 +44,17 @@ export default function MedicationPlans({
   onDelete: (id: string) => Promise<boolean>;
   onEnd: (id: string) => Promise<boolean>;
   storageLabel: string;
+  products: MedicationProducts;
   busy?: boolean;
   error?: string;
 }) {
   const [editing, setEditing] = useState<MedicationPlan | null>(null);
   const [deleting, setDeleting] = useState<MedicationPlan | null>(null);
   const [actionError, setActionError] = useState('');
+  const [productTarget, setProductTarget] = useState<{
+    planId: string;
+    medicine: MedicationItem;
+  } | null>(null);
   const [pending, setPending] = useState(false);
   const pendingRef = useRef(false);
   const disabled = busy || pending;
@@ -52,6 +64,22 @@ export default function MedicationPlans({
     if (plan.endedOn) ended.push(plan);
     else active.push(plan);
   }
+  // 열린 제품 창의 약이 다른 기기에서 바뀌었는지 확인한다.
+  const currentProductMedicine = productTarget
+    ? plans
+        .find(function samePlan(plan) {
+          return plan.id === productTarget.planId;
+        })
+        ?.medicines.find(function sameMedicine(medicine) {
+          return medicine.id === productTarget.medicine.id;
+        })
+    : undefined;
+  const productStale = Boolean(
+    productTarget &&
+    (!currentProductMedicine ||
+      currentProductMedicine.name !== productTarget.medicine.name ||
+      currentProductMedicine.strength !== productTarget.medicine.strength),
+  );
 
   // 새 처방 묶음 등록창을 연다.
   function addPlan() {
@@ -62,6 +90,34 @@ export default function MedicationPlans({
   // 입력 중인 등록창을 닫는다.
   function closeEditor() {
     setEditing(null);
+  }
+  // 저장된 약에 선택한 품목을 각각 연결하며 실패 건수를 반환한다.
+  async function linkSavedProducts(
+    plan: MedicationPlan,
+    selections: Record<string, ProductCandidate>,
+  ) {
+    let failed = 0;
+    for (const medicine of plan.medicines) {
+      const candidate = selections[medicine.id];
+      if (!candidate) continue;
+      try {
+        await products.link(
+          plan.id,
+          medicine.id,
+          candidate.productCode,
+          medicine,
+        );
+      } catch {
+        failed++;
+      }
+    }
+    return failed;
+  }
+  // 복용약 저장과 제품 연결의 부분 실패를 구분해서 알린다.
+  function productLinkFailed(count: number) {
+    setActionError(
+      `복용약은 저장됐지만 제품 정보 ${count}건을 연결하지 못했어요. 각 약의 제품 사용정보에서 다시 연결해 주세요.`,
+    );
   }
   // 삭제 확인창을 닫고 이전 오류를 지운다.
   function closeDelete() {
@@ -169,6 +225,10 @@ export default function MedicationPlans({
                 // 각 약의 식별 정보와 사용자가 입력한 복용량을 표시한다.
                 function item(medicine) {
                   const timing = medicine.timing ?? plan.timing;
+                  // 저장된 약에 대한 제품 연결과 사용정보를 연다.
+                  function showProduct() {
+                    setProductTarget({ planId: plan.id, medicine });
+                  }
                   return (
                     <li key={medicine.id}>
                       <strong>{medicine.name}</strong>
@@ -185,6 +245,17 @@ export default function MedicationPlans({
                           {medicine.timing.schedule.startDate} ~{' '}
                           {medicine.timing.schedule.endDate || '종료일 미정'}
                         </small>
+                      )}
+                      {products.available && (
+                        <button
+                          type="button"
+                          className="text-button medication-product-open"
+                          onClick={showProduct}
+                          disabled={disabled}
+                          aria-label={`${medicine.name} 제품 사용정보`}
+                        >
+                          제품 사용정보 확인
+                        </button>
                       )}
                     </li>
                   );
@@ -256,7 +327,9 @@ export default function MedicationPlans({
           복용약 등록
         </button>
       </div>
-      {storageLabel && <p className="medication-storage-label">{storageLabel}</p>}
+      {storageLabel && (
+        <p className="medication-storage-label">{storageLabel}</p>
+      )}
       {disabled && !editing && (
         <p className="medication-hint" role="status">
           변경사항을 저장하고 있어요…
@@ -295,7 +368,21 @@ export default function MedicationPlans({
           onSave={onSave}
           onClose={closeEditor}
           storageLabel={storageLabel}
+          products={products}
+          onLinkProducts={linkSavedProducts}
+          onProductLinkFailure={productLinkFailed}
           saveError={error}
+        />
+      )}
+      {productTarget && (
+        <MedicationProductDialog
+          planId={productTarget.planId}
+          medicine={productTarget.medicine}
+          products={products}
+          stale={productStale}
+          onClose={function closeProduct() {
+            setProductTarget(null);
+          }}
         />
       )}
       {deleting && (

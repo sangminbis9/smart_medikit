@@ -142,6 +142,60 @@
   color: #63736c;
   line-height: 1.7;
 }
+.medication-product-open {
+  align-self: flex-start;
+  margin-top: 4px;
+}
+.medication-product-lookup {
+  margin-top: 12px;
+  border-top: 1px solid #e3ebe5;
+  padding-top: 12px;
+}
+.medication-product-lookup > summary {
+  cursor: pointer;
+  color: #206d5c;
+  font-weight: 700;
+}
+.medication-product-search {
+  display: grid;
+  gap: 10px;
+  margin-top: 12px;
+}
+.medication-product-search > button {
+  justify-self: start;
+}
+.medication-product-selected {
+  color: #206d5c;
+  font-size: 13px;
+  font-weight: 700;
+}
+.medication-product-candidates {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  max-height: 240px;
+  overflow-y: auto;
+  list-style: none;
+}
+.medication-product-candidates li {
+  padding: 0;
+  background: transparent;
+}
+.medication-product-candidates button {
+  display: grid;
+  gap: 4px;
+  width: 100%;
+  padding: 12px;
+  border: 1px solid #d7e6dc;
+  border-radius: 10px;
+  background: #fff;
+  text-align: left;
+}
+.medication-product-candidates button span {
+  color: #63736c;
+  font-size: 12px;
+}
 .medication-plan-notes {
   font-size: 12px;
   margin-top: 14px;

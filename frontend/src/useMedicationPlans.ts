@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { dayKey } from './data';
 import {
   emptyMedicationState,
@@ -11,6 +11,13 @@ import {
   type MedicationRecord,
   type MedicationState,
 } from './medicationPlans';
+import {
+  parseProductCandidates,
+  parseProductDetail,
+  parseProductLink,
+  parseProductLinks,
+  type MedicationIdentity,
+} from './medicationProducts';
 
 type Snapshot = { revision: number; state: MedicationState };
 export type MedicationAccessStatus =
@@ -138,6 +145,99 @@ export function useMedicationPlans(demo: boolean) {
   const token = useRef('');
   const generation = useRef(0);
   const saving = useRef(false);
+
+  // 복용약 접근이 열린 경우에만 별도 제품 정보 API를 호출한다.
+  const productRequest = useCallback(
+    async function productRequest(
+      path: string,
+      method: string,
+      body?: unknown,
+    ) {
+      if (demo)
+        throw new Error('시연 데이터에서는 제품 정보 조회를 사용할 수 없어요.');
+      if (!apiUrl || status !== 'ready' || (!publicAccess && !token.current))
+        throw new Error('복용약 목록을 먼저 불러와 주세요.');
+      return request(path, method, token.current, body);
+    },
+    [demo, status],
+  );
+  // 품목 선택 정보는 복용 일정·기록과 별도로 저장한다.
+  const products = useMemo(
+    function productActions() {
+      // 열린 화면의 약 이름과 함량이 최신 복용약과 같은지 확인한다.
+      function isCurrent(
+        planId: string,
+        medicineId: string,
+        expected: MedicationIdentity,
+      ) {
+        const plan = current.current.state.plans.find(function samePlan(item) {
+          return item.id === planId;
+        });
+        const medicine = plan?.medicines.find(function sameMedicine(item) {
+          return item.id === medicineId;
+        });
+        return Boolean(
+          medicine &&
+          medicine.name === expected.name &&
+          medicine.strength === expected.strength,
+        );
+      }
+      return {
+        available: !demo && status === 'ready' && Boolean(apiUrl),
+        isCurrent,
+        // 사용자 요청 시 약 이름만 보내 식약처 후보를 조회한다.
+        async search(name: string) {
+          return parseProductCandidates(
+            await productRequest('/medicine-products/search', 'POST', { name }),
+          );
+        },
+        // 현재 복용약과 일치하는 연결만 불러온다.
+        async links() {
+          return parseProductLinks(
+            await productRequest('/medicine-products/links', 'GET'),
+          );
+        },
+        // 확인된 품목코드의 식약처 상세 정보를 불러온다.
+        async detail(code: string) {
+          return parseProductDetail(
+            await productRequest(
+              `/medicine-products/${encodeURIComponent(code)}`,
+              'GET',
+            ),
+          );
+        },
+        // 최신 복용약 버전을 전달해 다른 기기의 변경을 덮어쓰지 않는다.
+        async link(
+          planId: string,
+          medicineId: string,
+          code: string,
+          expected: MedicationIdentity,
+        ) {
+          // 오래 열린 창의 약이 바뀌었다면 다른 약에 연결하지 않는다.
+          if (!isCurrent(planId, medicineId, expected))
+            throw new Error(
+              '다른 기기에서 약 이름이나 함량이 변경됐어요. 최신 목록을 다시 열어주세요.',
+            );
+          const result = parseProductLink(
+            await productRequest('/medicine-products/link', 'POST', {
+              planId,
+              medicineId,
+              productCode: code,
+              expectedRevision: current.current.revision,
+            }),
+          );
+          if (
+            result.planId !== planId ||
+            result.medicineId !== medicineId ||
+            result.productCode !== code
+          )
+            throw new Error('연결된 제품 정보를 확인하지 못했어요.');
+          return result;
+        },
+      };
+    },
+    [demo, productRequest, status],
+  );
 
   // 잠금이나 화면 전환 전에 시작한 요청의 응답을 무효화한다.
   const invalidateRequests = useCallback(function invalidateRequests() {
@@ -397,6 +497,7 @@ export function useMedicationPlans(demo: boolean) {
     error,
     busy,
     publicAccess,
+    products,
     storageLabel: demo
       ? '시연 기록 · 새로고침하면 초기화돼요'
       : publicAccess

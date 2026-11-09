@@ -18,7 +18,7 @@ function asMedicine(product: ProductDetail): Medicine {
     form: 'UNKNOWN',
     ingredients: product.ingredients
       .map(function ingredient(item) {
-        return item.name;
+        return item.name.trim();
       })
       .filter(Boolean),
     indications: product.indications ? [product.indications] : [],
@@ -56,6 +56,12 @@ export function MedicationProductDialog({
   const [product, setProduct] = useState<ProductDetail | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+  const hasSuggestionIngredients = suggestion?.ingredients.some(
+    // 양쪽 자료에서 확인된 이름의 유무를 검사한다.
+    function hasName(item) {
+      return item.name.trim().length > 0;
+    },
+  );
 
   // 연결 성공 후 제품 상세를 조회하며 열린 창의 약이 바뀌었는지도 확인한다.
   useEffect(
@@ -146,7 +152,9 @@ export function MedicationProductDialog({
                 medicine={asMedicine(suggestion)}
                 ingredientsNotice={
                   suggestion.ingredientsStatus === 'CONFLICT'
-                    ? '자료 충돌로 확인 필요'
+                    ? hasSuggestionIngredients
+                      ? '함량 자료 확인 필요'
+                      : '자료 충돌로 확인 필요'
                     : suggestion.ingredientsStatus === 'NO_DATA'
                       ? '성분 정보 확인 필요'
                       : undefined

@@ -40,10 +40,32 @@ const detailSchema = z.object({
   source: z.literal('MFDS_PERMIT_DETAIL'),
   checkedAt: z.iso.datetime({ offset: true }),
 });
-const suggestionSchema = detailSchema.extend({
-  matchStatus: z.literal('POSSIBLE'),
-  ingredientsStatus: z.enum(['SUCCEEDED', 'NO_DATA', 'CONFLICT']),
-});
+const suggestionSchema = detailSchema
+  .extend({
+    matchStatus: z.literal('POSSIBLE'),
+    ingredientsStatus: z.enum(['SUCCEEDED', 'NO_DATA', 'CONFLICT']),
+  })
+  // 수치 충돌 상태에서는 확인되지 않은 함량을 후보로 받아들이지 않는다.
+  .superRefine(function validateConflict(product, context) {
+    if (
+      product.ingredientsStatus === 'CONFLICT' &&
+      product.ingredients.some(
+        // 충돌 상태에 성분량·단위·기준이 들어왔는지 검사한다.
+        function hasAmount(item) {
+          return item.amount != null || item.unit != null || item.basis != null;
+        },
+      )
+    )
+      context.addIssue({
+        code: 'custom',
+        message: '충돌한 성분의 함량을 확인할 수 없습니다.',
+      });
+    if (product.ingredientsStatus === 'NO_DATA' && product.ingredients.length)
+      context.addIssue({
+        code: 'custom',
+        message: '성분 없음 상태와 제공된 성분이 일치하지 않습니다.',
+      });
+  });
 
 export type ProductCandidate = z.infer<typeof candidateSchema>;
 export type ProductLink = z.infer<typeof linkSchema>;

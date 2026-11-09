@@ -256,9 +256,12 @@ export default function MedicineUsage({
         <div className="usage-ingredients">
           <dt>주요 성분</dt>
           <dd>
-            {ingredientsNotice ||
-              medicine.ingredients.join(', ') ||
+            {medicine.ingredients.join(', ') ||
+              ingredientsNotice ||
               '성분 정보 확인 필요'}
+            {medicine.ingredients.length > 0 && ingredientsNotice && (
+              <span className="block">{ingredientsNotice}</span>
+            )}
           </dd>
         </div>
       </dl>

@@ -409,6 +409,85 @@ class MedicationProductTests(unittest.TestCase):
         self.assertIn(("PRODUCT#000000001", "MFDS_CANDIDATE"), self.table.items)
         self.assertNotIn(("PRODUCT#000000001", "MFDS"), self.table.items)
 
+    # 수치가 다르더라도 같은 품목의 양쪽 자료에서 확인된 주성분명만 표시한다.
+    def test_conflict_preserves_corroborated_primary_name_without_amounts(self):
+        self.med["name"] = "가상복용"
+        self.table = FakeTable(self.snapshot)
+        request = {"planId": self.plan["id"], "medicineId": self.med["id"], "expectedRevision": 1}
+        candidate = {"ITEM_SEQ": "000000001", "ITEM_NAME": "가상복용시럽", "ENTP_NAME": "합성 업체",
+                     "MATERIAL_NAME": "총량 : 100밀리리터 | 성분명 : 합성성분 | 분량 : 134 | 단위 : 그램"}
+        rows = [{"ITEM_SEQ": "000000001", "MTRAL_NM": "합성성분", "QNT": "67", "INGD_UNIT_CD": "그램"}]
+        conflict = import_module("ocr-lambda.backend.mfds").ApiError("API_INGREDIENT_CONFLICT")
+        with patch.object(self.mfds, "search", return_value=[candidate]), patch.object(self.mfds, "details", return_value=candidate) as detail, \
+                patch.object(self.mfds, "ingredients", side_effect=conflict), patch.object(self.mfds, "_items", return_value=rows, create=True) as fetch_rows:
+            result = api.suggest_mfds_product(self.table, "synthetic-box", request)
+            self.assertEqual(result["ingredientsStatus"], "CONFLICT")
+            self.assertEqual(result["ingredients"], [{"name": "합성성분", "amount": None, "unit": None, "basis": None}])
+            self.assertEqual(result["matchStatus"], "POSSIBLE")
+            self.assertEqual(api.suggest_mfds_product(self.table, "synthetic-box", request), result)
+        self.assertEqual(detail.call_count, 1)
+        self.assertEqual(fetch_rows.call_count, 1)
+        self.assertEqual(self.table.items[("PRODUCT#000000001", "MFDS_CANDIDATE")]["candidate_schema_version"], 2)
+        self.assertEqual(api.list_product_links(self.table, "synthetic-box"), {"links": []})
+        self.assertEqual(api.read_snapshot(self.table, "synthetic-box")["state"], self.snapshot)
+
+    # 이름이 다르거나, 같은 이름이 중복되거나, 다른 품목 행이 섞이면 어떤 이름도 추정하지 않는다.
+    def test_conflict_rejects_mismatched_duplicate_and_wrong_product_rows(self):
+        detail = {"ITEM_SEQ": "000000001", "MATERIAL_NAME": "총량 : 100밀리리터 | 성분명 : 합성성분 | 분량 : 134 | 단위 : 그램"}
+        options = [
+            [{"ITEM_SEQ": "000000001", "MTRAL_NM": "다른성분"}],
+            [{"ITEM_SEQ": "000000001", "MTRAL_NM": "합성성분"}, {"ITEM_SEQ": "000000001", "MTRAL_NM": "합성성분"}],
+            [{"ITEM_SEQ": "000000002", "MTRAL_NM": "합성성분"}],
+            [{"ITEM_SEQ": "000000001", "MTRAL_NM": "합성성분"}, {"ITEM_SEQ": "000000001", "MTRAL_NM": "누락성분"}],
+        ]
+        for rows in options:
+            with self.subTest(rows=rows), patch.object(self.mfds, "_items", return_value=rows, create=True):
+                self.assertEqual(api.corroborated_ingredient_names(self.mfds, detail, "000000001"), [])
+        self.assertEqual(api.corroborated_ingredient_names(self.mfds, detail, "000000002"), [])
+        duplicate = {"ITEM_SEQ": "000000001", "MATERIAL_NAME": detail["MATERIAL_NAME"] + " | 성분명 : 합성성분 | 분량 : 67 | 단위 : 그램"}
+        with patch.object(self.mfds, "_items", return_value=[{"ITEM_SEQ": "000000001", "MTRAL_NM": "합성성분"}], create=True):
+            self.assertEqual(api.corroborated_ingredient_names(self.mfds, duplicate, "000000001"), [])
+
+    # 성분 원문 재확인 실패를 충돌이 없는 정상 정보로 바꾸지 않는다.
+    def test_conflict_primary_recheck_error_is_not_hidden(self):
+        candidate = {"ITEM_SEQ": "000000001", "ITEM_NAME": "가상복용시럽", "ENTP_NAME": "합성 업체",
+                     "MATERIAL_NAME": "총량 : 100밀리리터 | 성분명 : 합성성분 | 분량 : 134 | 단위 : 그램"}
+        mfds_error = import_module("ocr-lambda.backend.mfds").ApiError
+        with patch.object(self.mfds, "details", return_value=candidate), \
+                patch.object(self.mfds, "ingredients", side_effect=mfds_error("API_INGREDIENT_CONFLICT")), \
+                patch.object(self.mfds, "_items", side_effect=mfds_error("API_TIMEOUT"), create=True):
+            with self.assertRaises(api.ApiError) as error:
+                api.fetch_mfds_product(self.table, "synthetic-box", "000000001", allow_ingredient_conflict=True)
+        self.assertEqual(error.exception.code, "MFDS_DETAIL_UNAVAILABLE")
+        self.assertEqual(self.table.writes, [])
+
+    # 이전 버전 후보 캐시는 한 번 새로 읽고 새 버전은 이후 반복 재사용한다.
+    def test_legacy_candidate_cache_refreshes_once(self):
+        self.med["name"] = "가상복용"
+        self.table = FakeTable(self.snapshot)
+        request = {"planId": self.plan["id"], "medicineId": self.med["id"], "expectedRevision": 1}
+        candidate = {"ITEM_SEQ": "000000001", "ITEM_NAME": "가상복용시럽", "ENTP_NAME": "합성 업체",
+                     "MATERIAL_NAME": "총량 : 100밀리리터 | 성분명 : 합성성분 | 분량 : 134 | 단위 : 그램"}
+        rows = [{"ITEM_SEQ": "000000001", "MTRAL_NM": "합성성분"}]
+        old = {"pk": "PRODUCT#000000001", "sk": "MFDS_CANDIDATE", "product": {"ingredientsStatus": "CONFLICT", "ingredients": []}}
+        self.table.items[(old["pk"], old["sk"])] = old
+        conflict = import_module("ocr-lambda.backend.mfds").ApiError("API_INGREDIENT_CONFLICT")
+        with patch.object(self.mfds, "search", return_value=[candidate]), patch.object(self.mfds, "details", return_value=candidate) as detail, \
+                patch.object(self.mfds, "ingredients", side_effect=conflict), patch.object(self.mfds, "_items", return_value=rows, create=True):
+            first = api.suggest_mfds_product(self.table, "synthetic-box", request)
+            self.assertEqual(api.suggest_mfds_product(self.table, "synthetic-box", request), first)
+        self.assertEqual(detail.call_count, 1)
+        self.assertEqual(first["ingredients"][0]["name"], "합성성분")
+
+    # 충돌 캐시에는 사용자가 함량으로 오해할 수 있는 수치와 기준을 넣을 수 없다.
+    def test_conflict_cache_rejects_stored_amounts(self):
+        product = {"productCode": "000000001", "productName": "합성", "manufacturer": "합성", "ingredients": [{"name": "합성성분", "amount": "1", "unit": "mg", "basis": None}],
+                   "indications": None, "dosage": None, "precautions": None, "source": "MFDS_PERMIT_DETAIL", "checkedAt": "2026-11-10T00:00:00Z", "ingredientsStatus": "CONFLICT"}
+        self.table.items[("PRODUCT#000000001", "MFDS_CANDIDATE")] = {"candidate_schema_version": 2, "product": product}
+        with self.assertRaises(api.ApiError) as error:
+            api.read_cached_product(self.table, "000000001", candidate=True)
+        self.assertEqual(error.exception.code, "PRODUCT_CACHE_INVALID")
+
     # 후보 제품 정보의 다른 오류는 성분 충돌로 숨기지 않는다.
     def test_suggestion_does_not_hide_non_conflict_ingredient_error(self):
         self.med["name"] = "가상복용시럽"

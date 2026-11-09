@@ -828,6 +828,7 @@ test.describe('완전 공개 시연 모드', function publicModeTests() {
       active: 0,
       maxActive: 0,
       offerSuggestion: false,
+      suggestionIngredientPresent: true,
       suggestionRequests: 0,
       waitSuggestion: null as Promise<void> | null,
     };
@@ -932,9 +933,16 @@ test.describe('완전 공개 시연 모드', function publicModeTests() {
               productCode: '000000009',
               productName: '합성 유사 제품',
               manufacturer: '합성 업체',
-              ingredients: [
-                { name: '충돌 성분값', amount: null, unit: null, basis: null },
-              ],
+              ingredients: products.suggestionIngredientPresent
+                ? [
+                    {
+                      name: '합성 확인 성분',
+                      amount: null,
+                      unit: null,
+                      basis: null,
+                    },
+                  ]
+                : [],
               ingredientsStatus: 'CONFLICT',
               indications: '합성 유사 효능',
               dosage: null,
@@ -1080,49 +1088,62 @@ test.describe('완전 공개 시연 모드', function publicModeTests() {
     expect(products.attempts).toBe(2);
   });
 
-  // 불명확한 유사품은 확정 연결 없이 경고와 함께 표시하며 충돌 성분을 숨긴다.
-  test('유사 제품의 미확인 및 성분 충돌 안내', async function possibleProduct({
-    page,
-    context,
-  }) {
-    const server = await mockMedicationApi(context);
-    const products = await mockProducts(context, server);
-    products.rejectLink = true;
-    products.offerSuggestion = true;
-    await openPublicSchedule(page);
-    await page
-      .getByRole('button', { name: '복용약 등록', exact: true })
-      .click();
-    const editor = page.getByRole('dialog');
-    await editor
-      .getByLabel('묶음 이름', { exact: false })
-      .fill('합성 미확인 처방');
-    await editor.getByRole('button', { name: '약 추가', exact: true }).click();
-    await editor.getByLabel('약 이름', { exact: false }).fill('합성 약 C');
-    await editor
-      .getByRole('button', { name: '복용약 등록', exact: true })
-      .click();
-    await expect(editor).toHaveCount(0);
-    const card = page.getByRole('article', {
-      name: '합성 미확인 처방',
-      exact: true,
+  // 유사 제품은 미확인 경고를 유지하고 확인된 이름과 함량 상태를 구분한다.
+  for (const ingredientPresent of [true, false]) {
+    // 양쪽 자료의 일치 여부에 따라 성분 이름만 표시하거나 확인을 보류한다.
+    test(`유사 제품의 성분 충돌 안내 (${ingredientPresent ? '이름 확인' : '이름 미확인'})`, async function possibleProduct({
+      page,
+      context,
+    }) {
+      const server = await mockMedicationApi(context);
+      const products = await mockProducts(context, server);
+      products.rejectLink = true;
+      products.offerSuggestion = true;
+      products.suggestionIngredientPresent = ingredientPresent;
+      await openPublicSchedule(page);
+      await page
+        .getByRole('button', { name: '복용약 등록', exact: true })
+        .click();
+      const editor = page.getByRole('dialog');
+      await editor
+        .getByLabel('묶음 이름', { exact: false })
+        .fill('합성 미확인 처방');
+      await editor
+        .getByRole('button', { name: '약 추가', exact: true })
+        .click();
+      await editor.getByLabel('약 이름', { exact: false }).fill('합성 약 C');
+      await editor
+        .getByRole('button', { name: '복용약 등록', exact: true })
+        .click();
+      await expect(editor).toHaveCount(0);
+      const card = page.getByRole('article', {
+        name: '합성 미확인 처방',
+        exact: true,
+      });
+      await card.getByText('상세보기').click();
+      await expect(
+        card.getByText('비슷한 제품 · 실제 처방약과 일치 미확인'),
+      ).toBeVisible();
+      await card
+        .getByRole('button', { name: '합성 약 C 제품 사용정보' })
+        .click();
+      const dialog = page.getByRole('dialog');
+      await expect(
+        dialog.getByText('비슷한 식약처 제품 · 실제 처방약과 일치 미확인'),
+      ).toBeVisible();
+      await expect(dialog.getByText('합성 유사 효능')).toBeVisible();
+      await expect(dialog.getByText('합성 유사 주의')).toBeVisible();
+      if (ingredientPresent) {
+        await expect(dialog.getByText('합성 확인 성분')).toBeVisible();
+        await expect(dialog.getByText('함량 자료 확인 필요')).toBeVisible();
+      } else {
+        await expect(dialog.getByText('자료 충돌로 확인 필요')).toBeVisible();
+        await expect(dialog.getByText('합성 확인 성분')).toHaveCount(0);
+      }
+      expect(products.saved).toHaveLength(0);
+      expect(server.state.plans).toHaveLength(1);
     });
-    await card.getByText('상세보기').click();
-    await expect(
-      card.getByText('비슷한 제품 · 실제 처방약과 일치 미확인'),
-    ).toBeVisible();
-    await card.getByRole('button', { name: '합성 약 C 제품 사용정보' }).click();
-    const dialog = page.getByRole('dialog');
-    await expect(
-      dialog.getByText('비슷한 식약처 제품 · 실제 처방약과 일치 미확인'),
-    ).toBeVisible();
-    await expect(dialog.getByText('합성 유사 효능')).toBeVisible();
-    await expect(dialog.getByText('합성 유사 주의')).toBeVisible();
-    await expect(dialog.getByText('자료 충돌로 확인 필요')).toBeVisible();
-    await expect(dialog.getByText('충돌 성분값')).toHaveCount(0);
-    expect(products.saved).toHaveLength(0);
-    expect(server.state.plans).toHaveLength(1);
-  });
+  }
 
   // 약 이름이 바뀐 뒤 도착한 이전 후보를 새 약에 표시하지 않는다.
   test('변경 전 약의 유사 제품 응답 무시', async function staleSuggestion({

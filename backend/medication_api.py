@@ -615,6 +615,37 @@ def search_mfds_products(table, box_id, body):
     return {"candidates": candidates}
 
 
+# 두 식약처 자료에서 같은 품목의 주성분명이 일대일로 일치할 때 이름만 보존한다.
+def corroborated_ingredient_names(client, detail, code):
+    if str(detail.get("ITEM_SEQ", "")) != code:
+        return []
+    module = mfds_module()
+    materials = module.material_rows(detail.get("MATERIAL_NAME"))
+    if not materials:
+        return []
+    # 같은 요청의 클라이언트 캐시를 재사용하고 첨가제는 주성분으로 취급하지 않는다.
+    rows = client._items("getDrugPrdtMcpnDtlInq", {"Item_seq": code})
+    if not isinstance(rows, list) or not rows:
+        return []
+    keys = []
+    names = []
+    for row in rows:
+        if not isinstance(row, dict) or str(row.get("ITEM_SEQ", "")) != code:
+            return []
+        name = row.get("MTRAL_NM")
+        if not isinstance(name, str) or not name.strip() or len(name) > 2000:
+            return []
+        key = module.ingredient_key(name)
+        if not key or key in keys:
+            return []
+        matches = [item for item in materials if module.ingredient_key(item["name"]) == key]
+        if len(matches) != 1:
+            return []
+        keys.append(key)
+        names.append({"name": name.strip(), "amount": None, "unit": None, "basis": None})
+    return names
+
+
 # 사용자 확인 품목의 공식 상세·성분을 같은 품목코드로 조회한다.
 def fetch_mfds_product(table, box_id, code, allow_ingredient_conflict=False):
     client = mfds_client(table, box_id)
@@ -628,7 +659,9 @@ def fetch_mfds_product(table, box_id, code, allow_ingredient_conflict=False):
             # 식약처 두 원문의 성분 수치 충돌만 부분 자료로 구분한다.
             if not allow_ingredient_conflict or error.code != "API_INGREDIENT_CONFLICT":
                 raise
-            ingredients, ingredients_status = [], "CONFLICT"
+            # 성분 함량의 분모를 추측하지 않고 양쪽 자료의 같은 이름만 표시한다.
+            ingredients = corroborated_ingredient_names(client, detail, code)
+            ingredients_status = "CONFLICT"
     except ApiError:
         raise
     except Exception:
@@ -928,7 +961,7 @@ def suggest_mfds_product(table, box_id, body):
             or link_key in valid_product_links(latest["state"], latest_links)):
         raise ApiError(409, "REVISION_CONFLICT", "복용약 목록이 변경됐어요. 다시 확인해 주세요.")
     if fresh:
-        table.put_item(Item={"pk": f"PRODUCT#{code}", "sk": "MFDS_CANDIDATE", "product": product})
+        table.put_item(Item={"pk": f"PRODUCT#{code}", "sk": "MFDS_CANDIDATE", "candidate_schema_version": 2, "product": product})
     return {**product, "matchStatus": "POSSIBLE"}
 
 
@@ -949,6 +982,9 @@ def list_product_links(table, box_id):
 def read_cached_product(table, code, candidate=False):
     item = table.get_item(Key={"pk": f"PRODUCT#{code}", "sk": "MFDS_CANDIDATE" if candidate else "MFDS"}, ConsistentRead=True).get("Item")
     product = (item or {}).get("product")
+    # 이전 후보 캐시는 성분명을 모두 버렸으므로 한 번 갱신한다.
+    if candidate and item and item.get("candidate_schema_version") != 2:
+        raise ApiError(404, "PRODUCT_CACHE_OUTDATED", "제품 정보를 다시 확인해 주세요.")
     if not isinstance(product, dict) or product.get("productCode") != code or product.get("source") != "MFDS_PERMIT_DETAIL":
         raise ApiError(404, "PRODUCT_NOT_FOUND", "연결된 제품 정보를 찾을 수 없어요. 다시 선택해 주세요.")
     fields = {"productCode", "productName", "manufacturer", "ingredients", "indications", "dosage", "precautions", "source", "checkedAt"}
@@ -961,13 +997,16 @@ def read_cached_product(table, code, candidate=False):
             or any(product[field] is not None and not isinstance(product[field], str) for field in ("indications", "dosage", "precautions"))):
         raise ApiError(503, "PRODUCT_CACHE_INVALID", "저장된 제품 정보를 확인할 수 없어요. 다시 선택해 주세요.")
     if candidate and (product["ingredientsStatus"] not in {"SUCCEEDED", "NO_DATA", "CONFLICT"}
-                      or (product["ingredientsStatus"] == "SUCCEEDED") != bool(product["ingredients"])):
+                      or (product["ingredientsStatus"] == "SUCCEEDED" and not product["ingredients"])
+                      or (product["ingredientsStatus"] == "NO_DATA" and product["ingredients"])):
         raise ApiError(503, "PRODUCT_CACHE_INVALID", "저장된 제품의 성분 상태를 확인할 수 없어요.")
     for entry in product["ingredients"]:
         if (not isinstance(entry, dict) or set(entry) != {"name", "amount", "unit", "basis"}
                 or not isinstance(entry["name"], str) or not entry["name"].strip()
                 or any(entry[field] is not None and not isinstance(entry[field], str) for field in ("amount", "unit", "basis"))):
             raise ApiError(503, "PRODUCT_CACHE_INVALID", "저장된 제품의 성분 정보를 확인할 수 없어요. 다시 선택해 주세요.")
+        if candidate and product["ingredientsStatus"] == "CONFLICT" and any(entry[field] is not None for field in ("amount", "unit", "basis")):
+            raise ApiError(503, "PRODUCT_CACHE_INVALID", "저장된 제품의 성분 상태를 확인할 수 없어요.")
     return product
 
 

@@ -56,6 +56,31 @@ describe('식약처 제품 응답', function medicationProducts() {
     expect(parseProductSuggestion(candidate).ingredientsStatus).toBe(
       'CONFLICT',
     );
+    const ingredient = {
+      name: '합성 확인 성분',
+      amount: null,
+      unit: null,
+      basis: null,
+    };
+    expect(
+      parseProductSuggestion({ ...candidate, ingredients: [ingredient] })
+        .ingredients,
+    ).toEqual([ingredient]);
+    // 수치가 들어온 충돌 응답은 성분명과 함께 표시하지 않는다.
+    expect(function conflictAmount() {
+      parseProductSuggestion({
+        ...candidate,
+        ingredients: [{ ...ingredient, amount: '123' }],
+      });
+    }).toThrow();
+    // 성분이 없다는 상태에 이름이 섞인 모순 응답을 거부한다.
+    expect(function noDataWithName() {
+      parseProductSuggestion({
+        ...candidate,
+        ingredientsStatus: 'NO_DATA',
+        ingredients: [ingredient],
+      });
+    }).toThrow();
     expect(function badMatch() {
       parseProductSuggestion({ ...candidate, matchStatus: 'MATCHED' });
     }).toThrow();

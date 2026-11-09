@@ -40,10 +40,15 @@ const detailSchema = z.object({
   source: z.literal('MFDS_PERMIT_DETAIL'),
   checkedAt: z.iso.datetime({ offset: true }),
 });
+const suggestionSchema = detailSchema.extend({
+  matchStatus: z.literal('POSSIBLE'),
+  ingredientsStatus: z.enum(['SUCCEEDED', 'NO_DATA', 'CONFLICT']),
+});
 
 export type ProductCandidate = z.infer<typeof candidateSchema>;
 export type ProductLink = z.infer<typeof linkSchema>;
 export type ProductDetail = z.infer<typeof detailSchema>;
+export type ProductSuggestion = z.infer<typeof suggestionSchema>;
 export type MedicationIdentity = { name: string; strength: string };
 export type MedicationProducts = {
   available: boolean;
@@ -66,6 +71,11 @@ export type MedicationProducts = {
     medicineId: string,
     expected: MedicationIdentity,
   ) => Promise<ProductLink>;
+  suggestion: (
+    planId: string,
+    medicineId: string,
+    expected: MedicationIdentity,
+  ) => Promise<ProductSuggestion>;
 };
 
 // 제품 검색 응답을 검증해 신뢰할 수 없는 후보는 표시하지 않는다.
@@ -87,4 +97,9 @@ export function parseProductLink(value: unknown): ProductLink {
 // 식약처 상세 응답의 제품과 표시 필드를 검증한다.
 export function parseProductDetail(value: unknown): ProductDetail {
   return detailSchema.parse(value);
+}
+
+// 확정 연결과 구분되는 유사 제품의 상태·출처를 검증한다.
+export function parseProductSuggestion(value: unknown): ProductSuggestion {
+  return suggestionSchema.parse(value);
 }

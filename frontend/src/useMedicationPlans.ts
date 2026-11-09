@@ -16,6 +16,7 @@ import {
   parseProductDetail,
   parseProductLink,
   parseProductLinks,
+  parseProductSuggestion,
   type MedicationIdentity,
 } from './medicationProducts';
 
@@ -253,6 +254,29 @@ export function useMedicationPlans(demo: boolean) {
           );
           if (result.planId !== planId || result.medicineId !== medicineId)
             throw new Error('연결된 제품 정보를 확인하지 못했어요.');
+          return result;
+        },
+        // 일치가 확정되지 않은 약의 유사 제품은 저장된 약이 바뀌지 않았을 때만 표시한다.
+        async suggestion(
+          planId: string,
+          medicineId: string,
+          expected: MedicationIdentity,
+        ) {
+          if (!isCurrent(planId, medicineId, expected))
+            throw new Error(
+              '복용약이 변경됐어요. 최신 목록에서 다시 확인해 주세요.',
+            );
+          const result = parseProductSuggestion(
+            await productRequest('/medicine-products/suggestion', 'POST', {
+              planId,
+              medicineId,
+              expectedRevision: current.current.revision,
+            }),
+          );
+          if (!isCurrent(planId, medicineId, expected))
+            throw new Error(
+              '복용약이 변경됐어요. 최신 목록에서 다시 확인해 주세요.',
+            );
           return result;
         },
       };

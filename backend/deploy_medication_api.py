@@ -37,6 +37,7 @@ ROUTES = {
     "POST /medicine-products/search": "MedicationProductSearch",
     "POST /medicine-products/link": "MedicationProductLink",
     "POST /medicine-products/auto-link": "MedicationProductAutoLink",
+    "POST /medicine-products/suggestion": "MedicationProductSuggestion",
     "GET /medicine-products/links": "MedicationProductLinks",
     "GET /medicine-products/{productCode}": "MedicationProductDetail",
 }

@@ -388,6 +388,115 @@ class MedicationProductTests(unittest.TestCase):
         self.assertEqual(self.mfds.detail_calls, calls)
         self.assertEqual(self.mfds.names, [])
 
+    # 성분 원문 수치가 충돌해도 유사품 문구만 별도 캐시에 두며 확정 연결을 만들지 않는다.
+    def test_suggestion_retains_official_text_when_ingredients_conflict(self):
+        self.med["name"] = "가상복용시럽"
+        self.med["strength"] = ""
+        self.table = FakeTable(self.snapshot)
+        request = {"planId": self.plan["id"], "medicineId": self.med["id"], "expectedRevision": 1}
+        candidate = {"ITEM_SEQ": "000000001", "ITEM_NAME": "가상복용시럽플러스", "ENTP_NAME": "합성 업체"}
+        conflict = import_module("ocr-lambda.backend.mfds").ApiError("API_INGREDIENT_CONFLICT")
+        with patch.object(self.mfds, "search", return_value=[candidate]), patch.object(self.mfds, "details", return_value=candidate), patch.object(self.mfds, "ingredients", side_effect=conflict):
+            result = api.suggest_mfds_product(self.table, "synthetic-box", request)
+            self.assertEqual(result["matchStatus"], "POSSIBLE")
+            self.assertEqual(result["ingredientsStatus"], "CONFLICT")
+            self.assertEqual(result["ingredients"], [])
+            self.assertEqual(result["indications"], "합성 효능")
+            self.assertEqual(result["precautions"], "합성 주의")
+            api.suggest_mfds_product(self.table, "synthetic-box", request)
+        self.assertEqual(api.list_product_links(self.table, "synthetic-box"), {"links": []})
+        self.assertEqual(api.read_snapshot(self.table, "synthetic-box"), {"revision": 1, "state": self.snapshot})
+        self.assertIn(("PRODUCT#000000001", "MFDS_CANDIDATE"), self.table.items)
+        self.assertNotIn(("PRODUCT#000000001", "MFDS"), self.table.items)
+
+    # 후보 제품 정보의 다른 오류는 성분 충돌로 숨기지 않는다.
+    def test_suggestion_does_not_hide_non_conflict_ingredient_error(self):
+        self.med["name"] = "가상복용시럽"
+        self.table = FakeTable(self.snapshot)
+        request = {"planId": self.plan["id"], "medicineId": self.med["id"], "expectedRevision": 1}
+        candidate = {"ITEM_SEQ": "000000001", "ITEM_NAME": "가상복용시럽플러스", "ENTP_NAME": "합성 업체"}
+        failure = import_module("ocr-lambda.backend.mfds").ApiError("API_INVALID_RESPONSE")
+        with patch.object(self.mfds, "search", return_value=[candidate]), patch.object(self.mfds, "details", return_value=candidate), patch.object(self.mfds, "ingredients", side_effect=failure):
+            with self.assertRaises(api.ApiError) as error:
+                api.suggest_mfds_product(self.table, "synthetic-box", request)
+        self.assertEqual(error.exception.status, 503)
+        self.assertEqual(self.table.writes, [])
+
+    # 이름이 비슷해도 다른 제형·성분이나 서로 다른 명시 함량은 후보에서 제외한다.
+    def test_suggestion_rejects_form_ingredient_and_strength_conflicts(self):
+        med = {"name": "가상복용시럽(성분가)", "strength": "15ml"}
+        self.assertIsNone(api.suggestion_score(med, "가상복용시럽(성분나)"))
+        self.assertIsNone(api.suggestion_score(med, "가상복용시럽30ml(성분가)"))
+        self.assertIsNone(api.suggestion_score(med, "가상복용정(성분가)"))
+        self.assertIsNone(api.suggestion_score(med, "무관한제품시럽(성분가)"))
+
+    # 가까운 점수나 동점의 후보가 여러 개면 어떤 제품도 선택하지 않는다.
+    def test_suggestion_rejects_ambiguous_candidates(self):
+        self.med["name"] = "가상복용시럽"
+        self.table = FakeTable(self.snapshot)
+        request = {"planId": self.plan["id"], "medicineId": self.med["id"], "expectedRevision": 1}
+        rows = [{"ITEM_SEQ": "000000001", "ITEM_NAME": "가상복용시럽플러스", "ENTP_NAME": "A"},
+                {"ITEM_SEQ": "000000002", "ITEM_NAME": "가상복용시럽플러스", "ENTP_NAME": "B"}]
+        with patch.object(self.mfds, "search", return_value=rows):
+            with self.assertRaises(api.ApiError) as error:
+                api.suggest_mfds_product(self.table, "synthetic-box", request)
+        self.assertEqual(error.exception.status, 422)
+        self.assertEqual(self.table.writes, [])
+
+    # 식약처 조회 중 입력 약이 변경되면 후보를 반환하거나 캐시하지 않는다.
+    def test_suggestion_rechecks_snapshot_after_external_lookup(self):
+        self.med["name"] = "가상복용시럽"
+        self.table = FakeTable(self.snapshot)
+        request = {"planId": self.plan["id"], "medicineId": self.med["id"], "expectedRevision": 1}
+        candidate = {"ITEM_SEQ": "000000001", "ITEM_NAME": "가상복용시럽플러스", "ENTP_NAME": "합성 업체"}
+        def change_details(code):
+            self.table.items[("BOX#synthetic-box", "MEDICATION_STATE")]["revision"] = 2
+            return candidate
+        with patch.object(self.mfds, "search", return_value=[candidate]), patch.object(self.mfds, "details", side_effect=change_details):
+            with self.assertRaises(api.ApiError) as error:
+                api.suggest_mfds_product(self.table, "synthetic-box", request)
+        self.assertEqual(error.exception.status, 409)
+        self.assertEqual(self.table.writes, [])
+
+    # 정상 성분이 없을 때는 충돌이 아닌 별도 누락 상태로 전달한다.
+    def test_suggestion_no_data_is_distinct_from_conflict(self):
+        self.med["name"] = "가상복용시럽"
+        self.table = FakeTable(self.snapshot)
+        request = {"planId": self.plan["id"], "medicineId": self.med["id"], "expectedRevision": 1}
+        candidate = {"ITEM_SEQ": "000000001", "ITEM_NAME": "가상복용시럽플러스", "ENTP_NAME": "합성 업체"}
+        with patch.object(self.mfds, "search", return_value=[candidate]), patch.object(self.mfds, "details", return_value=candidate), patch.object(self.mfds, "ingredients", return_value=[]):
+            result = api.suggest_mfds_product(self.table, "synthetic-box", request)
+        self.assertEqual(result["ingredientsStatus"], "NO_DATA")
+
+    # 전체 이름 검색이 무결과일 때 세 글자 검색으로 찾은 후보도 미확정 상태만 반환한다.
+    def test_suggestion_fallback_when_form_is_added_to_official_name(self):
+        self.med["name"] = "가상복용"
+        self.med["strength"] = "15ml"
+        self.table = FakeTable(self.snapshot)
+        request = {"planId": self.plan["id"], "medicineId": self.med["id"], "expectedRevision": 1}
+        candidate = {"ITEM_SEQ": "000000001", "ITEM_NAME": "가상복용시럽", "ENTP_NAME": "합성 업체"}
+        with patch.object(self.mfds, "search", side_effect=[[], [candidate]]) as search, patch.object(self.mfds, "details", return_value=candidate):
+            result = api.suggest_mfds_product(self.table, "synthetic-box", request)
+        self.assertEqual(search.call_count, 2)
+        self.assertEqual(result["matchStatus"], "POSSIBLE")
+        self.assertEqual(result["ingredientsStatus"], "SUCCEEDED")
+        self.assertEqual(api.list_product_links(self.table, "synthetic-box"), {"links": []})
+
+    # 새 HTTP 경로는 공개 설정에서도 스냅샷 버전을 검사하고 후보 상태를 돌려준다.
+    def test_suggestion_http_route(self):
+        self.med["name"] = "가상복용"
+        self.table = FakeTable(self.snapshot)
+        environment = {"MEDKIT_MEDICATION_TABLE": api.TABLE_NAME, "MEDKIT_BOX_ID": "synthetic-box",
+                       "MEDKIT_ALLOWED_ORIGIN": "https://synthetic.example.com", "MEDKIT_MEDICATION_PUBLIC_DEMO": "true"}
+        body = {"planId": self.plan["id"], "medicineId": self.med["id"], "expectedRevision": 1}
+        event = {"rawPath": "/medicine-products/suggestion", "requestContext": {"http": {"method": "POST"}},
+                 "headers": {"content-type": "application/json", "origin": "https://synthetic.example.com"}, "body": json.dumps(body)}
+        candidate = {"ITEM_SEQ": "000000001", "ITEM_NAME": "가상복용시럽", "ENTP_NAME": "합성 업체"}
+        with patch.dict(os.environ, environment, clear=True), patch.object(api, "get_table", return_value=self.table), patch.object(self.mfds, "search", return_value=[candidate]), patch.object(self.mfds, "details", return_value=candidate):
+            response = api.lambda_handler(event, None)
+        self.assertEqual(response["statusCode"], 200)
+        self.assertEqual(json.loads(response["body"])["matchStatus"], "POSSIBLE")
+
 
 if __name__ == "__main__":
     unittest.main()

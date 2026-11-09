@@ -185,7 +185,13 @@ export function formatDosageText(value: string | null | undefined) {
 }
 
 // 저장된 제품 문구와 출처를 표시하고 없는 사용법이나 용량은 만들지 않는다.
-export default function MedicineUsage({ medicine }: { medicine: Medicine }) {
+export default function MedicineUsage({
+  medicine,
+  ingredientsNotice,
+}: {
+  medicine: Medicine;
+  ingredientsNotice?: string;
+}) {
   const info = medicine.product_info;
   const complete =
     medicine.product_info_status === 'SUCCEEDED' &&
@@ -249,7 +255,11 @@ export default function MedicineUsage({ medicine }: { medicine: Medicine }) {
         </div>
         <div className="usage-ingredients">
           <dt>주요 성분</dt>
-          <dd>{medicine.ingredients.join(', ') || '성분 정보 확인 필요'}</dd>
+          <dd>
+            {ingredientsNotice ||
+              medicine.ingredients.join(', ') ||
+              '성분 정보 확인 필요'}
+          </dd>
         </div>
       </dl>
       {medicine.product_code && (

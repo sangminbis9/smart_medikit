@@ -88,7 +88,7 @@ AGENTS.md 5절의 **“IAM 권한 변경, 서비스 공개 설정은 팀 승인 
 | 전용 DynamoDB | `inha-capstone-02-medkit-medications`, 요청 기반 과금·삭제 보호 |
 | 공유 항목 | `pk=BOX#<서버 box_id>`, `sk=MEDICATION_STATE`, `revision`, `state`, `updated_at` |
 | 접근 모드 | 기본 비공개: 공통 비밀번호·2시간 Bearer 토큰. 서버 `MEDKIT_MEDICATION_PUBLIC_DEMO=true`인 공개 시연만 무인증 GET/PUT |
-| 경로 | `POST /session`, `GET/PUT /medications`, `POST /medicine-products/search`, `POST /medicine-products/link`, `POST /medicine-products/auto-link`, `GET /medicine-products/links`, `GET /medicine-products/{productCode}` |
+| 경로 | `POST /session`, `GET/PUT /medications`, `POST /medicine-products/search`, `POST /medicine-products/link`, `POST /medicine-products/auto-link`, `POST /medicine-products/suggestion`, `GET /medicine-products/links`, `GET /medicine-products/{productCode}` |
 | 충돌 방지 | `PUT`의 `expected_revision`과 DynamoDB 조건부 쓰기, 충돌 시 `409` |
 | 제한 | 요청/상태 각각 300KiB, 묶음 100개·묶음당 약 30개·일정당 시각 12개·전체 기록 2,000개 |
 
@@ -97,6 +97,10 @@ AGENTS.md 5절의 **“IAM 권한 변경, 서비스 공개 설정은 팀 승인 
 자동 연결은 이름·제형 및 입력 함량이 유일한 품목에 맞을 때에만 수행한다. 같은 이름 후보가 여럿이거나 근거가 부족한 함량·성분은 보류한다. 자동 연결이 실제 약의 일치나 의료적 안전성을 보증하지 않으며, 허가정보의 용법은 개인 처방량을 대체하지 않는다. 상세 조회는 저장된 확인 시각과 캐시를 반환하고, 24시간이 지난 제품을 다시 연결할 때 식약처에 재조회한다. 복용약 API의 식약처 외부 요청은 보관함별 UTC 날짜 기준 하루 최대 100회이며, OCR과 같은 키를 쓰면 실제 식약처 제공 한도는 공유된다. 공개 시연에서는 누구나 제품 검색·연결도 요청할 수 있다.
 
 자동 연결 실제 검증: 기존 약 4개를 대상으로 3개가 연결되고 1개는 불명확해 보류됐다. 연결된 3개는 각 효능·성분·주의사항을 전용 테이블 캐시에서 재조회했으며 복약 상태와 revision은 변경되지 않았다. 약품명·응답 원문은 검증 로그에 기록하지 않았다.
+
+자동 연결이 보류된 경우 유사 품목을 별도 조회해 효능·용법·주의사항을 보여줄 수 있다. 이 후보는 실제 처방약과 같은 제품으로 확정하거나 기존 연결 목록에 넣지 않는다. 식약처 성분 자료가 서로 충돌하면 해당 수치를 추정하지 않고 성분을 확인 필요로 표시한다. 후보의 공개 제품 캐시는 기존 확정 제품 캐시와 분리한다.
+
+유사 품목 실제 검증: 미연결 1개에 대해 API가 `POSSIBLE`과 성분 `CONFLICT`를 반환했고 효능·용법·주의사항 존재를 확인했다. 기존 복약 상태와 확정 연결 목록은 전후 동일했다. 제품의 실제 일치 여부나 충돌한 성분 수치는 확인되지 않았다.
 
 공개 시연에서는 **누구나 같은 목록의 약 이름·일정·복용 기록·메모를 조회·수정·삭제**할 수 있다. **합성 시연 데이터만 입력하고 개인정보는 입력하지 않는다.** 비공개 모드는 공통 비밀번호를 아는 사람만 접근하며 어느 모드든 개인별 소유권·변경자 식별은 제공하지 않는다. 복용약 입력은 재고·3D·OCR·자동 차감·DUR 검사·푸시 예약을 생성하지 않는다. 필드와 오류의 상세 계약은 [CONTRACTS.md 10.3절](../docs/CONTRACTS.md#103-수동-처방-묶음과-aws-공유-복약-기록-2026-11-08)을 따른다.
 

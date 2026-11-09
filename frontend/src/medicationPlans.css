@@ -645,3 +645,15 @@
     padding: 12px;
   }
 }
+.medication-product-warning {
+  margin: 1rem 0;
+  padding: 0.9rem 1rem;
+  border: 1px solid #ca8a04;
+  border-radius: 0.75rem;
+  background: #fffbeb;
+  color: #713f12;
+}
+
+.medication-product-warning p {
+  margin: 0.35rem 0 0;
+}

@@ -827,6 +827,9 @@ test.describe('완전 공개 시연 모드', function publicModeTests() {
       attempts: 0,
       active: 0,
       maxActive: 0,
+      offerSuggestion: false,
+      suggestionRequests: 0,
+      waitSuggestion: null as Promise<void> | null,
     };
     await context.route(
       '**/medication-api/medicine-products/**',
@@ -910,6 +913,36 @@ test.describe('완전 공개 시연 모드', function publicModeTests() {
             },
           });
           products.active--;
+        } else if (path.endsWith('/suggestion')) {
+          products.suggestionRequests++;
+          const offer = products.offerSuggestion;
+          const waiting = products.waitSuggestion;
+          products.waitSuggestion = null;
+          if (waiting) await waiting;
+          if (!offer) {
+            await route.fulfill({
+              status: 422,
+              json: { code: 'NO_CANDIDATE' },
+            });
+            return;
+          }
+          await route.fulfill({
+            json: {
+              matchStatus: 'POSSIBLE',
+              productCode: '000000009',
+              productName: '합성 유사 제품',
+              manufacturer: '합성 업체',
+              ingredients: [
+                { name: '충돌 성분값', amount: null, unit: null, basis: null },
+              ],
+              ingredientsStatus: 'CONFLICT',
+              indications: '합성 유사 효능',
+              dosage: null,
+              precautions: '합성 유사 주의',
+              source: 'MFDS_PERMIT_DETAIL',
+              checkedAt: '2026-11-10T00:00:00Z',
+            },
+          });
         } else {
           await route.fulfill({
             json: {
@@ -1045,5 +1078,111 @@ test.describe('완전 공개 시연 모드', function publicModeTests() {
       .click();
     await expect(page.getByRole('dialog').getByText('합성 효능')).toBeVisible();
     expect(products.attempts).toBe(2);
+  });
+
+  // 불명확한 유사품은 확정 연결 없이 경고와 함께 표시하며 충돌 성분을 숨긴다.
+  test('유사 제품의 미확인 및 성분 충돌 안내', async function possibleProduct({
+    page,
+    context,
+  }) {
+    const server = await mockMedicationApi(context);
+    const products = await mockProducts(context, server);
+    products.rejectLink = true;
+    products.offerSuggestion = true;
+    await openPublicSchedule(page);
+    await page
+      .getByRole('button', { name: '복용약 등록', exact: true })
+      .click();
+    const editor = page.getByRole('dialog');
+    await editor
+      .getByLabel('묶음 이름', { exact: false })
+      .fill('합성 미확인 처방');
+    await editor.getByRole('button', { name: '약 추가', exact: true }).click();
+    await editor.getByLabel('약 이름', { exact: false }).fill('합성 약 C');
+    await editor
+      .getByRole('button', { name: '복용약 등록', exact: true })
+      .click();
+    await expect(editor).toHaveCount(0);
+    const card = page.getByRole('article', {
+      name: '합성 미확인 처방',
+      exact: true,
+    });
+    await card.getByText('상세보기').click();
+    await expect(
+      card.getByText('비슷한 제품 · 실제 처방약과 일치 미확인'),
+    ).toBeVisible();
+    await card.getByRole('button', { name: '합성 약 C 제품 사용정보' }).click();
+    const dialog = page.getByRole('dialog');
+    await expect(
+      dialog.getByText('비슷한 식약처 제품 · 실제 처방약과 일치 미확인'),
+    ).toBeVisible();
+    await expect(dialog.getByText('합성 유사 효능')).toBeVisible();
+    await expect(dialog.getByText('합성 유사 주의')).toBeVisible();
+    await expect(dialog.getByText('자료 충돌로 확인 필요')).toBeVisible();
+    await expect(dialog.getByText('충돌 성분값')).toHaveCount(0);
+    expect(products.saved).toHaveLength(0);
+    expect(server.state.plans).toHaveLength(1);
+  });
+
+  // 약 이름이 바뀐 뒤 도착한 이전 후보를 새 약에 표시하지 않는다.
+  test('변경 전 약의 유사 제품 응답 무시', async function staleSuggestion({
+    page,
+    context,
+  }) {
+    const server = await mockMedicationApi(context);
+    const products = await mockProducts(context, server);
+    products.rejectLink = true;
+    products.offerSuggestion = true;
+    let release = function releaseInitial() {};
+    products.waitSuggestion = new Promise<void>(function waitForEdit(resolve) {
+      release = resolve;
+    });
+    await openPublicSchedule(page);
+    await page
+      .getByRole('button', { name: '복용약 등록', exact: true })
+      .click();
+    let editor = page.getByRole('dialog');
+    await editor
+      .getByLabel('묶음 이름', { exact: false })
+      .fill('합성 변경 처방');
+    await editor.getByRole('button', { name: '약 추가', exact: true }).click();
+    await editor.getByLabel('약 이름', { exact: false }).fill('변경 전 약');
+    await editor
+      .getByRole('button', { name: '복용약 등록', exact: true })
+      .click();
+    await expect
+      .poll(function requested() {
+        return products.suggestionRequests;
+      })
+      .toBe(1);
+    const card = page.getByRole('article', {
+      name: '합성 변경 처방',
+      exact: true,
+    });
+    await card.getByRole('button', { name: '수정' }).click();
+    editor = page.getByRole('dialog');
+    await editor.getByLabel('약 이름', { exact: false }).fill('변경 후 약');
+    await editor
+      .getByRole('button', { name: '변경사항 저장', exact: true })
+      .click();
+    await expect(editor).toHaveCount(0);
+    products.offerSuggestion = false;
+    release();
+    await expect
+      .poll(function requestedAgain() {
+        return products.suggestionRequests;
+      })
+      .toBe(2);
+    await card.getByText('상세보기').click();
+    await card
+      .getByRole('button', { name: '변경 후 약 제품 사용정보' })
+      .click();
+    await expect(
+      page.getByRole('dialog').getByText(/정확한 품목을 확인하지 못했어요/),
+    ).toBeVisible();
+    await expect(
+      page.getByRole('dialog').getByText('합성 유사 제품'),
+    ).toHaveCount(0);
+    expect(products.saved).toHaveLength(0);
   });
 });

@@ -1,7 +1,11 @@
 import { useEffect, useState } from 'react';
 import type { Medicine } from './data';
 import type { MedicationItem } from './medicationPlans';
-import type { MedicationProducts, ProductDetail } from './medicationProducts';
+import type {
+  MedicationProducts,
+  ProductDetail,
+  ProductSuggestion,
+} from './medicationProducts';
 import MedicineUsage from './MedicineUsage';
 import { Dialog } from './ui';
 
@@ -37,6 +41,7 @@ export function MedicationProductDialog({
   onClose,
   stale,
   matchState,
+  suggestion,
   onRetry,
 }: {
   planId: string;
@@ -44,7 +49,8 @@ export function MedicationProductDialog({
   products: MedicationProducts;
   onClose: () => void;
   stale: boolean;
-  matchState: 'checking' | 'matched' | 'review' | 'unavailable';
+  matchState: 'checking' | 'matched' | 'possible' | 'review' | 'unavailable';
+  suggestion: ProductSuggestion | null;
   onRetry: () => void;
 }) {
   const [product, setProduct] = useState<ProductDetail | null>(null);
@@ -121,6 +127,32 @@ export function MedicationProductDialog({
             <p role="alert">
               식약처 제품 정보를 불러오지 못했어요. 잠시 후 다시 조회해 주세요.
             </p>
+          )}
+          {matchState === 'possible' && suggestion && (
+            <>
+              <div className="medication-product-warning" role="alert">
+                <strong>비슷한 식약처 제품 · 실제 처방약과 일치 미확인</strong>
+                <p>
+                  입력한 약과 유사한 제품의 정보예요. 제품명·제조사·함량을
+                  처방전이나 포장과 비교해 주세요.
+                </p>
+              </div>
+              <p className="medication-hint">
+                제조사: {suggestion.manufacturer || '확인 필요'} · 출처:
+                식품의약품안전처 · 확인:{' '}
+                {new Date(suggestion.checkedAt).toLocaleString('ko-KR')}
+              </p>
+              <MedicineUsage
+                medicine={asMedicine(suggestion)}
+                ingredientsNotice={
+                  suggestion.ingredientsStatus === 'CONFLICT'
+                    ? '자료 충돌로 확인 필요'
+                    : suggestion.ingredientsStatus === 'NO_DATA'
+                      ? '성분 정보 확인 필요'
+                      : undefined
+                }
+              />
+            </>
           )}
           {matchState === 'matched' && error && (
             <p className="medication-form-error" role="alert">

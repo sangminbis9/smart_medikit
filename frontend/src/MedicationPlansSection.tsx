@@ -7,7 +7,10 @@ import {
 } from './medicationPlans';
 import { MedicationPlanForm } from './MedicationPlanForm';
 import { MedicationProductDialog } from './MedicationProductInfo';
-import type { MedicationProducts } from './medicationProducts';
+import type {
+  MedicationProducts,
+  ProductSuggestion,
+} from './medicationProducts';
 import { Badge, Dialog, Icon } from './ui';
 import './medicationPlans.css';
 
@@ -23,7 +26,8 @@ function productAttemptKey(planId: string, medicine: MedicationItem): string {
   ]);
 }
 
-type ProductMatchState = 'checking' | 'matched' | 'review' | 'unavailable';
+type ProductMatchState =
+  'checking' | 'matched' | 'possible' | 'review' | 'unavailable';
 
 // 사용자가 입력한 복용 방식과 일정만 읽기 쉬운 문장으로 표시한다.
 export function medicationTimingLabel(timing: MedicationTiming): string {
@@ -72,6 +76,9 @@ export default function MedicationPlans({
   const latestProducts = useRef(products);
   const [matchStates, setMatchStates] = useState<
     Record<string, ProductMatchState>
+  >({});
+  const [suggestions, setSuggestions] = useState<
+    Record<string, ProductSuggestion>
   >({});
   const [retryGeneration, setRetryGeneration] = useState(0);
   latestPlans.current = plans;
@@ -163,6 +170,33 @@ export default function MedicationPlans({
               'status' in cause &&
               cause.status === 422,
             );
+            if (review && latestProducts.current.available) {
+              try {
+                const suggestion = await latestProducts.current.suggestion(
+                  planId,
+                  medicine.id,
+                  medicine,
+                );
+                // 조회 중 약이 수정되었다면 이전 약의 후보를 표시하지 않는다.
+                if (
+                  latestProducts.current.isCurrent(
+                    planId,
+                    medicine.id,
+                    medicine,
+                  )
+                ) {
+                  setSuggestions(function saveSuggestion(previous) {
+                    return { ...previous, [key]: suggestion };
+                  });
+                  setMatchStates(function markPossible(previous) {
+                    return { ...previous, [key]: 'possible' };
+                  });
+                  continue;
+                }
+              } catch {
+                // 후보가 없거나 조회에 실패해도 처방약 연결을 확정하지 않는다.
+              }
+            }
             setMatchStates(function markFailed(previous) {
               return { ...previous, [key]: review ? 'review' : 'unavailable' };
             });
@@ -359,6 +393,12 @@ export default function MedicationPlans({
                             ] === 'unavailable') && (
                             <small>제품 정보 확인 필요</small>
                           )}
+                          {matchStates[productAttemptKey(plan.id, medicine)] ===
+                            'possible' && (
+                            <small>
+                              비슷한 제품 · 실제 처방약과 일치 미확인
+                            </small>
+                          )}
                         </>
                       )}
                     </li>
@@ -485,6 +525,11 @@ export default function MedicationPlans({
             matchStates[
               productAttemptKey(productTarget.planId, productTarget.medicine)
             ] ?? 'checking'
+          }
+          suggestion={
+            suggestions[
+              productAttemptKey(productTarget.planId, productTarget.medicine)
+            ] ?? null
           }
           onRetry={function retry() {
             retryProduct(productTarget.planId, productTarget.medicine);

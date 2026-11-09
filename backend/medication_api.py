@@ -12,6 +12,8 @@ import time
 import unicodedata
 from datetime import date, datetime, timezone
 from decimal import Decimal
+from difflib import SequenceMatcher
+from importlib import import_module
 from urllib.parse import quote, urlsplit
 
 TABLE_NAME = "inha-capstone-02-medkit-medications"
@@ -28,6 +30,16 @@ MAX_ITEM_BYTES = 380 * 1024
 MFDS_DAILY_LIMIT = 100
 PRODUCT_CACHE_SECONDS = 24 * 60 * 60
 _table = None
+
+
+# 배포 ZIP과 저장소 양쪽에서 같은 식약처 모듈을 불러온다.
+def mfds_module():
+    try:
+        return import_module("medkit_mfds")
+    except ModuleNotFoundError as error:
+        if error.name != "medkit_mfds":
+            raise
+        return import_module("ocr-lambda.backend.mfds")
 
 
 class ApiError(Exception):
@@ -561,11 +573,7 @@ def mfds_client(table, box_id):
     key = os.environ.get("MFDS_API_KEY", "")
     if not key or any(character.isspace() for character in key):
         raise ApiError(503, "MFDS_NOT_CONFIGURED", "식약처 조회 연결을 준비 중이에요.")
-    try:
-        from medkit_mfds import MfdsClient
-    except ModuleNotFoundError:
-        from importlib import import_module
-        MfdsClient = import_module("ocr-lambda.backend.mfds").MfdsClient
+    MfdsClient = mfds_module().MfdsClient
     client = MfdsClient(key, timeout=2, max_attempts=1, max_pages=1, page_size=100)
     download = client.transport
 
@@ -608,12 +616,19 @@ def search_mfds_products(table, box_id, body):
 
 
 # 사용자 확인 품목의 공식 상세·성분을 같은 품목코드로 조회한다.
-def fetch_mfds_product(table, box_id, code):
+def fetch_mfds_product(table, box_id, code, allow_ingredient_conflict=False):
     client = mfds_client(table, box_id)
     try:
         detail = client.details(code)
         info = client.product_info(code)
-        ingredients = client.ingredients(code)
+        try:
+            ingredients = client.ingredients(code)
+            ingredients_status = "SUCCEEDED" if ingredients else "NO_DATA"
+        except mfds_module().ApiError as error:
+            # 식약처 두 원문의 성분 수치 충돌만 부분 자료로 구분한다.
+            if not allow_ingredient_conflict or error.code != "API_INGREDIENT_CONFLICT":
+                raise
+            ingredients, ingredients_status = [], "CONFLICT"
     except ApiError:
         raise
     except Exception:
@@ -643,6 +658,8 @@ def fetch_mfds_product(table, box_id, code):
         if value is not None and not isinstance(value, str):
             raise ApiError(503, "MFDS_DETAIL_INVALID", "선택한 제품의 사용정보를 확인할 수 없어요.")
         result[field] = value.strip() or None if isinstance(value, str) else None
+    if allow_ingredient_conflict:
+        result["ingredientsStatus"] = ingredients_status
     if len(json.dumps(result, ensure_ascii=False, separators=(",", ":")).encode("utf-8")) > MAX_BYTES:
         raise ApiError(413, "MFDS_DETAIL_TOO_LARGE", "제품 사용정보가 너무 길어 저장할 수 없어요.")
     return result
@@ -817,6 +834,104 @@ def auto_link_mfds_product(table, box_id, body):
     return link_mfds_product(table, box_id, request, auto_medicine=medicine)
 
 
+# 명시된 제형 표기가 서로 다르면 유사한 이름이어도 후보로 제시하지 않는다.
+def product_form(base):
+    for form in ("서방정", "장용정", "연질캡슐", "경질캡슐", "캡슐", "현탁액", "점안액", "시럽", "과립", "크림", "연고", "정", "산", "액"):
+        if base.endswith(form):
+            return form
+    return None
+
+
+# 입력과 공식 품목명의 유사성을 후보 선별에만 쓰며 실제 동일품으로 확정하지 않는다.
+def suggestion_score(medicine, product_name):
+    name_base, name_amounts = product_identity(medicine["name"])
+    product_base, product_amounts = product_identity(product_name)
+    strength_base, strength_amounts = product_identity(medicine.get("strength") or "")
+    if len(name_base) < 3 or len(product_base) < 3 or name_base[:3] != product_base[:3]:
+        return None
+    if strength_base or (medicine.get("strength") and not strength_amounts):
+        return None
+    if name_amounts and strength_amounts and name_amounts != strength_amounts:
+        return None
+    expected_amounts = strength_amounts or name_amounts
+    if expected_amounts and product_amounts and expected_amounts != product_amounts:
+        return None
+    expected_ingredient = product_ingredient_descriptor(medicine["name"])
+    actual_ingredient = product_ingredient_descriptor(product_name)
+    if expected_ingredient and actual_ingredient and expected_ingredient != actual_ingredient:
+        return None
+    expected_form, actual_form = product_form(name_base), product_form(product_base)
+    if expected_form and actual_form and expected_form != actual_form:
+        return None
+    score = SequenceMatcher(None, name_base, product_base, autojunk=False).ratio()
+    # 완전 일치하지 않는 경우 한쪽 이름이 다른 쪽을 포함할 때만 참고 후보로 제시한다.
+    if name_base not in product_base and product_base not in name_base:
+        return None
+    return score if score >= 0.75 else None
+
+
+# 사용자 연결과 분리된 공개 품목 캐시만 최신인 동안 재사용한다.
+def reusable_candidate_product(table, code):
+    try:
+        product = read_cached_product(table, code, candidate=True)
+        checked = datetime.fromisoformat(product["checkedAt"].replace("Z", "+00:00"))
+        age = (datetime.now(timezone.utc) - checked).total_seconds()
+        return product if 0 <= age <= PRODUCT_CACHE_SECONDS else None
+    except (ApiError, KeyError, TypeError, ValueError, OverflowError):
+        return None
+
+
+# 미확정 후보를 따로 조회하며 기존 복약·확정 품목 연결을 갱신하지 않는다.
+def suggest_mfds_product(table, box_id, body):
+    exact_object(body, ("planId", "medicineId", "expectedRevision"), "유사 제품 조회")
+    plan_id = text_field(body["planId"], "묶음 식별자", 200, True)
+    medicine_id = text_field(body["medicineId"], "약 식별자", 200, True)
+    revision = integer(body["expectedRevision"], "저장 버전", 1, MAX_REVISION)
+    snapshot, stored = read_bundle(table, box_id)
+    if snapshot["revision"] != revision:
+        raise ApiError(409, "REVISION_CONFLICT", "복용약 목록이 변경됐어요. 다시 확인해 주세요.")
+    medicine = find_plan_medicine(snapshot["state"], plan_id, medicine_id)
+    fingerprint = product_link_fingerprint(medicine)
+    link_key = product_link_key(plan_id, medicine_id)
+    if link_key in valid_product_links(snapshot["state"], stored):
+        raise ApiError(409, "MEDICINE_ALREADY_LINKED", "이미 연결된 제품을 다시 확인해 주세요.")
+    name = re.sub(r"(?:\s*\([^()]*\)\s*)+$", "", medicine["name"]).strip()
+    first = name.split()[0] if name.split() else name
+    query = first if len(first) >= 3 else name
+    results = search_mfds_products(table, box_id, {"name": query})["candidates"]
+    # 긴 입력명 때문에 검색을 놓칠 때만 앞 세 글자로 한 번 더 찾는다.
+    if not any(suggestion_score(medicine, item["productName"]) is not None for item in results):
+        prefix = product_identity(medicine["name"])[0][:3]
+        if len(prefix) >= 3 and prefix != query:
+            results = search_mfds_products(table, box_id, {"name": prefix})["candidates"]
+    ranked = [(score, item) for item in results
+              if (score := suggestion_score(medicine, item["productName"])) is not None]
+    # 같은 기준에서 계산한 유사도로만 후보 순서를 정한다.
+    def score_of(item):
+        return item[0]
+    ranked.sort(key=score_of, reverse=True)
+    # 상위 점수가 가깝거나 동점이면 후보 하나를 임의로 우선하지 않는다.
+    if not ranked or (len(ranked) > 1 and ranked[0][0] - ranked[1][0] < 0.05):
+        raise ApiError(422, "SUGGESTION_UNCERTAIN", "비슷한 제품을 하나로 좁히지 못했어요.")
+    selected = ranked[0][1]
+    code = selected["productCode"]
+    product = reusable_candidate_product(table, code)
+    fresh = product is None
+    if fresh:
+        product = fetch_mfds_product(table, box_id, code, allow_ingredient_conflict=True)
+    # 상세의 변경된 품목명까지 다시 대조해 조회 중 자료가 바뀌면 보류한다.
+    if suggestion_score(medicine, product["productName"]) is None:
+        raise ApiError(422, "SUGGESTION_UNCERTAIN", "비슷한 제품을 확인하지 못했어요.")
+    latest, latest_links = read_bundle(table, box_id)
+    if (latest["revision"] != revision
+            or product_link_fingerprint(find_plan_medicine(latest["state"], plan_id, medicine_id)) != fingerprint
+            or link_key in valid_product_links(latest["state"], latest_links)):
+        raise ApiError(409, "REVISION_CONFLICT", "복용약 목록이 변경됐어요. 다시 확인해 주세요.")
+    if fresh:
+        table.put_item(Item={"pk": f"PRODUCT#{code}", "sk": "MFDS_CANDIDATE", "product": product})
+    return {**product, "matchStatus": "POSSIBLE"}
+
+
 # 기존 약의 ID와 입력 내용이 여전히 일치하는 제품 연결만 반환한다.
 def list_product_links(table, box_id):
     snapshot, stored = read_bundle(table, box_id)
@@ -831,17 +946,23 @@ def list_product_links(table, box_id):
 
 
 # 이미 확인해 저장한 제품만 반환하며 조회만으로 식약처에 새 요청을 보내지 않는다.
-def read_cached_product(table, code):
-    item = table.get_item(Key={"pk": f"PRODUCT#{code}", "sk": "MFDS"}, ConsistentRead=True).get("Item")
+def read_cached_product(table, code, candidate=False):
+    item = table.get_item(Key={"pk": f"PRODUCT#{code}", "sk": "MFDS_CANDIDATE" if candidate else "MFDS"}, ConsistentRead=True).get("Item")
     product = (item or {}).get("product")
     if not isinstance(product, dict) or product.get("productCode") != code or product.get("source") != "MFDS_PERMIT_DETAIL":
         raise ApiError(404, "PRODUCT_NOT_FOUND", "연결된 제품 정보를 찾을 수 없어요. 다시 선택해 주세요.")
-    if (set(product) != {"productCode", "productName", "manufacturer", "ingredients", "indications", "dosage", "precautions", "source", "checkedAt"}
+    fields = {"productCode", "productName", "manufacturer", "ingredients", "indications", "dosage", "precautions", "source", "checkedAt"}
+    if candidate:
+        fields.add("ingredientsStatus")
+    if (set(product) != fields
             or not isinstance(product["productName"], str) or not product["productName"].strip()
             or not isinstance(product["manufacturer"], str) or not isinstance(product["checkedAt"], str)
             or not isinstance(product["ingredients"], list)
             or any(product[field] is not None and not isinstance(product[field], str) for field in ("indications", "dosage", "precautions"))):
         raise ApiError(503, "PRODUCT_CACHE_INVALID", "저장된 제품 정보를 확인할 수 없어요. 다시 선택해 주세요.")
+    if candidate and (product["ingredientsStatus"] not in {"SUCCEEDED", "NO_DATA", "CONFLICT"}
+                      or (product["ingredientsStatus"] == "SUCCEEDED") != bool(product["ingredients"])):
+        raise ApiError(503, "PRODUCT_CACHE_INVALID", "저장된 제품의 성분 상태를 확인할 수 없어요.")
     for entry in product["ingredients"]:
         if (not isinstance(entry, dict) or set(entry) != {"name", "amount", "unit", "basis"}
                 or not isinstance(entry["name"], str) or not entry["name"].strip()
@@ -918,7 +1039,7 @@ def lambda_handler(event, context):
         method = ((event.get("requestContext") or {}).get("http") or {}).get("method")
         path = event.get("rawPath")
         product_match = re.fullmatch(r"/medicine-products/([0-9]{9})", path) if isinstance(path, str) else None
-        if path not in ("/session", "/medications", "/medicine-products/search", "/medicine-products/link", "/medicine-products/auto-link", "/medicine-products/links") and not product_match:
+        if path not in ("/session", "/medications", "/medicine-products/search", "/medicine-products/link", "/medicine-products/auto-link", "/medicine-products/suggestion", "/medicine-products/links") and not product_match:
             raise ApiError(404, "NOT_FOUND", "지원하지 않는 요청 경로예요.")
         if method == "OPTIONS":
             return respond(204, None, allowed_origin)
@@ -929,7 +1050,8 @@ def lambda_handler(event, context):
                 raise ApiError(405, "METHOD_NOT_ALLOWED", "지원하지 않는 요청 방식이에요.")
             return respond(200, create_session(config, request_body(event, headers)), allowed_origin)
         methods = {"/medications": ("GET", "PUT"), "/medicine-products/search": ("POST",),
-                   "/medicine-products/link": ("POST",), "/medicine-products/auto-link": ("POST",), "/medicine-products/links": ("GET",)}
+                   "/medicine-products/link": ("POST",), "/medicine-products/auto-link": ("POST",),
+                   "/medicine-products/suggestion": ("POST",), "/medicine-products/links": ("GET",)}
         if method not in (("GET",) if product_match else methods[path]):
             raise ApiError(405, "METHOD_NOT_ALLOWED", "지원하지 않는 요청 방식이에요.")
         # 공개 시연은 누구나 읽고 수정할 수 있으며 출처 제한은 인증을 대신하지 않는다.
@@ -946,6 +1068,8 @@ def lambda_handler(event, context):
             result = link_mfds_product(table, config["box_id"], request_body(event, headers))
         elif path == "/medicine-products/auto-link" and method == "POST":
             result = auto_link_mfds_product(table, config["box_id"], request_body(event, headers))
+        elif path == "/medicine-products/suggestion" and method == "POST":
+            result = suggest_mfds_product(table, config["box_id"], request_body(event, headers))
         elif path == "/medicine-products/links" and method == "GET":
             result = list_product_links(table, config["box_id"])
         elif product_match and method == "GET":

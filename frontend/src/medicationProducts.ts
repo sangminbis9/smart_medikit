@@ -44,6 +44,18 @@ const suggestionSchema = detailSchema
   .extend({
     matchStatus: z.literal('POSSIBLE'),
     ingredientsStatus: z.enum(['SUCCEEDED', 'NO_DATA', 'CONFLICT']),
+    ingredientStatements: z
+      .array(
+        z
+          .object({
+            name: z.string().trim().min(1).max(2000),
+            basis: z.string().trim().min(1).max(2000),
+            componentInfo: z.string().trim().min(1).max(2000),
+          })
+          .strict(),
+      )
+      .max(100)
+      .default([]),
   })
   // 수치 충돌 상태에서는 확인되지 않은 함량을 후보로 받아들이지 않는다.
   .superRefine(function validateConflict(product, context) {
@@ -65,6 +77,29 @@ const suggestionSchema = detailSchema
         code: 'custom',
         message: '성분 없음 상태와 제공된 성분이 일치하지 않습니다.',
       });
+    // 원문 성분정보는 같은 후보의 확인된 주성분에만 붙인다.
+    const keys = new Set<string>();
+    for (const statement of product.ingredientStatements) {
+      const key = statement.name
+        .normalize('NFKC')
+        .replace(/\s/g, '')
+        .toLowerCase();
+      const matches = product.ingredients.filter(function sameIngredient(item) {
+        return (
+          item.name.normalize('NFKC').replace(/\s/g, '').toLowerCase() === key
+        );
+      });
+      if (
+        product.ingredientsStatus !== 'CONFLICT' ||
+        matches.length !== 1 ||
+        keys.has(key)
+      )
+        context.addIssue({
+          code: 'custom',
+          message: '성분정보 원문과 확인된 성분이 일치하지 않습니다.',
+        });
+      keys.add(key);
+    }
   });
 
 export type ProductCandidate = z.infer<typeof candidateSchema>;

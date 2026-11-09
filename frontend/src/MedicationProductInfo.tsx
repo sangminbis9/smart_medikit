@@ -150,11 +150,14 @@ export function MedicationProductDialog({
               </p>
               <MedicineUsage
                 medicine={asMedicine(suggestion)}
+                ingredientStatements={suggestion.ingredientStatements}
                 ingredientsNotice={
                   suggestion.ingredientsStatus === 'CONFLICT'
-                    ? hasSuggestionIngredients
-                      ? '함량 자료 확인 필요'
-                      : '자료 충돌로 확인 필요'
+                    ? suggestion.ingredientStatements.length > 0
+                      ? '별도 주성분 자료의 수치는 달라 확인 필요'
+                      : hasSuggestionIngredients
+                        ? '함량 자료 확인 필요'
+                        : '자료 충돌로 확인 필요'
                     : suggestion.ingredientsStatus === 'NO_DATA'
                       ? '성분 정보 확인 필요'
                       : undefined

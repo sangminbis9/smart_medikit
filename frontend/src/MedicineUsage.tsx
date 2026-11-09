@@ -188,9 +188,15 @@ export function formatDosageText(value: string | null | undefined) {
 export default function MedicineUsage({
   medicine,
   ingredientsNotice,
+  ingredientStatements,
 }: {
   medicine: Medicine;
   ingredientsNotice?: string;
+  ingredientStatements?: Array<{
+    name: string;
+    basis: string;
+    componentInfo: string;
+  }>;
 }) {
   const info = medicine.product_info;
   const complete =
@@ -261,6 +267,18 @@ export default function MedicineUsage({
               '성분 정보 확인 필요'}
             {medicine.ingredients.length > 0 && ingredientsNotice && (
               <span className="block">{ingredientsNotice}</span>
+            )}
+            {ingredientStatements && ingredientStatements.length > 0 && (
+              <div className="mt-2">
+                <strong>식약처 허가 상세 원문</strong>
+                {ingredientStatements.map(function statement(item) {
+                  return (
+                    <p key={`${item.name}:${item.basis}`}>
+                      {item.name} · {item.basis} · {item.componentInfo}
+                    </p>
+                  );
+                })}
+              </div>
             )}
           </dd>
         </div>

@@ -646,6 +646,49 @@ def corroborated_ingredient_names(client, detail, code):
     return names
 
 
+# 원료 상세의 같은 총량·성분 행에 명시된 성분정보만 원문 그대로 반환한다.
+def ingredient_statements(detail, ingredients):
+    module = mfds_module()
+    value = detail.get("MATERIAL_NAME")
+    if not ingredients or not isinstance(value, str) or len(value) > 150_000:
+        return []
+    # 사전에 교차 확인된 주성분에만 연결하여 첨가제를 표시하지 않는다.
+    known = {module.ingredient_key(item["name"]): item["name"] for item in ingredients}
+    if len(known) != len(ingredients):
+        return []
+    candidates = {key: [] for key in known}
+    groups = re.split(r"총량\s*[:：]", value)
+    for group in groups[1:]:
+        chunks = re.split(r"성분명\s*[:：]", group)
+        basis = chunks[0].strip(" ;|\r\n")
+        if len(basis) > 2000 or not module.valid_basis(basis):
+            continue
+        for chunk in chunks[1:]:
+            name = re.split(r"[|;]", chunk, maxsplit=1)[0].strip()
+            key = module.ingredient_key(name)
+            if key not in candidates:
+                continue
+            # 중복 항목·중복 필드는 분량과 기준의 관계를 확정할 수 없다.
+            pairs = re.findall(r"(?:^|[|;])\s*([^|;:：]+)\s*[:：]\s*([^|;]*)", chunk)
+            fields = {}
+            for field, text in pairs:
+                fields.setdefault(field.strip(), []).append(text.strip())
+            info_values = fields.get("성분정보", [])
+            info = info_values[0] if len(info_values) == 1 else ""
+            valid_text = (bool(info) and len(info) <= 2000 and
+                          not re.search(r"[<>\x00-\x1f\x7f]", info) and
+                          not re.search(r"[<>\x00-\x1f\x7f]", basis) and
+                          re.search(r"\d+(?:\.\d+)?\s*(?:밀리그램|마이크로그램|그램|킬로그램|밀리리터|리터|mg|mcg|ug|kg|ml|g|l)(?![a-z])", info, re.I))
+            complete_fields = all(len(fields.get(field, [])) == 1 and fields[field][0]
+                                  for field in ("분량", "단위"))
+            candidates[key].append({"name": known[key], "basis": basis, "componentInfo": info}
+                                   if valid_text and complete_fields else None)
+    # 동일 성분이 다른 총량에도 등장하면 어느 행이 해당하는지 추정하지 않는다.
+    if any(len(rows) != 1 or rows[0] is None for rows in candidates.values()):
+        return []
+    return [rows[0] for rows in candidates.values()]
+
+
 # 사용자 확인 품목의 공식 상세·성분을 같은 품목코드로 조회한다.
 def fetch_mfds_product(table, box_id, code, allow_ingredient_conflict=False):
     client = mfds_client(table, box_id)
@@ -693,6 +736,8 @@ def fetch_mfds_product(table, box_id, code, allow_ingredient_conflict=False):
         result[field] = value.strip() or None if isinstance(value, str) else None
     if allow_ingredient_conflict:
         result["ingredientsStatus"] = ingredients_status
+        # 원문 문맥은 별도로 보존하고 추정 함량으로 변환하지 않는다.
+        result["ingredientStatements"] = ingredient_statements(detail, ingredients) if ingredients_status == "CONFLICT" else []
     if len(json.dumps(result, ensure_ascii=False, separators=(",", ":")).encode("utf-8")) > MAX_BYTES:
         raise ApiError(413, "MFDS_DETAIL_TOO_LARGE", "제품 사용정보가 너무 길어 저장할 수 없어요.")
     return result
@@ -961,7 +1006,7 @@ def suggest_mfds_product(table, box_id, body):
             or link_key in valid_product_links(latest["state"], latest_links)):
         raise ApiError(409, "REVISION_CONFLICT", "복용약 목록이 변경됐어요. 다시 확인해 주세요.")
     if fresh:
-        table.put_item(Item={"pk": f"PRODUCT#{code}", "sk": "MFDS_CANDIDATE", "candidate_schema_version": 2, "product": product})
+        table.put_item(Item={"pk": f"PRODUCT#{code}", "sk": "MFDS_CANDIDATE", "candidate_schema_version": 3, "product": product})
     return {**product, "matchStatus": "POSSIBLE"}
 
 
@@ -982,14 +1027,14 @@ def list_product_links(table, box_id):
 def read_cached_product(table, code, candidate=False):
     item = table.get_item(Key={"pk": f"PRODUCT#{code}", "sk": "MFDS_CANDIDATE" if candidate else "MFDS"}, ConsistentRead=True).get("Item")
     product = (item or {}).get("product")
-    # 이전 후보 캐시는 성분명을 모두 버렸으므로 한 번 갱신한다.
-    if candidate and item and item.get("candidate_schema_version") != 2:
+    # 이전 후보 캐시에는 성분 원문 문맥이 없어 한 번 갱신한다.
+    if candidate and item and item.get("candidate_schema_version") != 3:
         raise ApiError(404, "PRODUCT_CACHE_OUTDATED", "제품 정보를 다시 확인해 주세요.")
     if not isinstance(product, dict) or product.get("productCode") != code or product.get("source") != "MFDS_PERMIT_DETAIL":
         raise ApiError(404, "PRODUCT_NOT_FOUND", "연결된 제품 정보를 찾을 수 없어요. 다시 선택해 주세요.")
     fields = {"productCode", "productName", "manufacturer", "ingredients", "indications", "dosage", "precautions", "source", "checkedAt"}
     if candidate:
-        fields.add("ingredientsStatus")
+        fields.update(("ingredientsStatus", "ingredientStatements"))
     if (set(product) != fields
             or not isinstance(product["productName"], str) or not product["productName"].strip()
             or not isinstance(product["manufacturer"], str) or not isinstance(product["checkedAt"], str)
@@ -1000,6 +1045,23 @@ def read_cached_product(table, code, candidate=False):
                       or (product["ingredientsStatus"] == "SUCCEEDED" and not product["ingredients"])
                       or (product["ingredientsStatus"] == "NO_DATA" and product["ingredients"])):
         raise ApiError(503, "PRODUCT_CACHE_INVALID", "저장된 제품의 성분 상태를 확인할 수 없어요.")
+    if candidate:
+        statements = product["ingredientStatements"]
+        if (not isinstance(statements, list) or len(statements) > len(product["ingredients"])
+                or (product["ingredientsStatus"] != "CONFLICT" and statements)):
+            raise ApiError(503, "PRODUCT_CACHE_INVALID", "저장된 제품의 성분 원문을 확인할 수 없어요.")
+        names = {entry.get("name") for entry in product["ingredients"] if isinstance(entry, dict)}
+        statement_names = set()
+        for statement in statements:
+            if (not isinstance(statement, dict) or set(statement) != {"name", "basis", "componentInfo"}
+                    or not all(isinstance(statement[field], str) and 0 < len(statement[field]) <= 2000
+                               and not re.search(r"[<>\x00-\x1f\x7f]", statement[field])
+                               for field in ("name", "basis", "componentInfo"))
+                    or statement["name"] not in names or statement["name"] in statement_names
+                    or not mfds_module().valid_basis(statement["basis"])
+                    or not re.search(r"\d+(?:\.\d+)?\s*(?:밀리그램|마이크로그램|그램|킬로그램|밀리리터|리터|mg|mcg|ug|kg|ml|g|l)(?![a-z])", statement["componentInfo"], re.I)):
+                raise ApiError(503, "PRODUCT_CACHE_INVALID", "저장된 제품의 성분 원문을 확인할 수 없어요.")
+            statement_names.add(statement["name"])
     for entry in product["ingredients"]:
         if (not isinstance(entry, dict) or set(entry) != {"name", "amount", "unit", "basis"}
                 or not isinstance(entry["name"], str) or not entry["name"].strip()

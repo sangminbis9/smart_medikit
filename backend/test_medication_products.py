@@ -427,7 +427,7 @@ class MedicationProductTests(unittest.TestCase):
             self.assertEqual(api.suggest_mfds_product(self.table, "synthetic-box", request), result)
         self.assertEqual(detail.call_count, 1)
         self.assertEqual(fetch_rows.call_count, 1)
-        self.assertEqual(self.table.items[("PRODUCT#000000001", "MFDS_CANDIDATE")]["candidate_schema_version"], 2)
+        self.assertEqual(self.table.items[("PRODUCT#000000001", "MFDS_CANDIDATE")]["candidate_schema_version"], 3)
         self.assertEqual(api.list_product_links(self.table, "synthetic-box"), {"links": []})
         self.assertEqual(api.read_snapshot(self.table, "synthetic-box")["state"], self.snapshot)
 
@@ -469,7 +469,7 @@ class MedicationProductTests(unittest.TestCase):
         candidate = {"ITEM_SEQ": "000000001", "ITEM_NAME": "가상복용시럽", "ENTP_NAME": "합성 업체",
                      "MATERIAL_NAME": "총량 : 100밀리리터 | 성분명 : 합성성분 | 분량 : 134 | 단위 : 그램"}
         rows = [{"ITEM_SEQ": "000000001", "MTRAL_NM": "합성성분"}]
-        old = {"pk": "PRODUCT#000000001", "sk": "MFDS_CANDIDATE", "product": {"ingredientsStatus": "CONFLICT", "ingredients": []}}
+        old = {"pk": "PRODUCT#000000001", "sk": "MFDS_CANDIDATE", "candidate_schema_version": 2, "product": {"ingredientsStatus": "CONFLICT", "ingredients": []}}
         self.table.items[(old["pk"], old["sk"])] = old
         conflict = import_module("ocr-lambda.backend.mfds").ApiError("API_INGREDIENT_CONFLICT")
         with patch.object(self.mfds, "search", return_value=[candidate]), patch.object(self.mfds, "details", return_value=candidate) as detail, \
@@ -482,8 +482,54 @@ class MedicationProductTests(unittest.TestCase):
     # 충돌 캐시에는 사용자가 함량으로 오해할 수 있는 수치와 기준을 넣을 수 없다.
     def test_conflict_cache_rejects_stored_amounts(self):
         product = {"productCode": "000000001", "productName": "합성", "manufacturer": "합성", "ingredients": [{"name": "합성성분", "amount": "1", "unit": "mg", "basis": None}],
-                   "indications": None, "dosage": None, "precautions": None, "source": "MFDS_PERMIT_DETAIL", "checkedAt": "2026-11-10T00:00:00Z", "ingredientsStatus": "CONFLICT"}
-        self.table.items[("PRODUCT#000000001", "MFDS_CANDIDATE")] = {"candidate_schema_version": 2, "product": product}
+                   "indications": None, "dosage": None, "precautions": None, "source": "MFDS_PERMIT_DETAIL", "checkedAt": "2026-11-10T00:00:00Z", "ingredientsStatus": "CONFLICT", "ingredientStatements": []}
+        self.table.items[("PRODUCT#000000001", "MFDS_CANDIDATE")] = {"candidate_schema_version": 3, "product": product}
+        with self.assertRaises(api.ApiError) as error:
+            api.read_cached_product(self.table, "000000001", candidate=True)
+        self.assertEqual(error.exception.code, "PRODUCT_CACHE_INVALID")
+
+    # 충돌한 수치는 선택하지 않고 동일 성분의 공식 원문과 총량을 그대로 제공한다.
+    def test_conflict_retains_official_component_statement_with_its_basis(self):
+        self.med["name"] = "가상복용"
+        self.table = FakeTable(self.snapshot)
+        request = {"planId": self.plan["id"], "medicineId": self.med["id"], "expectedRevision": 1}
+        candidate = {"ITEM_SEQ": "000000001", "ITEM_NAME": "가상복용시럽", "ENTP_NAME": "합성 업체",
+                     "MATERIAL_NAME": "총량: 이 약 100mL 중|성분명: 합성성분액|분량: 100|단위: 밀리리터|규격: EP|성분정보: 합성성분으로서 66.7 그램|비고:"}
+        rows = [{"ITEM_SEQ": "000000001", "MTRAL_NM": "합성성분액", "QNT": "67", "INGD_UNIT_CD": "밀리리터"}]
+        conflict = import_module("ocr-lambda.backend.mfds").ApiError("API_INGREDIENT_CONFLICT")
+        with patch.object(self.mfds, "search", return_value=[candidate]), patch.object(self.mfds, "details", return_value=candidate), \
+                patch.object(self.mfds, "ingredients", side_effect=conflict), patch.object(self.mfds, "_items", return_value=rows, create=True):
+            result = api.suggest_mfds_product(self.table, "synthetic-box", request)
+            self.assertEqual(result["ingredientsStatus"], "CONFLICT")
+            self.assertEqual(result["ingredients"], [{"name": "합성성분액", "amount": None, "unit": None, "basis": None}])
+            self.assertEqual(result["ingredientStatements"], [{"name": "합성성분액", "basis": "이 약 100mL 중", "componentInfo": "합성성분으로서 66.7 그램"}])
+            self.assertEqual(api.suggest_mfds_product(self.table, "synthetic-box", request), result)
+        self.assertEqual(api.list_product_links(self.table, "synthetic-box"), {"links": []})
+
+    # 같은 성분의 중복·다른 총량·불완전 문구나 다른 성분은 원문 근거로 제시하지 않는다.
+    def test_component_statement_rejects_ambiguous_and_incomplete_text(self):
+        known = [{"name": "합성성분", "amount": None, "unit": None, "basis": None}]
+        good = "총량: 이 약 100mL 중|성분명: 합성성분|분량: 100|단위: 밀리리터|성분정보: 유효성분으로서 66.7 그램"
+        invalid = [
+            good + "|성분정보: 다른 수치 1 그램",
+            good + "|성분명: 합성성분|분량: 10|단위: 밀리리터|성분정보: 유효성분 1 그램",
+            good + "|총량: 이 약 10mL 중|성분명: 합성성분|분량: 10|단위: 밀리리터|성분정보: 유효성분 1 그램",
+            good.replace("성분정보: 유효성분으로서 66.7 그램", "성분정보: 기재 없음"),
+            good.replace("분량: 100|", ""),
+            good.replace("합성성분|", "다른성분|"),
+            good.replace("66.7 그램", "<script>66.7 그램</script>"),
+        ]
+        for text in invalid:
+            with self.subTest(text=text):
+                self.assertEqual(api.ingredient_statements({"MATERIAL_NAME": text}, known), [])
+        self.assertEqual(api.ingredient_statements({"MATERIAL_NAME": good}, []), [])
+
+    # 성분명과 관계없는 원문이나 수치 상태를 조작한 캐시는 거부한다.
+    def test_candidate_cache_rejects_unrelated_statement(self):
+        product = {"productCode": "000000001", "productName": "합성", "manufacturer": "합성", "ingredients": [{"name": "합성성분", "amount": None, "unit": None, "basis": None}],
+                   "indications": None, "dosage": None, "precautions": None, "source": "MFDS_PERMIT_DETAIL", "checkedAt": "2026-11-10T00:00:00Z", "ingredientsStatus": "CONFLICT",
+                   "ingredientStatements": [{"name": "다른성분", "basis": "이 약 100mL 중", "componentInfo": "다른성분 1 그램"}]}
+        self.table.items[("PRODUCT#000000001", "MFDS_CANDIDATE")] = {"candidate_schema_version": 3, "product": product}
         with self.assertRaises(api.ApiError) as error:
             api.read_cached_product(self.table, "000000001", candidate=True)
         self.assertEqual(error.exception.code, "PRODUCT_CACHE_INVALID")

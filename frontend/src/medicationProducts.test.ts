@@ -88,4 +88,64 @@ describe('식약처 제품 응답', function medicationProducts() {
       parseProductSuggestion({ ...candidate, ingredientsStatus: 'UNKNOWN' });
     }).toThrow();
   });
+
+  // 원문은 해당 후보의 확인된 동일 성분에만 보존하고 다른 상태는 거절한다.
+  it('성분정보 원문의 기준과 대상을 확인한다', function ingredientStatement() {
+    const candidate = {
+      productCode: '000000001',
+      productName: '합성 후보',
+      ingredients: [
+        { name: '합성 성분', amount: null, unit: null, basis: null },
+      ],
+      source: 'MFDS_PERMIT_DETAIL',
+      checkedAt: '2026-11-10T00:00:00Z',
+      matchStatus: 'POSSIBLE',
+      ingredientsStatus: 'CONFLICT',
+    };
+    const statement = {
+      name: '합성 성분',
+      basis: '이 약 40mL 중',
+      componentInfo: '합성 유효성분으로서 12 그램',
+    };
+    expect(parseProductSuggestion(candidate).ingredientStatements).toEqual([]);
+    expect(
+      parseProductSuggestion({
+        ...candidate,
+        ingredientStatements: [statement],
+      }).ingredientStatements,
+    ).toEqual([statement]);
+    expect(function unmatchedIngredient() {
+      parseProductSuggestion({
+        ...candidate,
+        ingredientStatements: [{ ...statement, name: '다른 합성 성분' }],
+      });
+    }).toThrow();
+    expect(function duplicateStatement() {
+      parseProductSuggestion({
+        ...candidate,
+        ingredientStatements: [statement, statement],
+      });
+    }).toThrow();
+    expect(function wrongStatus() {
+      parseProductSuggestion({
+        ...candidate,
+        ingredientsStatus: 'SUCCEEDED',
+        ingredientStatements: [statement],
+      });
+    }).toThrow();
+    expect(function incompleteStatement() {
+      parseProductSuggestion({
+        ...candidate,
+        ingredientStatements: [{ ...statement, basis: ' ' }],
+      });
+    }).toThrow();
+    expect(function excessiveStatement() {
+      parseProductSuggestion({
+        ...candidate,
+        ingredientStatements: [
+          { ...statement, componentInfo: '가'.repeat(2001) },
+        ],
+      });
+    }).toThrow();
+  });
 });

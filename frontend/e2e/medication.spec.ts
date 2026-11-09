@@ -829,6 +829,7 @@ test.describe('완전 공개 시연 모드', function publicModeTests() {
       maxActive: 0,
       offerSuggestion: false,
       suggestionIngredientPresent: true,
+      suggestionStatementPresent: false,
       suggestionRequests: 0,
       waitSuggestion: null as Promise<void> | null,
     };
@@ -944,6 +945,17 @@ test.describe('완전 공개 시연 모드', function publicModeTests() {
                   ]
                 : [],
               ingredientsStatus: 'CONFLICT',
+              ingredientStatements:
+                products.suggestionIngredientPresent &&
+                products.suggestionStatementPresent
+                  ? [
+                      {
+                        name: '합성 확인 성분',
+                        basis: '이 약 40mL 중',
+                        componentInfo: '합성 유효성분으로서 12 그램',
+                      },
+                    ]
+                  : [],
               indications: '합성 유사 효능',
               dosage: null,
               precautions: '합성 유사 주의',
@@ -1089,9 +1101,13 @@ test.describe('완전 공개 시연 모드', function publicModeTests() {
   });
 
   // 유사 제품은 미확인 경고를 유지하고 확인된 이름과 함량 상태를 구분한다.
-  for (const ingredientPresent of [true, false]) {
+  for (const scenario of [
+    { ingredientPresent: true, statementPresent: true, label: '원문 확인' },
+    { ingredientPresent: true, statementPresent: false, label: '이름 확인' },
+    { ingredientPresent: false, statementPresent: false, label: '이름 미확인' },
+  ]) {
     // 양쪽 자료의 일치 여부에 따라 성분 이름만 표시하거나 확인을 보류한다.
-    test(`유사 제품의 성분 충돌 안내 (${ingredientPresent ? '이름 확인' : '이름 미확인'})`, async function possibleProduct({
+    test(`유사 제품의 성분 충돌 안내 (${scenario.label})`, async function possibleProduct({
       page,
       context,
     }) {
@@ -1099,7 +1115,8 @@ test.describe('완전 공개 시연 모드', function publicModeTests() {
       const products = await mockProducts(context, server);
       products.rejectLink = true;
       products.offerSuggestion = true;
-      products.suggestionIngredientPresent = ingredientPresent;
+      products.suggestionIngredientPresent = scenario.ingredientPresent;
+      products.suggestionStatementPresent = scenario.statementPresent;
       await openPublicSchedule(page);
       await page
         .getByRole('button', { name: '복용약 등록', exact: true })
@@ -1133,9 +1150,25 @@ test.describe('완전 공개 시연 모드', function publicModeTests() {
       ).toBeVisible();
       await expect(dialog.getByText('합성 유사 효능')).toBeVisible();
       await expect(dialog.getByText('합성 유사 주의')).toBeVisible();
-      if (ingredientPresent) {
-        await expect(dialog.getByText('합성 확인 성분')).toBeVisible();
-        await expect(dialog.getByText('함량 자료 확인 필요')).toBeVisible();
+      if (scenario.ingredientPresent) {
+        await expect(dialog.locator('.usage-ingredients')).toContainText(
+          '합성 확인 성분',
+        );
+        if (scenario.statementPresent) {
+          await expect(dialog.getByText('식약처 허가 상세 원문')).toBeVisible();
+          await expect(dialog.getByText(/이 약 40mL 중/)).toBeVisible();
+          await expect(
+            dialog.getByText(/합성 유효성분으로서 12 그램/),
+          ).toBeVisible();
+          await expect(
+            dialog.getByText('별도 주성분 자료의 수치는 달라 확인 필요'),
+          ).toBeVisible();
+        } else {
+          await expect(dialog.getByText('함량 자료 확인 필요')).toBeVisible();
+          await expect(dialog.getByText('식약처 허가 상세 원문')).toHaveCount(
+            0,
+          );
+        }
       } else {
         await expect(dialog.getByText('자료 충돌로 확인 필요')).toBeVisible();
         await expect(dialog.getByText('합성 확인 성분')).toHaveCount(0);

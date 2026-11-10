@@ -117,6 +117,20 @@ def permission(client, name, sid, principal, source):
         pass
 
 
+# 기존 자동 빌드를 중단하지 않고 환경변수가 반영된 새 배포를 예약한다.
+def release_web(amplify):
+    for attempt in range(21):
+        try:
+            job = amplify.start_job(appId='d3t4nvt3phq6xc', branchName='main', jobType='RELEASE')
+            print(f"WEB_JOB: {job['jobSummary']['jobId']}", flush=True)
+            return
+        except amplify.exceptions.LimitExceededException:
+            if attempt == 20:
+                raise RuntimeError('기존 Amplify 빌드가 진행 중입니다. 완료 후 웹 배포를 실행하세요.') from None
+            print('WEB_WAIT: existing Amplify build', flush=True)
+            time.sleep(30)
+
+
 # 실제 계정과 학교 역할만 사용하며 기존 IAM 정책이나 데이터를 바꾸지 않는다.
 def deploy():
     import boto3
@@ -201,7 +215,7 @@ def deploy():
     amplify = session.client('amplify')
     branch = amplify.get_branch(appId='d3t4nvt3phq6xc', branchName='main')['branch']
     amplify.update_branch(appId='d3t4nvt3phq6xc', branchName='main', environmentVariables={**branch.get('environmentVariables', {}), 'VITE_ACTIVITY_API_URL': gateway['ApiEndpoint']})
-    amplify.start_job(appId='d3t4nvt3phq6xc', branchName='main', jobType='RELEASE')
+    release_web(amplify)
     print(json.dumps({'activity_api': gateway['ApiEndpoint'], 'capture_prefix': PREFIX, 'box_id': BOX}))
 
 

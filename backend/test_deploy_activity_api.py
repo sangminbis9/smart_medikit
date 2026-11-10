@@ -80,3 +80,15 @@ def test_incomplete_existing_keys_stop():
         with pytest.raises(RuntimeError, match='불완전'):
             deploy.vapid_keys(Mock())
         process.assert_not_called()
+
+
+# 자동 빌드와 겹치면 기존 작업을 취소하지 않고 새 환경변수의 후속 빌드를 요청한다.
+def test_web_release_waits_for_existing_build():
+    client = Mock()
+    client.exceptions.LimitExceededException = RuntimeError
+    client.start_job.side_effect = [RuntimeError('빌드 진행 중'), {'jobSummary': {'jobId': '58'}}]
+    with patch.object(deploy.time, 'sleep') as sleep:
+        deploy.release_web(client)
+    assert client.start_job.call_count == 2
+    sleep.assert_called_once_with(30)
+    client.stop_job.assert_not_called()

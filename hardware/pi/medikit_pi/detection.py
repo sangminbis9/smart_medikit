@@ -81,9 +81,15 @@ class YOLOEDetector:
             raise ValueError("설정의 포장 설명과 모델이 다릅니다. prepare-model을 다시 실행하세요.")
         self.image_size = image_size
         self.confidence = confidence
+        self._predict_lock = threading.Lock()
 
     # 전체 화면을 CPU로 추론하고 결과를 카메라 해상도와 무관한 좌표로 반환한다.
     def predict(self, frame: np.ndarray) -> list[Detection]:
+        with self._predict_lock:
+            return self._predict(frame)
+
+    # 촬영 후보와 내부 분석이 같은 모델 객체의 실행 상태를 동시에 바꾸지 않는다.
+    def _predict(self, frame: np.ndarray) -> list[Detection]:
         result = self.model.predict(
             source=frame,
             imgsz=self.image_size,

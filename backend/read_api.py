@@ -181,6 +181,8 @@ def package_view(item, medicines, box_id):
     color = item.get("base_color")
     return {
         "package_id": package_id, "box_id": box_id, "kind": item["kind"], "state": item["state"],
+        "first_registration_pending": item.get("first_registration_pending") is True,
+        "disposal_certainty": "ESTIMATED" if item.get("disposal_certainty") == "ESTIMATED" else None,
         "name": clean_text(item.get("name")) or (linked[0]["name"] if linked else "약품 정보 미확인"),
         "medicines": linked, "inventory": inventory,
         "remaining_doses": clean_number(item.get("remaining_doses"), integer=True) if item["kind"] == "PRESCRIPTION" else None,
@@ -201,7 +203,7 @@ def read_inventory(table, box_id):
     fields = ["pk", "sk", "product_code", "name", "form", "ingredients",
               "ingredients_status", "product_info", "product_info_status", "indications", "dosage", "precautions",
               "package_id", "box_id", "kind", "state", "product_codes", "expiry", "inventory",
-              "remaining_doses", "position", "size_class", "base_color", "safety_status"]
+              "remaining_doses", "position", "size_class", "base_color", "safety_status", "first_registration_pending", "disposal_certainty"]
     names = {f"#f{index}": name for index, name in enumerate(fields)}
     query = {
         "Limit": 100,

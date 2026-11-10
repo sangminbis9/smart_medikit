@@ -197,15 +197,18 @@ def run_hardware(config):
     from .gpio import Board
     from .outbox import Outbox, SyncWorker
     from .transport import S3Transport
+    from .stages import StageWorker, stage_loop
 
     settings = config["detector"]
     board = camera = outbox = detector = controller = None
     stopped = threading.Event()
     results = queue.SimpleQueue()
     sender = None
+    stage_threads = []
     try:
         board = Board(config["gpio"])
-        outbox = Outbox(config["data_dir"])
+        staged = config["aws"].get("staged_capture", False)
+        outbox = Outbox(config["data_dir"], staged=staged)
         camera = PiCamera(config["camera"])
         detector = AsyncDetector(
             YOLOEDetector(
@@ -219,6 +222,16 @@ def run_hardware(config):
             settings["max_age_seconds"],
         )
         controller = CaptureController(config, camera, board, outbox, detector)
+        if staged:
+            controller.initialize_baseline(time.monotonic())
+            workers = [StageWorker(outbox, "MOVEMENT_REQUESTED", detector=detector.detector)]
+            if config["aws"]["enabled"]:
+                workers.extend([StageWorker(outbox, stage, S3Transport(config["aws"]))
+                                for stage in ("OCR_REQUESTED", "MOVEMENT_REQUESTED")])
+            for stage_worker in workers:
+                thread = threading.Thread(target=stage_loop, args=(stage_worker, stopped), daemon=True)
+                thread.start()
+                stage_threads.append(thread)
         if config["aws"]["enabled"]:
             worker = SyncWorker(
                 outbox, S3Transport(config["aws"]), poll_seconds=config["aws"]["poll_seconds"]
@@ -270,10 +283,12 @@ def run_hardware(config):
         stopped.set()
         if sender:
             sender.join(timeout=20)
+        for thread in stage_threads:
+            thread.join(timeout=20)
         safely_finish(controller)
         for resource in (detector, camera, board):
             safely_close(resource)
-        if outbox and (sender is None or not sender.is_alive()):
+        if outbox and (sender is None or not sender.is_alive()) and not any(thread.is_alive() for thread in stage_threads):
             safely_close(outbox)
     return 0
 

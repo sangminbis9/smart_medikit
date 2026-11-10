@@ -21,6 +21,8 @@ def load_config(path: Path) -> dict:
         for key in keys:
             if type(config[section][key]) is not bool:
                 raise ValueError(f"true 또는 false 설정이 필요합니다: {section}.{key}")
+    if type(config['aws'].get('staged_capture', False)) is not bool:
+        raise ValueError('aws.staged_capture는 true 또는 false여야 합니다.')
     for section, keys in {
         "camera": ("fps", "timeout_seconds", "restart_seconds"),
         "gpio": ("debounce_seconds",),

@@ -80,7 +80,10 @@ export default function PackageDetail({ kit }: { kit: Medkit }) {
               </h2>
               <p>
                 {item.kind === 'PRESCRIPTION' ? '처방의약품' : '일반의약품'} /{' '}
-                {stateLabels[item.state]}
+                {item.state === 'DISPOSED' &&
+                item.disposal_certainty === 'ESTIMATED'
+                  ? '폐기 추정'
+                  : stateLabels[item.state]}
               </p>
             </div>
           </div>
@@ -164,7 +167,10 @@ export default function PackageDetail({ kit }: { kit: Medkit }) {
               <div>
                 <dt>보관함 보유 정보</dt>
                 <dd>
-                  {stateLabels[item.state]}
+                  {item.state === 'DISPOSED' &&
+                  item.disposal_certainty === 'ESTIMATED'
+                    ? '폐기 추정'
+                    : stateLabels[item.state]}
                   {kit.demo
                     ? ' · 시연 정보'
                     : kit.status !== 'ready' || !kit.online

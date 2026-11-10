@@ -92,6 +92,8 @@ const medicineSchema = z.object({
 });
 
 export const packageSchema = z.object({
+  first_registration_pending: z.boolean().optional(),
+  disposal_certainty: z.literal('ESTIMATED').nullable().optional(),
   package_id: z.string().min(1),
   box_id: z.string().min(1),
   kind: z.enum(['OTC', 'PRESCRIPTION']),

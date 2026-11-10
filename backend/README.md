@@ -1,5 +1,13 @@
 # DynamoDB 제품·보유 포장 조회와 수동 복용약 API
 
+## 촬영 단계·반출 이력 추가 (2026-11-10, 배포 전)
+
+`capture_events.py`는 Pi의 단계별 완료 객체와 기존 OCR 결과를 결합하며 `inventory_events.py`는 재고·반출 확인·알림을 조건부 트랜잭션으로 기록한다. `activity_api.py`는 복용 Y/N 및 최초 포장 정보 입력, `notifications.py`는 Web Push 구독·전송 및 24시간 경과 재검사를 담당한다. 세부 계약은 `docs/CONTRACTS.md` 2.2절을 따른다.
+
+`python backend/deploy_activity_api.py`는 계획만 출력한다. `--apply`는 전용 DynamoDB, Lambda 3개, HTTP API, S3의 새 prefix 알림, EventBridge Scheduler와 Amplify 변수를 설정한다. 기존 OCR 트리거·IAM 정책·기존 항목은 보존한다. VAPID 비밀키는 최초 서버 배포에서만 생성하고 이후에는 재사용한다. 배포 스크립트나 로그에 값을 출력하지 않는다. 학교 역할의 Scheduler 신뢰 관계 조회는 IAM 정책으로 차단되어 배포 실행 시 확인해야 한다.
+
+합성 검증: Pi 전체 테스트 80개, 신규 백엔드 및 기존 조회 API 28개, PC·모바일 최초 정보/Y/N 브라우저 테스트 2개 통과. 웹 빌드·타입 검사·lint 통과. Linux Python 3.12용 의존성 다운로드 확인. 실제 Pi 판정 정확도, AWS 배포·예약·푸시 도착은 아직 검증하지 않았다.
+
 `read_api.py`는 서울(`ap-northeast-2`)의 **`inha-capstone-02-medkit-data`**를 읽는 별도 Lambda 진입점이다. 기존 OCR Lambda·Pi·테이블·`pk`/`sk`·저장 구조를 변경하지 않는다. 웹의 기존 `useMedkit.ts`가 호출하는 `GET /inventory`, `GET /alerts` 응답으로 변환한다.
 
 수동 등록한 복용약은 아래 [별도 수동 복용약 API](#별도-수동-복용약-api-2026-11-08)의 전용 테이블에 저장한다. 사용자는 후속으로 비밀번호 없는 공개 시연을 선택했으며 기본 비공개 경로도 유지한다. 기존 공개 재고 API의 데이터·접근 정책은 바꾸지 않는다.

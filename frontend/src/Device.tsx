@@ -3,6 +3,7 @@ import { settings } from './settings';
 import { timeLabel } from './data';
 import type { Medkit } from './useMedkit';
 import { Badge, Icon, Note } from './ui';
+import PushPermission from './PushPermission';
 
 // 장치 연결과 웹 푸시 지원 조건을 성공으로 오인하지 않도록 표시한다.
 export default function Device({ kit }: { kit: Medkit }) {
@@ -143,11 +144,10 @@ export default function Device({ kit }: { kit: Medkit }) {
             ? ` / 권한 ${Notification.permission === 'granted' ? '허용됨' : Notification.permission === 'denied' ? '차단됨' : '아직 요청하지 않음'}`
             : ''}
         </p>
-        <Badge>알림 전송 기능 준비 중</Badge>
+        {!kit.demo && <PushPermission />}
         <p className="caption">
-          권한 허용만으로 알림 설정이 완료되지는 않아요. 현재는 알림 탭을
-          이용해주세요. 알림 서비스가 준비되면 이곳에서 직접 알림을 켤 수
-          있어요.
+          권한 허용과 서버 구독 저장이 모두 완료되어야 알림을 받을 수 있어요.
+          알림을 받지 못해도 복약 화면의 확인 요청은 남아 있어요.
         </p>
         <Link className="secondary-button" to="/alerts">
           웹 알림 목록 보기

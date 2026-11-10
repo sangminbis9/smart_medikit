@@ -23,7 +23,8 @@ def _sync_directory(path: Path) -> None:
 
 class Outbox:
     # 동일 데이터 폴더의 중복 실행을 차단하고 중단된 세션을 복구한다.
-    def __init__(self, root: Path):
+    def __init__(self, root: Path, *, staged=False):
+        self.staged = staged
         self.root = Path(root).resolve()
         self.root.mkdir(parents=True, exist_ok=True, mode=0o700)
         self._mutex = threading.RLock()
@@ -60,6 +61,10 @@ class Outbox:
                 "uploaded INTEGER NOT NULL DEFAULT 0, payload TEXT)"
             )
             self._db.commit()
+            self._db.execute("CREATE TABLE IF NOT EXISTS capture_stages (session_id TEXT, stage TEXT, payload TEXT NOT NULL, done INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(session_id,stage))")
+            self._db.commit()
+            if self.staged:
+                self._recover_stages()
             for row in self._db.execute(
                 "SELECT session_id FROM sessions WHERE state='CAPTURING'"
             ).fetchall():
@@ -107,6 +112,42 @@ class Outbox:
             os.replace(temporary, target)
             _sync_directory(directory)
             _sync_directory(self.root)
+            if not self.staged:
+                return
+            stage = "OCR_REQUESTED" if kind == "package" else "MOVEMENT_REQUESTED"
+            event = {key: row[key] for key in ("box_id", "session_id", "event_id", "sequence")}
+            event.update(stage=stage, captured_at=datetime.now(timezone.utc).isoformat())
+            with self._db:
+                self._db.execute("INSERT OR IGNORE INTO capture_stages(session_id,stage,payload) VALUES(?,?,?)",
+                                 (session_id, stage, json.dumps(event)))
+
+    # OCR 요청과 내부 판단을 서로 기다리지 않는 영속 작업으로 읽는다.
+    def stage_head(self, stage):
+        with self._mutex:
+            row = self._db.execute("SELECT c.payload FROM capture_stages c JOIN sessions s ON s.session_id=c.session_id WHERE c.stage=? AND c.done=0 ORDER BY s.sequence LIMIT 1", (stage,)).fetchone()
+            return json.loads(row[0]) if row else None
+
+    # 사진 저장 직후 전원이 꺼져 누락된 단계만 같은 식별자로 복구한다.
+    def _recover_stages(self):
+        with self._db:
+            for row in self._db.execute("SELECT * FROM sessions WHERE state NOT IN ('COMPLETED','REVIEW_REQUIRED')").fetchall():
+                for kind, stage in (("package", "OCR_REQUESTED"), ("interior", "MOVEMENT_REQUESTED")):
+                    photo = self.root / row["session_id"] / f"{kind}.jpg"
+                    if not photo.is_file():
+                        continue
+                    event = {key: row[key] for key in ("box_id", "session_id", "event_id", "sequence")}
+                    event.update(stage=stage, captured_at=datetime.fromtimestamp(photo.stat().st_mtime, timezone.utc).isoformat())
+                    self._db.execute("INSERT OR IGNORE INTO capture_stages(session_id,stage,payload) VALUES(?,?,?)", (row["session_id"], stage, json.dumps(event)))
+
+    # 같은 단계의 재전송을 동일 세션 식별자로 멱등 처리한다.
+    def complete_stage(self, session_id, stage):
+        with self._mutex, self._db:
+            self._db.execute("UPDATE capture_stages SET done=1 WHERE session_id=? AND stage=?", (session_id, stage))
+
+    # 단계 전송이 끝나야 종료 객체를 발행하되 OCR 완료는 기다리지 않는다.
+    def stages_uploaded(self, session_id):
+        with self._mutex:
+            return self._db.execute("SELECT 1 FROM capture_stages WHERE session_id=? AND done=0", (session_id,)).fetchone() is None
 
     # 촬영 실패도 사진 존재 여부로 기록하고 전송 가능한 세션으로 확정한다.
     def finish_session(self, session_id: str) -> dict:
@@ -178,6 +219,8 @@ class Outbox:
 
     # 완료된 세션의 알려진 임시 파일만 제거하며 임의 경로는 순회하지 않는다.
     def _cleanup(self, session_id: str) -> None:
+        if self.staged and self._db.execute("SELECT 1 FROM capture_stages WHERE session_id=? AND done=0", (session_id,)).fetchone():
+            return
         directory = self.root / session_id
         if directory.exists():
             for name in ("package.jpg", "interior.jpg", "package.tmp", "interior.tmp"):
@@ -215,6 +258,10 @@ class SyncWorker:
             event = self.outbox.head()
             if event is None:
                 return None
+            if self.outbox.staged:
+                if not self.outbox.stages_uploaded(event["session_id"]):
+                    return None
+                event["stage"] = "SESSION_CLOSED"
             uploaded = event.pop("_uploaded")
             directory = event.pop("_directory")
             self.next_attempt = now + self.poll_seconds

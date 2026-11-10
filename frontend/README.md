@@ -1,5 +1,7 @@
 # MEDKIT 웹
 
+2026-11-10 추가: `VITE_ACTIVITY_API_URL`을 배포된 이력 API의 HTTPS 주소로 설정하면 복약 하단의 반출 확인·이력, 신규 포장 정보 저장, 기기별 푸시 구독을 연결한다. `first_registration_pending` 포장은 이름을 빨간색으로 표시하며 제품 사용정보 상단에서 새것/쓰던 약을 확인한다. `/schedule?out_event=...`, `/?new_package=...` 알림 경로를 지원한다. 서버 API와 AWS 예약은 별도 배포가 필요하며 미설정 시 가상 기록을 만들지 않는다.
+
 Figma의 모바일·데스크톱 시안을 구현한 **React + TypeScript + Tailwind CSS + Three.js** 초기 프론트엔드입니다. API·약품 DB·보관함 치수가 없어도 실행됩니다. 기본값은 빈 보관함이며, **시연 데이터 보기**를 눌러야 가상 포장이 표시됩니다.
 
 ## 실행

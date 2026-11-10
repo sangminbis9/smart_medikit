@@ -49,6 +49,22 @@
 - S3·API 권한은 외부에서 갱신되는 단기 AWS 세션 자격증명으로 제한한다. 이 구현은 IAM·버킷 공개 설정·Lambda·API를 생성하거나 변경하지 않는다.
 - YOLOE-26n의 결과는 Pi 내부 포장 **후보**이며 이벤트에 약품명·복용·재고 확정값을 추가하지 않는다. 한글 OCR과 최종 식별은 기존 AWS 책임을 유지한다. 포장 사진이 없으면 내부 전후 비교와 확인 요청 판단도 AWS에서 수행한다.
 
+### 2.2 촬영 단계 분리 (2026-11-10 구현, 배포 검증 전)
+
+`hardware/pi`의 `aws.staged_capture=true`는 포장 저장 즉시 `OCR_REQUESTED`를 전송하고 내부 저장 후 별도 작업자로 `MOVEMENT_REQUESTED`를 분석한다. 두 작업은 서로의 완료를 기다리지 않는다. 기존 `Raspberry_Pi` 원본은 자동 동기화하지 않는다.
+
+- 공통 식별자: `box_id`, `event_id`, `session_id`, `sequence`. 단계 시각 `captured_at`은 관측 시각이며 실제 손으로 꺼낸 정확한 시각은 아니다. 기존 `occurred_at`은 세션 시작 시각이다.
+- 포장 사진은 기존 `ocr-input/<session_id>/package.jpg`, 내부·단계 객체는 `medkit-sessions/<session_id>/`에 저장한다. 사진 메타데이터 `event-id`로 기존 `RECOGNITION` 결과와 연결하며 재전송은 조건부 쓰기로 같은 이미지 버전을 유지한다.
+- 단계 객체 `ocr-ready.json`, `movement-ready.json` 전송 후 `SESSION_CLOSED`의 `closed-ready.json`을 발행한다. OCR 완료 전에도 내부 판단은 계속한다. 재고 반영은 기존 순차 완료 조회로 순서를 보존한다.
+- 최상단 새 후보 하나는 아래 포장 가림을 허용해 `IN/ESTIMATED`로 사용자 방향 확인 없이 자동 처리한다. 기준 영상 없음·촬영 실패·전역 장면 변화는 반입으로 만들지 않는다. 로컬 `COMPLETED`는 판단 처리 완료이며 실물 이동 입증은 아니다.
+- `capture_events.py`는 단일 식약처 품목기준코드와 동일 세션을 결합한다. 포장 `last_sequence` 조건과 이력·알림 트랜잭션으로 중복을 막는다. 신규 포장에 `first_registration_pending=true`, 알 수 없는 수량·기한은 null이다. 재반입은 `active_out_event_id`를 해제한다.
+- `GET /activity` → `{pending,history}`. `POST /activity/{eventId}/confirm` → `{result:TAKEN|NOT_TAKEN,quantity:number|null}`. N은 미복용 이력을 남기고 대기 목록에서만 제거한다. Y는 정제·캡슐만 수량 입력·최초 확인 트랜잭션 차감을 허용한다.
+- `POST /packages/{packageId}/initial` → `{condition:NEW|USED,actualExpiry:YYYY-MM-DD|null,remainingQty:number|null}`. NEW는 기존 값을 유지하고 USED는 입력한 실제 값만 저장한다.
+- EventBridge Scheduler 1분 주기 유지보수는 반출 관측 시각부터 최소 24시간 경과와 동일 활성 반출 ID를 재확인해 `DISPOSED`, `disposal_certainty=ESTIMATED`를 저장한다. 재반입 및 후속 반출은 이전 예약에서 제외한다. 정확히 24시간의 실행·도착은 보장하지 않는다.
+- Web Push payload: `{notification_id,kind:OUT_CONFIRMATION|INITIAL_REGISTRATION,event_id?,medicine_name?,package_id?}`. 클릭 경로는 `/schedule?out_event=...` 또는 `/?new_package=...`. 클릭 자체는 복용 확인이 아니다.
+- `GET /push/config`는 VAPID 공개키만 반환한다. `POST /push/subscriptions` 및 `/remove`는 `{subscription}`을 받으며 기존 암호화 키가 같아야 변경한다. endpoint·auth·비밀키 조회 API는 없다. 구독별 성공을 기록하고 실패는 재시도한다. 전송 성공 직후 장애의 중복 가능성은 알림 tag로 완화한다.
+- `deploy_activity_api.py`는 새 API·촬영 처리·푸시·예약 배포용이다. 실제 AWS 적용·Pi·푸시 검증 전이며 코드 작성만으로 운영 연결이 완료된 것은 아니다.
+
 ## 3. 이벤트 처리 상태
 
 | `processing_status` | 의미 | Pi 동작 |

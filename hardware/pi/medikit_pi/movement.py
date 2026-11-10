@@ -26,7 +26,7 @@ def valid_detection(item: Detection) -> bool:
 
 
 # 내부 사진에서 바뀐 후보 하나를 찾되 항상 사용자 확인을 요구한다.
-def compare_interior(before, after, before_items, after_items):
+def compare_interior(before, after, before_items, after_items, *, automatic_in=False):
     result = {"processing_status": "REVIEW_REQUIRED", "candidate": None, "reason": None}
     if (before is None or after is None or before.size == 0 or after.size == 0
             or before.shape != after.shape):
@@ -48,6 +48,11 @@ def compare_interior(before, after, before_items, after_items):
         return result
     removed = [item for i, item in enumerate(before_items) if i not in {a for a, _ in links}]
     added = [item for j, item in enumerate(after_items) if j not in {b for _, b in links}]
+    # 최상단에 새 후보 하나가 등장하면 아래 포장의 가림을 허용해 자동 반입한다.
+    if automatic_in and len(added) == 1:
+        result.update(processing_status="COMPLETED", reason="TOP_PLACEMENT",
+                      candidate={"direction": "IN", "certainty": "ESTIMATED", "box": added[0].box})
+        return result
     # 맨 위에 놓은 포장이 다른 포장을 가리거나 드러내면 방향 판단을 보류한다.
     if (any(iou(item.box, other.box) > 0 for item in removed for other in after_items)
             or any(iou(item.box, other.box) > 0 for item in added for other in before_items)):

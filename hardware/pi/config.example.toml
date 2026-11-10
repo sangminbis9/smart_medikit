@@ -57,6 +57,8 @@ close_retries = 2
 package_retry_seconds = 1.0
 
 [aws]
+staged_capture = true
+ocr_input_prefix = "ocr-input"
 # 서버 구현이 없으므로 기본값은 로컬 큐 저장이다.
 enabled = false
 contract_confirmed = false

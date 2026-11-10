@@ -1,5 +1,6 @@
 import { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useNavigate, useLocation } from 'react-router-dom';
+import InitialPackage from './InitialPackage';
 import {
   expiryLabel,
   displayMedicineName,
@@ -46,6 +47,8 @@ export default function Home({
   setSelected,
 }: Props) {
   const { data, demo, toggleDemo } = kit;
+  const navigate = useNavigate();
+  const location = useLocation();
   const catalogCount = demo ? 0 : findCatalogMedicines(data).length;
   const catalogOnly = data.packages.length === 0 && catalogCount > 0;
   const list = useRef<HTMLDivElement>(null);
@@ -317,6 +320,10 @@ export default function Home({
                     // 카드 본문을 선택하면 3D만 바꾸고 상세 링크는 별도로 연다.
                     function focus() {
                       select(item.package_id);
+                      if (item.first_registration_pending)
+                        navigate(
+                          `/?new_package=${encodeURIComponent(item.package_id)}`,
+                        );
                     }
                     return (
                       <PackageCard
@@ -364,6 +371,7 @@ export default function Home({
           medicineIds={categoryMatches?.medicineIds}
         />
       )}
+      <InitialPackage key={location.search} kit={kit} />
     </div>
   );
 }
@@ -434,10 +442,21 @@ function PackageCard({
         >
           <span className="ordinal">{String(order).padStart(2, '0')}</span>
           <span className="package-label">
-            <strong>{displayMedicineName(item.name)}</strong>
+            <strong
+              style={
+                item.first_registration_pending
+                  ? { color: '#c62828' }
+                  : undefined
+              }
+            >
+              {displayMedicineName(item.name)}
+            </strong>
             <small>
-              {stateLabels[item.state]} /{' '}
-              {item.kind === 'PRESCRIPTION' ? '처방약 봉투' : '일반의약품'}
+              {item.state === 'DISPOSED' &&
+              item.disposal_certainty === 'ESTIMATED'
+                ? '폐기 추정'
+                : stateLabels[item.state]}{' '}
+              / {item.kind === 'PRESCRIPTION' ? '처방약 봉투' : '일반의약품'}
             </small>
           </span>
         </button>

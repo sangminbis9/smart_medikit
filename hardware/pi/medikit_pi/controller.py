@@ -57,6 +57,15 @@ class CaptureController:
             config["detector"]["max_age_seconds"],
         )
 
+    # 시작 시 닫힌 빈 작업 세션으로 첫 비교 기준을 확보한다.
+    def initialize_baseline(self, now):
+        if not self.outbox.staged or self.board.is_open():
+            return
+        self.session_id = self.outbox.begin_session(self.config["box_id"])
+        self.state = "CLOSING"
+        self.close_started = now
+        self.board.lamp(True)
+
     # 센서 처리와 촬영을 분리하여 카메라 오류 중에도 닫힘을 기록한다.
     def sensor(self, raw_open: bool, now: float):
         opened = self.debounce.update(raw_open, now)

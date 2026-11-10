@@ -7,6 +7,7 @@ import MedicationAccess from './MedicationAccess';
 import MedicationDose from './MedicationDose';
 import { occurrencesOnDay } from './medicationPlans';
 import type { MedicationPlansStore } from './useMedicationPlans';
+import OutboundHistory from './OutboundHistory';
 
 const labels: Record<Dose['result'], string> = {
   SCHEDULED: '예정',
@@ -376,6 +377,7 @@ export default function Schedule({
           )}
         </section>
       </div>
+      <OutboundHistory enabled={!kit.demo} onInventoryChange={kit.refresh} />
       {editing && (
         <Dialog title="복용 여부 확인" onClose={close}>
           <form onSubmit={save}>

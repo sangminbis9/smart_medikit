@@ -33,9 +33,11 @@ self.addEventListener('message', function update(event) {
   if (event.data?.type === 'SKIP_WAITING') void self.skipWaiting();
 });
 
-// 잠금 화면에는 민감한 약품명 대신 일반 안내를 표시한다.
+// 허용된 알림 종류와 식별자로만 앱 내부 이동 경로를 만든다.
 self.addEventListener('push', function showPush(event) {
   let id: string | undefined;
+  let path = '/alerts';
+  let body = '앱을 열어 최신 알림과 확인 요청을 확인해주세요.';
   try {
     const data: unknown = event.data?.json();
     if (
@@ -47,16 +49,47 @@ self.addEventListener('push', function showPush(event) {
       data.notification_id.length <= 160
     )
       id = data.notification_id;
+    if (data && typeof data === 'object') {
+      const payload = data as Record<string, unknown>;
+      const validId = /^[A-Za-z0-9_-]{1,100}$/;
+      if (
+        payload.kind === 'OUT_CONFIRMATION' &&
+        typeof payload.event_id === 'string' &&
+        validId.test(payload.event_id)
+      ) {
+        path = `/schedule?out_event=${encodeURIComponent(payload.event_id)}`;
+        const name =
+          typeof payload.medicine_name === 'string'
+            ? Array.from(payload.medicine_name)
+                .filter(function printable(character) {
+                  return (
+                    character.charCodeAt(0) >= 32 &&
+                    character.charCodeAt(0) !== 127
+                  );
+                })
+                .join('')
+                .slice(0, 200)
+            : '꺼낸 약';
+        body = `${name}을 복용/사용하셨나요?`;
+      } else if (
+        payload.kind === 'INITIAL_REGISTRATION' &&
+        typeof payload.package_id === 'string' &&
+        validId.test(payload.package_id)
+      ) {
+        path = `/?new_package=${encodeURIComponent(payload.package_id)}`;
+        body = '처음 등록된 약입니다. 기본 정보를 입력해주세요';
+      }
+    }
   } catch {
     /* 잘못된 본문도 민감정보 없이 일반 알림으로 안내한다. */
   }
   event.waitUntil(
     self.registration.showNotification('MEDKIT · 확인할 내용이 있어요', {
-      body: '앱을 열어 최신 알림과 확인 요청을 확인해주세요.',
+      body,
       icon: '/icon-192.png',
       badge: '/icon-192.png',
       tag: id,
-      data: { path: '/alerts' },
+      data: { path },
     }),
   );
 });
@@ -66,18 +99,25 @@ self.addEventListener('notificationclick', function openAlert(event) {
   event.notification.close();
   // 기존 창이 있으면 재사용하고 없으면 앱을 연다.
   async function openWindow() {
+    const supplied = event.notification.data?.path;
+    const path =
+      typeof supplied === 'string' &&
+      /^(\/alerts|\/schedule\?out_event=[A-Za-z0-9_-]{1,100}|\/\?new_package=[A-Za-z0-9_-]{1,100})$/.test(
+        supplied,
+      )
+        ? supplied
+        : '/alerts';
     const windows = await self.clients.matchAll({
       type: 'window',
       includeUncontrolled: true,
     });
     for (const client of windows) {
-      if (new URL(client.url).origin !== self.location.origin) continue;
-      await client.navigate('/alerts');
+      if (client.url !== new URL(path, self.location.origin).href) continue;
       client.postMessage({ type: 'REFRESH' });
       await client.focus();
       return;
     }
-    await self.clients.openWindow('/alerts');
+    await self.clients.openWindow(path);
   }
   event.waitUntil(openWindow());
 });

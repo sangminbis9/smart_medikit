@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import re
 from pathlib import Path
 from urllib.parse import quote, urlsplit
@@ -37,6 +38,9 @@ class S3Transport:
             raise ValueError("S3 prefix는 명시적인 상대 키 경로여야 합니다.")
         if not re.fullmatch(r"[A-Za-z0-9_-]+\.json", self.manifest_name):
             raise ValueError("완료 객체 이름은 경로가 없는 JSON 파일명이어야 합니다.")
+        self.ocr_prefix = config.get('ocr_input_prefix', self.prefix).strip('/')
+        if not re.fullmatch(r'[A-Za-z0-9_./-]+', self.ocr_prefix) or '..' in self.ocr_prefix.split('/'):
+            raise ValueError('OCR 입력 경로를 확인하세요.')
         template = config["status_url_template"]
         if (
             template.count("{event_id}") != 1
@@ -95,21 +99,35 @@ class S3Transport:
             raise ValueError("올바른 session_id가 필요합니다.")
         metadata = dict(event)
         for kind in ("package", "interior"):
-            key = f"{self.prefix}/{session_id}/{kind}.jpg"
+            prefix = self.ocr_prefix if kind == 'package' and event.get('stage') else self.prefix
+            key = f"{prefix}/{session_id}/{kind}.jpg"
             captured = event[f"{kind}_capture_ok"]
             metadata[f"{kind}_image_key"] = key if captured else None
-            if captured:
+            if captured and event.get("stage") != "SESSION_CLOSED":
                 with (Path(directory) / f"{kind}.jpg").open("rb") as image_file:
-                    self._s3.put_object(
+                    content = image_file.read()
+                    digest = hashlib.sha256(content).hexdigest()
+                    request = dict(
                         Bucket=self.config["bucket"],
                         Key=key,
-                        Body=image_file,
+                        Body=content,
                         ContentType="image/jpeg",
+                        Metadata={"event-id": event["event_id"], "session-id": session_id, "sha256": digest},
                     )
+                    if event.get("stage"):
+                        request["IfNoneMatch"] = "*"
+                    try:
+                        self._s3.put_object(**request)
+                    except Exception as error:
+                        if getattr(error, "response", {}).get("Error", {}).get("Code") != "PreconditionFailed":
+                            raise
+                        prior = self._s3.head_object(Bucket=self.config["bucket"], Key=key)
+                        if prior.get("Metadata") != request["Metadata"]:
+                            raise ValueError("기존 촬영 객체와 재전송 내용이 다릅니다.") from None
         # 이미지별 트리거를 사용하지 않는 합의된 서버만 완료 객체를 처리한다.
         self._s3.put_object(
             Bucket=self.config["bucket"],
-            Key=f"{self.prefix}/{session_id}/{self.manifest_name}",
+            Key=f"{self.prefix}/{session_id}/{'closed-ready.json' if event.get('stage') == 'SESSION_CLOSED' else self.manifest_name}",
             Body=json.dumps(metadata, ensure_ascii=False).encode("utf-8"),
             ContentType="application/json",
         )
@@ -144,3 +162,15 @@ class S3Transport:
         }:
             raise ValueError("서버 응답에 계약의 processing_status가 없습니다.")
         return payload["processing_status"]
+
+    # 촬영 단계별 완료 객체를 전송하여 OCR과 이동 처리의 실행을 분리한다.
+    def upload_stage(self, event, directory):
+        stage = event["stage"]
+        if stage not in {"OCR_REQUESTED", "MOVEMENT_REQUESTED"}:
+            raise ValueError("지원하지 않는 촬영 단계입니다.")
+        kind = "package" if stage == "OCR_REQUESTED" else "interior"
+        payload = dict(event, package_capture_ok=kind == "package", interior_capture_ok=kind == "interior")
+        # 별도 인스턴스를 사용해 병행 전송 중 완료 객체 이름이 섞이지 않게 한다.
+        config = dict(self.config, manifest_name="ocr-ready.json" if kind == "package" else "movement-ready.json")
+        transport = S3Transport(config, session=self.session, opener=self.opener)
+        transport.upload(payload, directory)

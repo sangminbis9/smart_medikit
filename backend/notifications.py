@@ -118,6 +118,9 @@ def deliver(store, box, send=send_webpush):
                     ExpressionAttributeNames={'#status': 'status'}, ExpressionAttributeValues={':sent': 'SENT', ':at': int(time.time())})
             except Exception as error:
                 status = getattr(getattr(error, 'response', None), 'status_code', None)
+                # 구독 주소·암호화 키·응답 본문 없이 전송 실패 유형만 기록한다.
+                print(json.dumps({'event': 'WEB_PUSH_FAILED', 'error_type': type(error).__name__,
+                                  'http_status': status if isinstance(status, int) else None}))
                 if status in (404, 410):
                     store.activity.delete_item(Key={'pk': saved['pk'], 'sk': saved['sk']})
                 else:

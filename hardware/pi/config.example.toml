@@ -59,7 +59,7 @@ package_retry_seconds = 1.0
 [aws]
 staged_capture = true
 ocr_input_prefix = "ocr-input"
-# 서버 구현이 없으므로 기본값은 로컬 큐 저장이다.
+# 실기기 배선·단기 자격증명 확인 전에는 로컬 큐에 저장하며 연결 값은 README를 따른다.
 enabled = false
 contract_confirmed = false
 poll_seconds = 2.5

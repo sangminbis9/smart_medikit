@@ -1,14 +1,18 @@
 # DynamoDB 제품·보유 포장 조회와 수동 복용약 API
 
-## 촬영 단계·반출 이력 추가 (2026-11-10, 배포 전)
+## 촬영 단계·반출 이력 추가 (2026-11-10, AWS·웹 배포)
 
 `capture_events.py`는 Pi의 단계별 완료 객체와 기존 OCR 결과를 결합하며 `inventory_events.py`는 재고·반출 확인·알림을 조건부 트랜잭션으로 기록한다. `activity_api.py`는 복용 Y/N 및 최초 포장 정보 입력, `notifications.py`는 Web Push 구독·전송 및 24시간 경과 재검사를 담당한다. 세부 계약은 `docs/CONTRACTS.md` 2.2절을 따른다.
 
-`python backend/deploy_activity_api.py`는 계획만 출력한다. `--apply`는 전용 DynamoDB, Lambda 3개, HTTP API, S3의 새 prefix 알림, EventBridge Scheduler와 Amplify 변수를 설정한다. 기존 OCR 트리거·IAM 정책·기존 항목은 보존한다. VAPID 비밀키는 최초 서버 배포에서만 생성하고 이후에는 재사용한다. 배포 스크립트나 로그에 값을 출력하지 않는다. 학교 역할의 Scheduler 신뢰 관계 조회는 IAM 정책으로 차단되어 배포 실행 시 확인해야 한다.
+`python backend/deploy_activity_api.py`는 계획만 출력한다. `--apply`는 전용 DynamoDB, Lambda 3개, HTTP API, S3의 새 prefix 알림, EventBridge Scheduler와 Amplify 변수를 설정한다. 기존 OCR 트리거·IAM 정책·기존 항목은 보존한다. VAPID 비밀키는 최초 서버 배포에서만 생성하고 이후에는 재사용한다. 배포 스크립트나 로그에 값을 출력하지 않는다. 학교 역할은 `ListRoles`에서 Lambda·Scheduler 신뢰를 확인하고 재사용했다. IAM 정책은 변경하지 않았다.
 
-합성 검증: Pi 전체 테스트 80개, 신규 백엔드 및 기존 조회 API 28개, PC·모바일 최초 정보/Y/N 브라우저 테스트 2개 통과. 웹 빌드·타입 검사·lint 통과. Linux Python 3.12용 의존성 다운로드 확인. 실제 Pi 판정 정확도, AWS 배포·예약·푸시 도착은 아직 검증하지 않았다.
+합성 검증: Pi 전체 테스트 80개, 신규 백엔드 및 기존 조회 API 28개, 배포 회귀 8개, PC·모바일 최초 정보/Y/N 브라우저 테스트 2개 통과. 웹 빌드·타입 검사·lint 통과. Linux Python 3.12용 의존성 다운로드 확인. 실제 Pi 판정 정확도·촬영 전체 경로·24시간 경과·푸시 도착은 아직 검증하지 않았다.
 
 배포 오류 수정(2026-11-10): 최초 실행은 DynamoDB 생성 요청의 수동 소유 태그 때문에 `dynamodb:TagResource`가 거부되어 중단됐다. 테이블 생성에서 태그 전달을 제거하고 학교 자동 태그·ARN·키를 확인하도록 수정했다. Lambda·API에는 `ManagedBy`만 전달하며 미생성 Lambda는 목록으로 확인한다. 기존 조회 Lambda의 필수 `medkit_mfds.py`도 배포 압축에 포함한다. 배포 회귀 6개를 포함한 백엔드 검사 34개가 통과했다.
+
+실제 배포 검증(2026-11-10): 이력 테이블과 Lambda 3개, HTTP API `https://yqcfg2houe.execute-api.ap-northeast-2.amazonaws.com`, S3 단계 트리거, `smart-medikit-activity-maintenance` 예약을 생성했다. 기존 `ocr-input/` OCR 트리거를 보존하고 `medkit-sessions/`의 JSON만 추가 수신한다. 실제 HTTPS에서 `/activity`·`/push/config`는 `200` 및 `no-store`, 빈 확인 입력은 `422`, 무인증 Pi 조회는 `403`, SigV4 Pi 조회는 `200/PROCESSING`을 확인했다. 기존 재고 Lambda 조회 `200`, 유지보수 Lambda 직접 실행 `ok=true`, 예약 `ENABLED/rate(1 minute)`을 확인했다. 실제 촬영 이벤트나 사용자 복용 기록을 이 검증에서 생성하지 않았다.
+
+Amplify `main`에 `VITE_ACTIVITY_API_URL`을 반영했다. 자동 빌드와 동시 실행된 수동 배포 요청의 `LimitExceededException`은 기존 빌드를 취소하지 않고 후속 실행을 기다리도록 수정했다. 커밋 `0f947e8`의 작업 **58번 SUCCEED**, 사용자 Chrome의 앱 업데이트 적용 후 **복약 하단 보관함 복용 기록·확인 대기 0건·기기 알림 받기 버튼**을 확인했다. 브라우저 알림 권한은 아직 허용하지 않았으며 실기기 Pi 설정·단기 자격증명 공급자·GPIO 배선 검증은 별도다.
 
 `read_api.py`는 서울(`ap-northeast-2`)의 **`inha-capstone-02-medkit-data`**를 읽는 별도 Lambda 진입점이다. 기존 OCR Lambda·Pi·테이블·`pk`/`sk`·저장 구조를 변경하지 않는다. 웹의 기존 `useMedkit.ts`가 호출하는 `GET /inventory`, `GET /alerts` 응답으로 변환한다.
 

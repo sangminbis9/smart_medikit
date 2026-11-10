@@ -144,24 +144,26 @@ python -m medikit_pi --config config.toml video --input ../../local_data/test.mp
 
 ## AWS 연결 경계
 
-현재 저장소에는 `backend/` 구현이 없으며 `docs/CONTRACTS.md`는 초안이다. 기본값 `aws.enabled=false`로 실행해도 모든 촬영과 영속 큐가 동작한다. 서버가 없는 상태를 성공으로 표시하지 않으며 임의 API를 호출하지 않는다.
+2026-11-10 `backend/`의 단계 수신·재고·이력 API와 웹을 배포했다. 실제 Pi 설치·배선·단기 자격증명은 아직 확인하지 않아 예제의 `aws.enabled=false`는 유지한다. 촬영과 영속 큐는 로컬에서 동작하며, 서버 저장 성공 전에는 전송 완료로 표시하지 않는다.
 
-백엔드 담당자가 [계약 문서 2.1절](../../docs/CONTRACTS.md#21-pi-구현-상태와-배포-전-확정-항목-2026-10-26)의 완료 객체, 인증, 상태 응답을 확정한 뒤 다음 값을 **실제 배포 값으로** 설정한다.
+`hardware/pi` 작업본의 [단계 분리 계약 2.2절](../../docs/CONTRACTS.md#22-촬영-단계-분리-2026-11-10-aws웹-배포-실기기-검증-전)을 사용하려면 실제 `config.toml`의 최상위 `box_id`를 `inha-capstone-02-medkit`으로 지정하고 다음 배포 값을 적용한다. 단기 자격증명 공급자와 GPIO를 먼저 준비한다. `Raspberry_Pi` 원본에는 이번 변경이 자동 반영되지 않는다.
 
 ```toml
 [aws]
 enabled = true
 contract_confirmed = true
+staged_capture = true
+ocr_input_prefix = "ocr-input"
 poll_seconds = 2.5
-bucket = "실제-비공개-버킷"
-region = "실제-리전"
-prefix = "합의한/제한경로"
-manifest_name = "합의한-완료파일.json"
-status_url_template = "https://실제-API-호스트/합의한-경로/{event_id}"
+bucket = "inha-capstone-02-s3"
+region = "ap-northeast-2"
+prefix = "medkit-sessions"
+manifest_name = "closed-ready.json"
+status_url_template = "https://yqcfg2houe.execute-api.ap-northeast-2.amazonaws.com/capture-events/{event_id}"
 auth_mode = "sigv4"
 ```
 
-위 값은 설명용이며 사용 가능한 서버 주소가 아니다. 한 세션의 JPEG를 먼저 PUT하고 마지막 JSON 객체에서만 Lambda가 실행되어야 한다. API는 `processing_status`의 기존 enum을 반환하고, 서버도 중복·순서 검증과 실패 이벤트 재처리를 제공해야 한다. `POST /capture-events`의 미구현 요청/응답을 만들지 않았다. prefix와 상태 URL은 처음 전송 전에 확정하고, 미완료 큐가 있는 동안 바꾸지 않는다.
+포장 JPEG는 기존 OCR Lambda를 즉시 실행하고 내부 판단은 별도 작업자로 수행한다. 각 단계 JSON과 종료 객체는 새 촬영 Lambda가 결합한다. API는 `processing_status`의 기존 enum을 반환하며 SigV4 요청 `200`·무인증 요청 `403`을 확인했다. `POST /capture-events`는 사용하지 않는다. prefix·보관함 ID·상태 URL을 미완료 큐가 있는 동안 바꾸지 않는다. 실제 Pi의 전체 촬영 경로는 별도 검증이 필요하다.
 
 Boto3의 외부 `credential_process` 등 갱신 가능한 공급자로 **단기 세션 토큰이 포함된 자격증명**을 제공한다. 장기 access key/secret을 Pi나 소스에 내장하지 않는다. API가 bearer 방식이면 `auth_mode="bearer"`와 외부 `bearer_token_file` 경로를 추가한다. 토큰·AWS 응답 본문·사진·OCR 원문은 로그에 기록하지 않는다. S3/IAM/API 접근제어와 비용 정책은 별도 팀 배포 작업이며 이 프로그램은 원격 자원이나 IAM 설정을 변경하지 않는다.
 

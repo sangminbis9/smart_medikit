@@ -49,7 +49,7 @@
 - S3·API 권한은 외부에서 갱신되는 단기 AWS 세션 자격증명으로 제한한다. 이 구현은 IAM·버킷 공개 설정·Lambda·API를 생성하거나 변경하지 않는다.
 - YOLOE-26n의 결과는 Pi 내부 포장 **후보**이며 이벤트에 약품명·복용·재고 확정값을 추가하지 않는다. 한글 OCR과 최종 식별은 기존 AWS 책임을 유지한다. 포장 사진이 없으면 내부 전후 비교와 확인 요청 판단도 AWS에서 수행한다.
 
-### 2.2 촬영 단계 분리 (2026-11-10 구현, 배포 검증 전)
+### 2.2 촬영 단계 분리 (2026-11-10 AWS·웹 배포, 실기기 검증 전)
 
 `hardware/pi`의 `aws.staged_capture=true`는 포장 저장 즉시 `OCR_REQUESTED`를 전송하고 내부 저장 후 별도 작업자로 `MOVEMENT_REQUESTED`를 분석한다. 두 작업은 서로의 완료를 기다리지 않는다. 기존 `Raspberry_Pi` 원본은 자동 동기화하지 않는다.
 
@@ -63,7 +63,7 @@
 - EventBridge Scheduler 1분 주기 유지보수는 반출 관측 시각부터 최소 24시간 경과와 동일 활성 반출 ID를 재확인해 `DISPOSED`, `disposal_certainty=ESTIMATED`를 저장한다. 재반입 및 후속 반출은 이전 예약에서 제외한다. 정확히 24시간의 실행·도착은 보장하지 않는다.
 - Web Push payload: `{notification_id,kind:OUT_CONFIRMATION|INITIAL_REGISTRATION,event_id?,medicine_name?,package_id?}`. 클릭 경로는 `/schedule?out_event=...` 또는 `/?new_package=...`. 클릭 자체는 복용 확인이 아니다.
 - `GET /push/config`는 VAPID 공개키만 반환한다. `POST /push/subscriptions` 및 `/remove`는 `{subscription}`을 받으며 기존 암호화 키가 같아야 변경한다. endpoint·auth·비밀키 조회 API는 없다. 구독별 성공을 기록하고 실패는 재시도한다. 전송 성공 직후 장애의 중복 가능성은 알림 tag로 완화한다.
-- `deploy_activity_api.py`는 새 API·촬영 처리·푸시·예약 배포용이다. 실제 AWS 적용·Pi·푸시 검증 전이며 코드 작성만으로 운영 연결이 완료된 것은 아니다.
+- `deploy_activity_api.py`로 AWS·웹 배포를 완료했다. API 기본 주소는 `https://yqcfg2houe.execute-api.ap-northeast-2.amazonaws.com`, Pi 조회는 `GET /capture-events/{event_id}`이며 `AWS_IAM` 인증을 요구한다. 단일 `box_id`는 `inha-capstone-02-medkit`이다. 실제 조회·인증 거부·예약 구성·웹 표시를 확인했으며 실물 촬영부터 재고 반영 및 푸시 도착은 실기기 검증 전이다. 세부 검증 범위는 `backend/README.md`를 따른다.
 
 ## 3. 이벤트 처리 상태
 

@@ -1,6 +1,72 @@
 import { expect, test } from '@playwright/test';
 import { packageSchema } from '../src/data';
 
+// 실제 보유 포장과 긴 등록 제품 목록이 함께 있어도 3D가 목록 위로 넘치지 않는다.
+test('혼합 재고의 3D와 등록 제품 목록이 겹치지 않는다', async function mixedLayout({
+  page,
+}, testInfo) {
+  const item = syntheticPackage();
+  // 보유 포장과 식별 코드가 겹치지 않는 등록 제품을 만든다.
+  const medicines = Array.from({ length: 12 }, function catalog(_, index) {
+    return {
+      ...item.medicines[0],
+      medicine_id: `catalog-${index}`,
+      product_code: String(100000000 + index),
+      name: `합성 등록 제품 ${index + 1}`,
+    };
+  });
+  // 보유 포장과 별도 제품 캐시가 동시에 있는 API 응답을 재현한다.
+  await page.route('**/api/**', async function inventory(route) {
+    await route.fulfill({
+      json: route.request().url().includes('/inventory')
+        ? {
+            box: { box_id: 'test-box' },
+            packages: [item],
+            catalog_medicines: medicines,
+            catalog_complete: true,
+            inventory_status: 'CONFIRMED',
+          }
+        : { alerts: [] },
+    });
+  });
+  for (const viewport of [
+    { width: 1440, height: 960 },
+    { width: 1130, height: 776 },
+    { width: 390, height: 844 },
+  ]) {
+    await page.setViewportSize(viewport);
+    await page.goto('/');
+    await expect(page.locator('.catalog-list li')).toHaveCount(12);
+    await expect(page.locator('.cabinet')).toBeVisible();
+    const grid = await page.locator('.home-grid').boundingBox();
+    const scene = await page.locator('.scene-column').boundingBox();
+    const inventory = await page.locator('.inventory').boundingBox();
+    const catalog = await page
+      .locator('.home-page > .catalog-medicines')
+      .boundingBox();
+    expect(grid!.height).toBeGreaterThan(200);
+    expect(catalog!.y).toBeGreaterThanOrEqual(scene!.y + scene!.height);
+    expect(catalog!.y).toBeGreaterThanOrEqual(inventory!.y + inventory!.height);
+    // 카드 선택과 3D 초기화 후에도 분리된 배치를 유지한다.
+    await page
+      .getByRole('button', { name: `${item.name} 3D에서 선택` })
+      .click();
+    await page.getByRole('button', { name: '시점 초기화' }).click();
+    const afterScene = await page.locator('.scene-column').boundingBox();
+    const afterCatalog = await page
+      .locator('.home-page > .catalog-medicines')
+      .boundingBox();
+    expect(afterCatalog!.y).toBeGreaterThanOrEqual(
+      afterScene!.y + afterScene!.height,
+    );
+    if (testInfo.project.name === 'desktop')
+      await page.screenshot({
+        path: testInfo.outputPath(`home-mixed-${viewport.width}.png`),
+        fullPage: true,
+      });
+  }
+});
+
 // 실제 약품을 흉내 내지 않는 합성 승인 자료로 화면의 안전 상태를 검증한다.
 function syntheticPackage() {
   return packageSchema.parse({

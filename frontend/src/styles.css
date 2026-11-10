@@ -1061,6 +1061,14 @@ small,
   min-height: 0;
   flex: 1;
 }
+/* 아래 제품 목록이 길어도 3D·보관 목록의 높이를 줄이지 않는다. */
+.home-grid-with-catalog {
+  flex: 0 0 auto;
+  margin-bottom: 24px;
+}
+.home-grid-with-catalog .card-list {
+  max-height: max(240px, 50dvh);
+}
 .scene-column {
   min-width: 0;
 }

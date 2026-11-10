@@ -210,7 +210,9 @@ export default function Home({
         </div>
         <span>분류는 효능 문구를 기준으로 검색해요.</span>
       </div>
-      <div className="home-grid">
+      <div
+        className={`home-grid${!catalogOnly && catalogCount > 0 ? ' home-grid-with-catalog' : ''}`}
+      >
         <div className="scene-column">
           <Suspense
             fallback={

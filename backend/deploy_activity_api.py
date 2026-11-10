@@ -8,6 +8,7 @@ from pathlib import Path
 import subprocess
 import sys
 import tempfile
+import time
 import zipfile
 
 ACCOUNT = '842544789367'
@@ -18,10 +19,58 @@ TABLE = 'inha-capstone-02-medkit-activity'
 BUCKET = 'inha-capstone-02-s3'
 PREFIX = 'medkit-sessions/'
 ROLE = f'arn:aws:iam::{ACCOUNT}:role/SafeRole-inha-capstone-02'
-TAGS = {'username': 'inha-capstone-02', 'group': 'inha-capstone'}
+OWNER_TAGS = {'username': 'inha-capstone-02', 'group': 'inha-capstone'}
+# 학교 소유 태그는 자동 정책에 맡기고 애플리케이션 식별 태그만 전달한다.
+TAGS = {'ManagedBy': 'smart-medikit-activity-api'}
 FUNCTIONS = {'smart-medikit-activity-api': 'activity_api.lambda_handler',
              'smart-medikit-capture-events': 'capture_events.lambda_handler',
              'smart-medikit-notifications': 'notifications.lambda_handler'}
+
+
+# 자동 소유 태그 전파 중 발생하는 조회 거부만 제한된 시간 동안 재시도한다.
+def await_read(operation, **parameters):
+    for attempt in range(31):
+        try:
+            return operation(**parameters)
+        except Exception as error:
+            code = getattr(error, 'response', {}).get('Error', {}).get('Code')
+            if code not in ('AccessDenied', 'AccessDeniedException') or attempt == 30:
+                raise
+            time.sleep(2)
+
+
+# 학교 자동 태그와 키를 확인한 전용 테이블만 사용하며 기존 항목은 보존한다.
+def ensure_table(dynamo):
+    names = [name for page in dynamo.get_paginator('list_tables').paginate() for name in page['TableNames']]
+    if TABLE not in names:
+        # 생성 시 TagResource를 요청하면 학교 정책에 거부되므로 태그를 전달하지 않는다.
+        dynamo.create_table(TableName=TABLE,
+            KeySchema=[{'AttributeName': 'pk', 'KeyType': 'HASH'}, {'AttributeName': 'sk', 'KeyType': 'RANGE'}],
+            AttributeDefinitions=[{'AttributeName': name, 'AttributeType': 'S'} for name in ('pk', 'sk')],
+            BillingMode='PAY_PER_REQUEST')
+    for attempt in range(31):
+        description = await_read(dynamo.describe_table, TableName=TABLE)['Table']
+        if description['TableArn'] != f'arn:aws:dynamodb:{REGION}:{ACCOUNT}:table/{TABLE}' or description['KeySchema'] != [{'AttributeName': 'pk', 'KeyType': 'HASH'}, {'AttributeName': 'sk', 'KeyType': 'RANGE'}]:
+            raise RuntimeError('기존 이력 테이블의 ARN 또는 키 형식이 다릅니다.')
+        tags = {item['Key']: item['Value'] for item in await_read(dynamo.list_tags_of_resource, ResourceArn=description['TableArn']).get('Tags', [])}
+        if any(key in tags and tags[key] != value for key, value in {**OWNER_TAGS, **TAGS}.items()):
+            raise RuntimeError('이력 테이블의 소유 태그가 다릅니다.')
+        if description['TableStatus'] == 'ACTIVE' and all(tags.get(key) == value for key, value in OWNER_TAGS.items()):
+            return
+        if attempt == 30:
+            raise RuntimeError('학교 자동 소유 태그 또는 테이블 활성화를 확인하지 못했습니다.')
+        time.sleep(2)
+
+
+# 생성 전 개별 조회 거부를 피하고 존재하는 함수는 역할과 관리 태그를 검증한다.
+def existing_function(client, name):
+    names = [item['FunctionName'] for page in client.get_paginator('list_functions').paginate() for item in page['Functions']]
+    if name not in names:
+        return None
+    function = await_read(client.get_function, FunctionName=name)
+    if function.get('Tags', {}).get('ManagedBy') != TAGS['ManagedBy'] or function['Configuration']['Role'] != ROLE:
+        raise RuntimeError('기존 함수의 소유 태그 또는 역할이 다릅니다.')
+    return function['Configuration']
 
 
 # 지정한 소스와 Linux Lambda 의존성만 압축하며 로컬 환경 파일을 포함하지 않는다.
@@ -45,12 +94,12 @@ def package_code():
 
 # 기존 VAPID 비밀키는 보존하고 최초 배포 시 서버 안에서만 생성한다.
 def vapid_keys(client):
-    try:
-        values = client.get_function_configuration(FunctionName='smart-medikit-notifications').get('Environment', {}).get('Variables', {})
+    previous = existing_function(client, 'smart-medikit-notifications')
+    if previous:
+        values = previous.get('Environment', {}).get('Variables', {})
         if values.get('MEDKIT_VAPID_PRIVATE_KEY') and values.get('MEDKIT_VAPID_PUBLIC_KEY'):
             return values['MEDKIT_VAPID_PRIVATE_KEY'], values['MEDKIT_VAPID_PUBLIC_KEY']
-    except client.exceptions.ResourceNotFoundException:
-        pass
+        raise RuntimeError('기존 알림 함수의 VAPID 키가 불완전합니다. 자동 교체하지 않습니다.')
     pem = subprocess.run(['openssl', 'ecparam', '-name', 'prime256v1', '-genkey', '-noout'], check=True, capture_output=True).stdout
     private = subprocess.run(['openssl', 'ec', '-outform', 'DER'], input=pem, check=True, capture_output=True).stdout
     public_der = subprocess.run(['openssl', 'ec', '-pubout', '-outform', 'DER', '-conv_form', 'uncompressed'], input=pem, check=True, capture_output=True).stdout
@@ -75,14 +124,8 @@ def deploy():
     if session.client('sts').get_caller_identity()['Account'] != ACCOUNT:
         raise RuntimeError('예정된 학교 계정이 아닙니다.')
     dynamo, client = session.client('dynamodb'), session.client('lambda')
-    try:
-        description = dynamo.describe_table(TableName=TABLE)['Table']
-        if description['KeySchema'] != [{'AttributeName': 'pk', 'KeyType': 'HASH'}, {'AttributeName': 'sk', 'KeyType': 'RANGE'}]:
-            raise RuntimeError('기존 이력 테이블의 키 형식이 다릅니다.')
-    except dynamo.exceptions.ResourceNotFoundException:
-        dynamo.create_table(TableName=TABLE, KeySchema=[{'AttributeName': 'pk', 'KeyType': 'HASH'}, {'AttributeName': 'sk', 'KeyType': 'RANGE'}],
-            AttributeDefinitions=[{'AttributeName': name, 'AttributeType': 'S'} for name in ('pk', 'sk')], BillingMode='PAY_PER_REQUEST', Tags=[{'Key': key, 'Value': value} for key, value in TAGS.items()])
-        dynamo.get_waiter('table_exists').wait(TableName=TABLE)
+    ensure_table(dynamo)
+    print('TABLE_READY', flush=True)
     code = package_code()
     private, public = vapid_keys(client)
     common = {'MEDKIT_BOX_ID': BOX, 'MEDKIT_ALLOWED_ORIGIN': ORIGIN, 'MEDKIT_ACTIVITY_TABLE': TABLE,
@@ -94,22 +137,24 @@ def deploy():
         values = dict(common)
         if name == 'smart-medikit-notifications':
             values.update(MEDKIT_VAPID_PRIVATE_KEY=private, MEDKIT_VAPID_SUBJECT=ORIGIN)
-        try:
-            previous = client.get_function_configuration(FunctionName=name)
-            if previous['Role'] != ROLE:
-                raise RuntimeError('기존 함수의 역할이 예상과 다릅니다.')
+        previous = existing_function(client, name)
+        if previous:
             client.update_function_code(FunctionName=name, ZipFile=code)
             client.get_waiter('function_updated_v2').wait(FunctionName=name)
             client.update_function_configuration(FunctionName=name, Handler=handler, Environment={'Variables': {**previous.get('Environment', {}).get('Variables', {}), **values}}, Timeout=60, MemorySize=256)
             client.get_waiter('function_updated_v2').wait(FunctionName=name)
-        except client.exceptions.ResourceNotFoundException:
+        else:
             client.create_function(FunctionName=name, Runtime='python3.12', Role=ROLE, Handler=handler,
                 Code={'ZipFile': code}, Environment={'Variables': values}, Timeout=60, MemorySize=256, Tags=TAGS)
+            await_read(client.get_function, FunctionName=name)
             client.get_waiter('function_active_v2').wait(FunctionName=name)
+        print(f'FUNCTION_READY: {name}', flush=True)
     api = session.client('apigatewayv2')
     existing = [item for page in api.get_paginator('get_apis').paginate() for item in page.get('Items', []) if item['Name'] == 'smart-medikit-activity-api']
     if len(existing) > 1:
         raise RuntimeError('동일 명칭 API가 여러 개입니다.')
+    if existing and existing[0].get('Tags', {}).get('ManagedBy') != TAGS['ManagedBy']:
+        raise RuntimeError('기존 API의 관리 태그가 다릅니다.')
     gateway = existing[0] if existing else api.create_api(Name='smart-medikit-activity-api', ProtocolType='HTTP', Tags=TAGS,
         CorsConfiguration={'AllowOrigins': [ORIGIN], 'AllowMethods': ['GET', 'POST', 'OPTIONS'], 'AllowHeaders': ['content-type']})
     api_id = gateway['ApiId']
@@ -151,6 +196,7 @@ def deploy():
     with zipfile.ZipFile(read_code, 'w', zipfile.ZIP_DEFLATED) as output:
         for name in ('read_api.py', 'product_document.py'):
             output.write(Path(__file__).with_name(name), name)
+        output.write(Path(__file__).resolve().parents[1] / 'ocr-lambda/backend/mfds.py', 'medkit_mfds.py')
     client.update_function_code(FunctionName='smart-medikit-read-api', ZipFile=read_code.getvalue())
     amplify = session.client('amplify')
     branch = amplify.get_branch(appId='d3t4nvt3phq6xc', branchName='main')['branch']

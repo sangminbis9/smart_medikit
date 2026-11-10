@@ -1,6 +1,9 @@
 """학교 자동 태깅 환경의 생성·재시도·소유권 검증을 확인한다."""
 
 from unittest.mock import Mock, patch
+from pathlib import Path
+import io
+import zipfile
 import pytest
 import deploy_activity_api as deploy
 
@@ -92,3 +95,24 @@ def test_web_release_waits_for_existing_build():
     assert client.start_job.call_count == 2
     sleep.assert_called_once_with(30)
     client.stop_job.assert_not_called()
+
+
+# 설치가 성공해도 Lambda에 필요한 조건부 의존성이 빠진 압축은 만들지 않는다.
+def test_package_rejects_missing_runtime_dependency():
+    with patch.object(deploy.subprocess, 'run'):
+        with pytest.raises(RuntimeError, match='typing_extensions'):
+            deploy.package_code()
+
+
+# 설치된 필수 모듈은 Lambda 압축의 최상위에 포함한다.
+def test_package_contains_runtime_dependency():
+    # 가상 설치 결과만 생성하고 실제 패키지 다운로드는 하지 않는다.
+    def install(arguments, **options):
+        if '--target' in arguments:
+            folder = Path(arguments[arguments.index('--target') + 1])
+            (folder / 'typing_extensions.py').write_text('# 합성 의존성\n', encoding='utf-8')
+    with patch.object(deploy.subprocess, 'run', side_effect=install):
+        archive = deploy.package_code()
+    with zipfile.ZipFile(io.BytesIO(archive)) as bundle:
+        assert 'typing_extensions.py' in bundle.namelist()
+        assert 'notifications.py' in bundle.namelist()

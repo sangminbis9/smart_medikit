@@ -82,6 +82,9 @@ def package_code():
                         '--find-links', wheels,
                         '--platform', 'manylinux2014_x86_64', '--python-version', '3.12', '--only-binary=:all:',
                         '-r', str(Path(__file__).with_name('requirements-activity.txt'))], check=True)
+        # pip의 조건부 의존성 평가가 빌드 호스트 버전을 따를 때의 누락을 배포 전에 차단한다.
+        if not (Path(folder) / 'typing_extensions.py').is_file():
+            raise RuntimeError('Lambda Python 3.12에 필요한 typing_extensions가 배포 패키지에 없습니다.')
         archive = io.BytesIO()
         with zipfile.ZipFile(archive, 'w', zipfile.ZIP_DEFLATED) as output:
             for path in Path(folder).rglob('*'):

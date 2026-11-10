@@ -1,2 +1,4 @@
 pywebpush==2.5.0
 http-ece==1.2.1
+# 빌드 호스트가 Python 3.13 이상이어도 Lambda 3.12의 조건부 의존성을 포함한다.
+typing_extensions==4.15.0

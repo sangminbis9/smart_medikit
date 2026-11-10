@@ -45,6 +45,18 @@ def test_wait_for_automatic_tags():
     client.create_table.assert_not_called()
 
 
+# 생성 응답 직후 태그 조회가 아직 자원을 찾지 못하면 같은 읽기만 재시도한다.
+def test_tags_resource_propagation():
+    client = table_client()
+    error = RuntimeError('전파 대기')
+    error.response = {'Error': {'Code': 'ResourceNotFoundException'}}
+    client.list_tags_of_resource.side_effect = [error, client.list_tags_of_resource.return_value]
+    with patch.object(deploy.time, 'sleep'):
+        deploy.ensure_table(client)
+    client.create_table.assert_called_once()
+    assert client.list_tags_of_resource.call_count == 2
+
+
 # 미생성 함수에는 소유 태그 기반 개별 조회를 시도하지 않는다.
 def test_absent_function_uses_listing():
     client = Mock()

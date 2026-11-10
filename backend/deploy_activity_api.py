@@ -27,14 +27,14 @@ FUNCTIONS = {'smart-medikit-activity-api': 'activity_api.lambda_handler',
              'smart-medikit-notifications': 'notifications.lambda_handler'}
 
 
-# 자동 소유 태그 전파 중 발생하는 조회 거부만 제한된 시간 동안 재시도한다.
+# 생성 직후 자원·자동 소유 태그 전파 지연만 제한된 시간 동안 재시도한다.
 def await_read(operation, **parameters):
     for attempt in range(31):
         try:
             return operation(**parameters)
         except Exception as error:
             code = getattr(error, 'response', {}).get('Error', {}).get('Code')
-            if code not in ('AccessDenied', 'AccessDeniedException') or attempt == 30:
+            if code not in ('AccessDenied', 'AccessDeniedException', 'ResourceNotFoundException') or attempt == 30:
                 raise
             time.sleep(2)
 

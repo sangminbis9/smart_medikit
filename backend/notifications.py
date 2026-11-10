@@ -120,7 +120,9 @@ def deliver(store, box, send=send_webpush):
                 status = getattr(getattr(error, 'response', None), 'status_code', None)
                 # 구독 주소·암호화 키·응답 본문 없이 전송 실패 유형만 기록한다.
                 print(json.dumps({'event': 'WEB_PUSH_FAILED', 'error_type': type(error).__name__,
-                                  'http_status': status if isinstance(status, int) else None}))
+                                  'http_status': status if isinstance(status, int) else None,
+                                  'missing_module': error.name if isinstance(error, ModuleNotFoundError)
+                                  and isinstance(error.name, str) and re.fullmatch(r'[A-Za-z0-9_.]+', error.name) else None}))
                 if status in (404, 410):
                     store.activity.delete_item(Key={'pk': saved['pk'], 'sk': saved['sk']})
                 else:

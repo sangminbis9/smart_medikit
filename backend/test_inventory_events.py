@@ -1,7 +1,8 @@
 """반입·반출·24시간 추정의 순서와 재반입 취소를 검증한다."""
 
-from datetime import datetime, timezone, timedelta
-from inventory_events import transition, disposal_due
+from datetime import datetime, timedelta, timezone
+
+from inventory_events import disposal_due, transition
 
 
 # 서로 연결된 합성 식별·이동 결과를 만든다.

@@ -81,52 +81,58 @@ export default function CaptureReviews({
         확인이 필요한 촬영만 표시돼요. 목록에 제품이 없으면 포장을 다시
         촬영해주세요.
       </p>
-      {reviews.map(function renderReview(review) {
-        return (
-          <form
-            className="outbound-card grid gap-3"
-            key={review.eventId}
-            onSubmit={submit}
-          >
-            <input type="hidden" name="eventId" value={review.eventId} />
-            <strong>
-              {reasons[review.reason] || '촬영 결과를 확인해 주세요.'}
-            </strong>
-            <time dateTime={review.occurredAt}>
-              {new Date(review.occurredAt).toLocaleString('ko-KR', {
-                timeZone: 'Asia/Seoul',
-              })}
-            </time>
-            <label>
-              촬영한 약품{' '}
-              <select name="productCode" disabled={saving} defaultValue="">
-                <option value="">제품 선택</option>
-                {medicines.map(function product(medicine) {
-                  return (
-                    <option
-                      key={medicine.medicine_id}
-                      value={medicine.product_code || medicine.medicine_id}
-                    >
-                      {displayMedicineName(medicine.name)}
-                    </option>
-                  );
+      {reviews.map(
+        // 촬영마다 제품·동작을 독립적으로 확인할 입력 폼을 만든다.
+        function renderReview(review) {
+          return (
+            <form
+              className="outbound-card grid gap-3"
+              key={review.eventId}
+              onSubmit={submit}
+            >
+              <input type="hidden" name="eventId" value={review.eventId} />
+              <strong>
+                {reasons[review.reason] || '촬영 결과를 확인해 주세요.'}
+              </strong>
+              <time dateTime={review.occurredAt}>
+                {new Date(review.occurredAt).toLocaleString('ko-KR', {
+                  timeZone: 'Asia/Seoul',
                 })}
-              </select>
-            </label>
-            <label>
-              실제 동작{' '}
-              <select name="direction" disabled={saving} defaultValue="NONE">
-                <option value="NONE">변경 없음</option>
-                <option value="IN">반입</option>
-                <option value="OUT">반출</option>
-              </select>
-            </label>
-            <button className="secondary-button" disabled={saving}>
-              {saving ? '저장 중…' : '촬영 결과 확인'}
-            </button>
-          </form>
-        );
-      })}
+              </time>
+              <label>
+                촬영한 약품{' '}
+                <select name="productCode" disabled={saving} defaultValue="">
+                  <option value="">제품 선택</option>
+                  {medicines.map(
+                    // 서버에 등록된 제품만 정정 후보로 표시한다.
+                    function product(medicine) {
+                      return (
+                        <option
+                          key={medicine.medicine_id}
+                          value={medicine.product_code || medicine.medicine_id}
+                        >
+                          {displayMedicineName(medicine.name)}
+                        </option>
+                      );
+                    },
+                  )}
+                </select>
+              </label>
+              <label>
+                실제 동작{' '}
+                <select name="direction" disabled={saving} defaultValue="NONE">
+                  <option value="NONE">변경 없음</option>
+                  <option value="IN">반입</option>
+                  <option value="OUT">반출</option>
+                </select>
+              </label>
+              <button className="secondary-button" disabled={saving}>
+                {saving ? '저장 중…' : '촬영 결과 확인'}
+              </button>
+            </form>
+          );
+        },
+      )}
       {error && <p role="alert">{error}</p>}
     </div>
   );

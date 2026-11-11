@@ -353,10 +353,13 @@ export default function OutboundHistory({
             reviews={data.reviews}
             medicines={medicines}
             baseUrl={baseUrl}
-            onSaved={async function refreshAfterReview() {
-              await reload();
-              await onInventoryChange();
-            }}
+            onSaved={
+              // 정정 후 확인 목록과 홈 재고를 최신 서버 상태로 갱신한다.
+              async function refreshAfterReview() {
+                await reload();
+                await onInventoryChange();
+              }
+            }
           />
           {selectedId &&
             ![...data.pending, ...data.history].some(function same(item) {

@@ -118,9 +118,12 @@ export default function InitialPackage({ kit }: { kit: Medkit }) {
                   step="1"
                   value={count}
                   disabled={saving}
-                  onChange={function changeCount(event) {
-                    setCount(event.target.value);
-                  }}
+                  onChange={
+                    // 수량 보완 입력을 서버 저장 전까지 폼에 유지한다.
+                    function changeCount(event) {
+                      setCount(event.target.value);
+                    }
+                  }
                 />{' '}
                 알
                 {condition === 'NEW' && (

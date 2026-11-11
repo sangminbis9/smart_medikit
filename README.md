@@ -18,6 +18,7 @@
 | [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) | 3인 역할 분리, 구현 경계, 데이터 흐름 |
 | [`docs/CONTRACTS.md`](docs/CONTRACTS.md) | 컴포넌트 간 이벤트·API·상태 계약 **초안** |
 | [`docs/CONTRIBUTING.md`](docs/CONTRIBUTING.md) | `main` 직접 작업·커밋·push 및 검증 방법 |
+| [`docs/PIPELINE_AUDIT.md`](docs/PIPELINE_AUDIT.md) | 2026-11-11 종단 점검: 배포 OCR ID 불일치·미수정 결함·실기기 검증 범위 |
 
 ## 개발 영역
 

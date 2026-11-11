@@ -42,3 +42,13 @@ def test_unknown_and_unmatched_out():
     assert transition(None, recognition, movement) is None
     recognition['product_code'] = None
     assert transition(None, recognition, movement) is None
+
+
+# 과거 포장을 다른 보관함으로 옮긴 뒤 새 등록도 고유 키를 얻는다.
+def test_new_registration_does_not_reuse_archived_key():
+    recognition, first = inputs()
+    original = transition(None, recognition, first)[0]
+    replacement = transition(None, recognition, {**first, 'event_id': 'different'})[0]
+    assert original['package_id'] != replacement['package_id']
+    same = transition(None, recognition, first)[0]
+    assert same['package_id'] == original['package_id']

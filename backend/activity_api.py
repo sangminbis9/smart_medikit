@@ -174,7 +174,8 @@ class DynamoStore:
 
     # 보관함의 반출 이력을 끝까지 읽고 한도 초과 시 불완전함을 알린다.
     def events(self, box):
-        return self.records(box, 'OUT#')
+        # 별도 보존한 합성 검증 이력은 삭제하지 않고 실제 복용 목록에서 제외한다.
+        return [item for item in self.records(box, 'OUT#') if item.get('archived') is not True]
 
     # 촬영 확인과 반출 이력을 같은 보관함 키에서 페이지 끝까지 조회한다.
     def records(self, box, prefix):

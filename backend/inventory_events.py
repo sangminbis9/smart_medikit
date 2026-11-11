@@ -1,5 +1,6 @@
 """식별과 이동 결과를 합쳐 재고·반출 확인·알림을 원자적으로 기록한다."""
 
+import hashlib
 import math
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
@@ -53,7 +54,8 @@ def transition(package, recognition, movement, now=None):
     direction = candidate["direction"]
     if direction == "OUT" and (not package or package.get("state") != "STORED"):
         return None
-    package_id = package["package_id"] if package else f"{box}-{code}"
+    # 다른 보관함으로 보존한 과거 포장과 새 등록의 키가 충돌하지 않게 한다.
+    package_id = package["package_id"] if package else f"{box[:60]}-{code}-{hashlib.sha256(event_id.encode()).hexdigest()[:12]}"
     identifier(package_id)
     updated = dict(package or {"pk": f"PACKAGE#{package_id}", "sk": "META", "package_id": package_id,
                               "box_id": box, "kind": "OTC", "product_codes": [code],

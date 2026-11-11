@@ -216,7 +216,8 @@ def read_inventory(table, box_id):
     medicines = {}
     package_items = []
     complete = False
-    for _ in range(2):
+    seen_cursors = set()
+    for _ in range(1000):
         response = table.scan(**query)
         for item in response.get("Items", []):
             medicine = medicine_view(item)
@@ -228,7 +229,13 @@ def read_inventory(table, box_id):
         if not cursor:
             complete = True
             break
+        marker = json.dumps(cursor, sort_keys=True, default=str)
+        if marker in seen_cursors:
+            raise ValueError('INVENTORY_CURSOR_REPEATED')
+        seen_cursors.add(marker)
         query["ExclusiveStartKey"] = cursor
+    if not complete:
+        raise ValueError('INVENTORY_SCAN_INCOMPLETE')
     packages = []
     inventory_complete = complete
     for item in package_items:

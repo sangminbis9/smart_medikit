@@ -201,11 +201,12 @@ class ReadApiTests(unittest.TestCase):
         self.assertEqual(table.calls[0]["Limit"], 100)
         self.assertTrue(table.calls[0]["ConsistentRead"])
 
-    # 읽기 한도를 넘으면 부분 결과임을 유지한다.
+    # 같은 커서가 반복되면 불완전한 목록을 정상 응답으로 보내지 않는다.
     def test_read_limit(self):
         page = {"Items": [], "LastEvaluatedKey": {"pk": "next", "sk": "META"}}
         table = FakeTable([page, page, page])
-        self.assertEqual(read_api.read_inventory(table, "test-box")["inventory_status"], "PARTIAL")
+        with self.assertRaises(ValueError):
+            read_api.read_inventory(table, "test-box")
         self.assertEqual(len(table.calls), 2)
 
     # 승인된 요청도 제품 캐시를 포장·재고로 변환하지 않는지 확인한다.

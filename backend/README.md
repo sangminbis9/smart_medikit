@@ -1,5 +1,11 @@
 # DynamoDB 제품·보유 포장 조회와 수동 복용약 API
 
+## 종단 결함 수정 배포 (2026-11-11)
+
+`python backend/deploy_pipeline_fixes.py`는 기존 함수 5개의 패키지와 리비전을 읽고 변경 패키지를 준비한다. `--apply`에서만 코드를 갱신한다. 역할·환경변수·VAPID·API 인증·기존 의존성은 보존한다. 운영 OCR은 검토한 소스 해시일 때만 Pi ID·완료 기록 연결을 삽입하며 알 수 없는 버전은 중단한다. 갱신 전 ZIP은 CloudShell의 `~/medkit-pipeline-backup-20261111`에 접근 제한 파일로 보존한다.
+
+단계 역순·지연·15분 확인 대기, 재고/촬영 종료의 원자 저장, 제품 상태를 이용한 가림 판별, 3D 좌표 전달, 초기 수량 보완, 전체 재고 페이지 조회, 촬영 정정, 유지보수 오류 격리를 같은 변경으로 적용한다. 계약은 [CONTRACTS.md](../docs/CONTRACTS.md)의 2026-11-11 수정 계약을 따른다. 실제 배포·종단 검증 결과는 [PIPELINE_AUDIT.md](../docs/PIPELINE_AUDIT.md)에 기록한다.
+
 ## 촬영 단계·반출 이력 추가 (2026-11-10, AWS·웹 배포)
 
 `capture_events.py`는 Pi의 단계별 완료 객체와 기존 OCR 결과를 결합하며 `inventory_events.py`는 재고·반출 확인·알림을 조건부 트랜잭션으로 기록한다. `activity_api.py`는 복용 Y/N 및 최초 포장 정보 입력, `notifications.py`는 Web Push 구독·전송 및 24시간 경과 재검사를 담당한다. 세부 계약은 `docs/CONTRACTS.md` 2.2절을 따른다.

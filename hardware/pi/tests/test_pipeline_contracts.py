@@ -9,7 +9,6 @@ from pathlib import Path
 from unittest.mock import Mock
 
 import numpy as np
-import pytest
 
 # 서버를 별도 프로세스로 배포하는 대신 동일 저장소의 계약 함수를 직접 연결한다.
 sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "backend"))
@@ -44,7 +43,7 @@ def evidence(direction="IN", sequence=1):
 # 단계 수신 저장과 OCR 조회만 모의하며 실제 처리 판단 함수는 교체하지 않는다.
 def capture_store(closed=True, movement=True, recognized=True):
     recognition, observed = evidence()
-    record = {}
+    record = {"received_at": datetime.now(timezone.utc).isoformat()}
     if closed:
         record["SESSION_CLOSED"] = dict(
             session_id="audit-session",
@@ -55,6 +54,7 @@ def capture_store(closed=True, movement=True, recognized=True):
     if movement:
         record["MOVEMENT_REQUESTED"] = observed
     store = Mock()
+    store.records.return_value = []
     store.activity.get_item.return_value = {"Item": record}
     store.inventory.get_item.return_value = (
         {"Item": {"processing_status": "COMPLETED", "medicines": [recognition]}}
@@ -137,25 +137,17 @@ def test_new_package_has_no_geometry_or_quantity():
     assert view["inventory"]["estimated_qty"] is None
 
 
-# 미수정 결함은 정상 통과로 세지 않으며 수정되면 XPASS로 점검 갱신을 요구한다.
-@pytest.mark.xfail(
-    strict=True,
-    raises=AssertionError,
-    reason="PA-01: 종료 객체가 이동 단계보다 먼저 처리되면 조기 종료",
-)
+# 단계 미도착은 실제 판단 불가와 구분하여 기다린다.
 def test_late_movement_must_not_terminate_capture():
     store, _ = capture_store(movement=False)
     assert reconcile(store, "audit-box", "audit-1") == "PROCESSING"
 
 
 # 첫 조회가 종료된 뒤 늦은 이동 단계가 오더라도 현재 수신기는 재고를 재결합하지 않는다.
-@pytest.mark.xfail(
-    strict=True, raises=AssertionError, reason="PA-01: 늦은 MOVEMENT_REQUESTED 수신 시 재결합 없음"
-)
 def test_late_movement_must_reconcile_after_prior_poll(monkeypatch):
     monkeypatch.delenv("MEDKIT_NOTIFICATION_FUNCTION", raising=False)
     store, record = capture_store(movement=False)
-    assert reconcile(store, "audit-box", "audit-1") == "REVIEW_REQUIRED"
+    assert reconcile(store, "audit-box", "audit-1") == "PROCESSING"
     _, movement = evidence()
     movement.update(stage="MOVEMENT_REQUESTED", sequence=1)
     s3 = Mock()
@@ -190,9 +182,6 @@ def test_late_movement_must_reconcile_after_prior_poll(monkeypatch):
 
 
 # 맨 위 큰 포장을 꺼내 아래의 작은 포장이 드러난 장면을 재현한다.
-@pytest.mark.xfail(
-    strict=True, raises=AssertionError, reason="PA-02: 반출로 드러난 후보 하나를 새 반입으로 오분류"
-)
 def test_revealed_lower_package_must_not_be_inbound():
     before = np.zeros((100, 100, 3), np.uint8)
     after = before.copy()
@@ -209,20 +198,16 @@ def test_revealed_lower_package_must_not_be_inbound():
 
 
 # OCR 이벤트 자체가 끝내 저장되지 않으면 오래된 세션도 무한 처리 중으로 남는다.
-@pytest.mark.xfail(
-    strict=True, raises=AssertionError, reason="PA-03: OCR 결과 누락에 대한 종료·복구 경로 없음"
-)
 def test_missing_ocr_must_eventually_leave_processing():
-    store, _ = capture_store(recognized=False)
+    store, record = capture_store(recognized=False)
+    record["received_at"] = "2020-01-01T00:00:00Z"
     assert reconcile(store, "audit-box", "audit-1") != "PROCESSING"
 
 
 # 기존 반출의 포장이 사라져도 다른 새 알림의 전송을 막아서는 안 된다.
-@pytest.mark.xfail(
-    strict=True, raises=AssertionError, reason="PA-04: 폐기 점검 오류가 전체 알림 전송을 중단"
-)
 def test_orphaned_outbound_must_not_block_notification(monkeypatch):
     store = Mock()
+    store.records.return_value = []
     store.events.return_value = [{"packageId": "missing-package"}]
     store.package.side_effect = ApiError(404, "PACKAGE_NOT_FOUND", "합성 누락")
     monkeypatch.setattr("activity_api.configuration", Mock(return_value={"box": "audit-box"}))

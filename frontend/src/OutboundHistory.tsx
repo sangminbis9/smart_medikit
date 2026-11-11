@@ -9,6 +9,8 @@ import { useLocation } from 'react-router-dom';
 import { z } from 'zod';
 import { Badge, Dialog } from './ui';
 import './outboundHistory.css';
+import CaptureReviews, { captureReviewSchema } from './CaptureReviews';
+import type { Medicine } from './data';
 
 const eventId = z.string().regex(/^[A-Za-z0-9_-]{1,128}$/);
 const eventSchema = z.object({
@@ -27,6 +29,7 @@ const activitySchema = z
   .object({
     pending: z.array(eventSchema).max(1000),
     history: z.array(eventSchema).max(1000),
+    reviews: z.array(captureReviewSchema).default([]),
   })
   .superRefine(function validateActivity(data, context) {
     const ids = new Set<string>();
@@ -108,9 +111,11 @@ function movementLabel(item: OutboundEvent): string {
 export default function OutboundHistory({
   enabled,
   onInventoryChange,
+  medicines,
 }: {
   enabled: boolean;
   onInventoryChange: () => void | Promise<void>;
+  medicines: Medicine[];
 }) {
   const [data, setData] = useState<Activity | null>(null);
   const [status, setStatus] = useState<'loading' | 'ready' | 'unavailable'>(
@@ -270,6 +275,7 @@ export default function OutboundHistory({
       setData(function apply(previous) {
         if (!previous) return previous;
         return {
+          ...previous,
           pending: previous.pending.filter(function keep(entry) {
             return entry.eventId !== item.eventId;
           }),
@@ -343,6 +349,15 @@ export default function OutboundHistory({
       )}
       {status === 'ready' && data && (
         <>
+          <CaptureReviews
+            reviews={data.reviews}
+            medicines={medicines}
+            baseUrl={baseUrl}
+            onSaved={async function refreshAfterReview() {
+              await reload();
+              await onInventoryChange();
+            }}
+          />
           {selectedId &&
             ![...data.pending, ...data.history].some(function same(item) {
               return item.eventId === selectedId;

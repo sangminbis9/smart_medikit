@@ -1,8 +1,32 @@
 """식별과 이동 결과를 합쳐 재고·반출 확인·알림을 원자적으로 기록한다."""
 
+import math
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
+
 from activity_api import ACTIVITY_TABLE, INVENTORY_TABLE, identifier, timestamp
+
+
+# 겹치는 보관 포장 위에 상대 크기 기준 높이를 더하되 실측 높이로 표시하지 않는다.
+def stack_geometry(movement, packages, previous):
+    geometry = movement.get('geometry')
+    bounds = movement.get('candidate', {}).get('box')
+    if not isinstance(geometry, dict) or not bounds or len(bounds) != 4:
+        return movement
+    dimensions = geometry.get('dimensions', {})
+    width, height = float(dimensions.get('width', 305)), float(dimensions.get('height', 190))
+    level = 0.0
+    for package in packages:
+        old = package.get('visual_box')
+        if package == previous or package.get('state') != 'STORED' or not old or len(old) != 4:
+            continue
+        overlap = min(bounds[2], old[2]) > max(bounds[0], old[0]) and min(bounds[3], old[3]) > max(bounds[1], old[1])
+        if overlap:
+            ratio = {'SMALL': .23, 'MEDIUM': .3, 'LARGE': .4}.get(package.get('size_class'), .3)
+            floor = float((package.get('position') or {}).get('z_estimated', 0))
+            level = max(level, floor + min(height * .24, width * ratio * .23))
+    position = {**geometry.get('position', {}), 'z_estimated': Decimal(str(round(min(level, height * .7), 2)))}
+    return {**movement, 'geometry': {**geometry, 'position': position}}
 
 
 # 서로 다른 순서로 도착한 결과라도 같은 세션의 식별·이동만 결합한다.
@@ -38,6 +62,18 @@ def transition(package, recognition, movement, now=None):
                                             "initial_qty": None, "estimated_qty": None}})
     updated.update(state="STORED" if direction == "IN" else "OUT", last_sequence=sequence,
                    movement_certainty="ESTIMATED", last_event_id=event_id)
+    geometry = movement.get('movement', {}).get('geometry')
+    if direction == 'IN' and isinstance(geometry, dict):
+        position = geometry.get('position') or {}
+        coordinates = [position.get(key) for key in ('x', 'y', 'z_estimated')]
+        if (all(isinstance(v, (int, float, Decimal)) and not isinstance(v, bool)
+                and math.isfinite(float(v)) and 0 <= v <= 10000 for v in coordinates)
+                and position.get('certainty') in ('ESTIMATED', 'UNCERTAIN')
+                and geometry.get('size_class') in ('SMALL', 'MEDIUM', 'LARGE')):
+            updated['position'] = {key: Decimal(str(position[key])) for key in ('x', 'y', 'z_estimated')}
+            updated['position']['certainty'] = position['certainty']
+            updated['size_class'] = geometry['size_class']
+            updated['visual_box'] = [Decimal(str(v)) for v in candidate.get('box', [])]
     notification = None
     activity = None
     if direction == "OUT":
@@ -69,7 +105,7 @@ def disposal_due(package, event, now):
 
 
 # 포장 변경과 이력·알림을 한 번의 조건부 트랜잭션에 포함한다.
-def persist_transition(store, previous, result):
+def persist_transition(store, previous, result, capture=None):
     updated, activity, notification = result
     put = {"TableName": INVENTORY_TABLE, "Item": store.encode(updated)}
     if previous is None:
@@ -81,11 +117,22 @@ def persist_transition(store, previous, result):
         if "last_sequence" not in previous:
             put["ConditionExpression"] = "#box = :box AND attribute_not_exists(#seq)"
             del put["ExpressionAttributeValues"][":seq"]
+        # 촬영 처리 도중 사용자가 입력한 재고·기한·최초 확인을 덮어쓰지 않는다.
+        for index, field in enumerate(('inventory', 'expiry', 'first_registration_pending')):
+            name, value = f'#guard{index}', f':guard{index}'
+            put['ExpressionAttributeNames'][name] = field
+            if field in previous:
+                put['ConditionExpression'] += f' AND {name}={value}'
+                put['ExpressionAttributeValues'].update(store.encode({value: previous[field]}))
+            else:
+                put['ConditionExpression'] += f' AND attribute_not_exists({name})'
     writes = [{"Put": put}]
     for item in (activity, notification):
         if item:
             writes.append({"Put": {"TableName": ACTIVITY_TABLE, "Item": store.encode(item),
                                     "ConditionExpression": "attribute_not_exists(pk)"}})
+    if capture:
+        writes.append({'Update': capture})
     store.client.transact_write_items(TransactItems=writes)
 
 
@@ -93,16 +140,16 @@ def persist_transition(store, previous, result):
 def expire_outbound(store, box, now=None):
     now = now or datetime.now(timezone.utc)
     for event in store.events(box):
-        package = store.package(box, event["packageId"])
-        if not disposal_due(package, event, now):
-            continue
         try:
+            package = store.package(box, event["packageId"])
+            if not disposal_due(package, event, now):
+                continue
             store.inventory.update_item(Key={"pk": package["pk"], "sk": "META"},
                 UpdateExpression="SET #state=:disposed, disposal_certainty=:estimated",
                 ConditionExpression="#state=:out AND active_out_event_id=:id AND out_at=:at",
                 ExpressionAttributeNames={"#state": "state"},
                 ExpressionAttributeValues={":disposed": "DISPOSED", ":estimated": "ESTIMATED", ":out": "OUT",
                                            ":id": event["eventId"], ":at": event["occurredAt"]})
-        except Exception as error:
-            if getattr(error, "response", {}).get("Error", {}).get("Code") != "ConditionalCheckFailedException":
-                raise
+        except Exception:
+            # 누락·이동된 포장이나 한 항목의 오류가 다른 반출과 알림을 막지 않는다.
+            print('OUTBOUND_MAINTENANCE_ITEM_SKIPPED')

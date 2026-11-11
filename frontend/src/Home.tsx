@@ -322,7 +322,11 @@ export default function Home({
                     // 카드 본문을 선택하면 3D만 바꾸고 상세 링크는 별도로 연다.
                     function focus() {
                       select(item.package_id);
-                      if (item.first_registration_pending)
+                      if (
+                        item.first_registration_pending ||
+                        (item.inventory?.stock_enabled &&
+                          item.inventory.estimated_qty == null)
+                      )
                         navigate(
                           `/?new_package=${encodeURIComponent(item.package_id)}`,
                         );

@@ -1,7 +1,6 @@
 """내부 영상 후보 비교가 불확실한 상황에서 확정을 피하는지 검사한다."""
 
 import numpy as np
-
 from medikit_pi.detection import Detection
 from medikit_pi.movement import compare_interior
 
@@ -58,3 +57,36 @@ def test_top_placement_may_hide_another_package():
     upper = Detection((0.3, 0.1, 0.6, 0.4), 0.9, "box")
     assert compare_interior(frame, frame, [lower], [lower, upper])["reason"] == "POSSIBLE_OCCLUSION"
     assert compare_interior(frame, frame, [lower, upper], [lower])["reason"] == "POSSIBLE_OCCLUSION"
+
+
+# 보정된 내부 모서리의 중심은 약통 중심 mm에 놓이고 미보정은 불확실로 표시한다.
+def test_geometry_mapping_and_uncertainty():
+    from medikit_pi.movement import locate_candidate
+
+    candidate = {"box": [0.4, 0.4, 0.6, 0.6]}
+    mapped = locate_candidate(
+        candidate, {"calibrated": True, "corners": [[0.1, 0.1], [0.9, 0.1], [0.9, 0.9], [0.1, 0.9]]}
+    )
+    assert mapped["position"]["x"] == 152.5
+    assert mapped["position"]["y"] == 82.5
+    assert mapped["position"]["certainty"] == "ESTIMATED"
+    assert locate_candidate(candidate)["position"]["certainty"] == "UNCERTAIN"
+
+
+# 가림이 없는 상단 신규 반입은 사용자 확인 없이 유지한다.
+def test_automatic_new_top_placement():
+    frame = image()
+    item = Detection((0.1, 0.1, 0.4, 0.4), 0.9, "box")
+    result = compare_interior(frame, frame, [], [item], automatic_in=True)
+    assert result["candidate"]["direction"] == "IN"
+    assert result["processing_status"] == "COMPLETED"
+
+
+# 새 상단 포장 하나가 아래 포장 여럿을 가려도 자동 상태 결합을 허용한다.
+def test_top_placement_hides_multiple_packages():
+    frame = image()
+    lower = [Detection((.1,.1,.3,.3), .9, 'box'), Detection((.5,.1,.7,.3), .9, 'box')]
+    upper = Detection((.05,.05,.8,.8), .9, 'box')
+    result = compare_interior(frame, frame, lower, [upper], automatic_in=True)
+    assert result['processing_status'] == 'COMPLETED'
+    assert result['candidate']['direction'] == 'STATE'

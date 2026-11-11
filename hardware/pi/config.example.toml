@@ -56,6 +56,14 @@ close_attempt_seconds = 3.0
 close_retries = 2
 package_retry_seconds = 1.0
 
+[cabinet]
+width_mm = 305
+depth_mm = 165
+height_mm = 190
+# 내부 사진의 좌상·우상·우하·좌하 모서리를 정규화 좌표로 입력한 뒤 true로 바꾼다.
+calibrated = false
+corners = [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]]
+
 [aws]
 staged_capture = true
 ocr_input_prefix = "ocr-input"

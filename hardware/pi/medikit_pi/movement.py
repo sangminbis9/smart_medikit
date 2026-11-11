@@ -10,8 +10,8 @@ from pathlib import Path
 import cv2
 import numpy as np
 
-from .detection import Detection, YOLOEDetector
 from .config import load_config
+from .detection import Detection, YOLOEDetector
 from .vision import gray_frame, iou, motion_score
 
 
@@ -25,7 +25,7 @@ def valid_detection(item: Detection) -> bool:
     )
 
 
-# 내부 사진에서 바뀐 후보 하나를 찾되 항상 사용자 확인을 요구한다.
+# 내부 후보의 가림 변화를 구분하고 제품 상태 결합이 필요한 경우 별도로 표시한다.
 def compare_interior(before, after, before_items, after_items, *, automatic_in=False):
     result = {"processing_status": "REVIEW_REQUIRED", "candidate": None, "reason": None}
     if (before is None or after is None or before.size == 0 or after.size == 0
@@ -48,10 +48,23 @@ def compare_interior(before, after, before_items, after_items, *, automatic_in=F
         return result
     removed = [item for i, item in enumerate(before_items) if i not in {a for a, _ in links}]
     added = [item for j, item in enumerate(after_items) if j not in {b for _, b in links}]
-    # 최상단에 새 후보 하나가 등장하면 아래 포장의 가림을 허용해 자동 반입한다.
-    if automatic_in and len(added) == 1:
+    # 사라진 위 포장 아래에서 새 후보가 드러난 장면을 신규 반입으로 오인하지 않는다.
+    if automatic_in and removed and added:
+        if len(removed) == 1 or len(added) == 1:
+            result.update(processing_status='COMPLETED', reason='OCCLUSION_STATE_REQUIRED',
+                          candidate={'direction': 'STATE', 'certainty': 'ESTIMATED',
+                                     'box': added[0].box, 'removed_box': removed[0].box})
+        else:
+            result['reason'] = 'MULTIPLE_CHANGES'
+        return result
+    # 사라진 포장이 없는 새 후보는 사용 규칙에 따라 최상단 반입으로 처리한다.
+    if automatic_in and len(added) == 1 and not removed:
         result.update(processing_status="COMPLETED", reason="TOP_PLACEMENT",
                       candidate={"direction": "IN", "certainty": "ESTIMATED", "box": added[0].box})
+        return result
+    if automatic_in and len(removed) == 1 and not added:
+        result.update(processing_status='COMPLETED', reason='SINGLE_REMOVAL',
+                      candidate={'direction': 'OUT', 'certainty': 'ESTIMATED', 'box': removed[0].box})
         return result
     # 맨 위에 놓은 포장이 다른 포장을 가리거나 드러내면 방향 판단을 보류한다.
     if (any(iou(item.box, other.box) > 0 for item in removed for other in after_items)
@@ -89,3 +102,26 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+
+# 보정한 내부 네 모서리를 실제 mm로 변환하며 미보정 좌표는 불확실 추정으로 남긴다.
+def locate_candidate(candidate, geometry=None):
+    geometry = geometry or {}
+    bounds = candidate.get('box')
+    if not bounds or len(bounds) != 4:
+        return None
+    width, depth, height = [float(geometry.get(k, default)) for k, default in
+                            [('width_mm', 305), ('depth_mm', 165), ('height_mm', 190)]]
+    corners = geometry.get('corners', [[0, 0], [1, 0], [1, 1], [0, 1]])
+    source = np.array(corners, dtype=np.float32)
+    target = np.array([[0, 0], [width, 0], [width, depth], [0, depth]], dtype=np.float32)
+    matrix = cv2.getPerspectiveTransform(source, target)
+    x1, y1, x2, y2 = bounds
+    center = np.array([[[(x1 + x2) / 2, (y1 + y2) / 2]]], dtype=np.float32)
+    x, y = cv2.perspectiveTransform(center, matrix)[0, 0]
+    area = (x2 - x1) * (y2 - y1)
+    return {'position': {'x': round(float(np.clip(x, 0, width)), 2),
+                         'y': round(float(np.clip(y, 0, depth)), 2), 'z_estimated': 0,
+                         'certainty': 'ESTIMATED' if geometry.get('calibrated') else 'UNCERTAIN'},
+            'size_class': 'SMALL' if area < 0.08 else 'MEDIUM' if area < 0.25 else 'LARGE',
+            'dimensions': {'width': width, 'depth': depth, 'height': height}}

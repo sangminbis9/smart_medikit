@@ -45,7 +45,7 @@ export default function InitialPackage({ kit }: { kit: Medkit }) {
             condition,
             actualExpiry: condition === 'USED' && expiry ? expiry : null,
             remainingQty:
-              condition === 'USED' &&
+              (condition === 'USED' || item.inventory?.estimated_qty == null) &&
               item.inventory?.stock_enabled &&
               count !== ''
                 ? Number(count)
@@ -68,9 +68,15 @@ export default function InitialPackage({ kit }: { kit: Medkit }) {
       className="product-info-dialog"
       onClose={close}
     >
-      {item.first_registration_pending && (
+      {(item.first_registration_pending ||
+        (item.inventory?.stock_enabled &&
+          item.inventory.estimated_qty == null)) && (
         <form onSubmit={save} className="grid gap-3 mb-5">
-          <strong>처음 등록된 약입니다</strong>
+          <strong>
+            {item.first_registration_pending
+              ? '처음 등록된 약입니다'
+              : '보관 수량 입력'}
+          </strong>
           <label>
             약품 상태{' '}
             <select
@@ -97,25 +103,34 @@ export default function InitialPackage({ kit }: { kit: Medkit }) {
                   }}
                 />
               </label>
-              {item.inventory?.stock_enabled && (
-                <label>
-                  잔여 수량{' '}
-                  <input
-                    type="number"
-                    min="0"
-                    max="1000000"
-                    step="1"
-                    value={count}
-                    disabled={saving}
-                    onChange={function change(event) {
-                      setCount(event.target.value);
-                    }}
-                  />{' '}
-                  알
-                </label>
-              )}
             </>
           )}
+          {item.inventory?.stock_enabled &&
+            (condition === 'USED' || item.inventory.estimated_qty == null) && (
+              <label>
+                {condition === 'NEW'
+                  ? '포장에 표시된 전체 수량 (선택)'
+                  : '잔여 수량'}{' '}
+                <input
+                  type="number"
+                  min="0"
+                  max="1000000"
+                  step="1"
+                  value={count}
+                  disabled={saving}
+                  onChange={function changeCount(event) {
+                    setCount(event.target.value);
+                  }}
+                />{' '}
+                알
+                {condition === 'NEW' && (
+                  <small>
+                    수량을 입력하면 복용 확인 시 남은 수량을 계산해요. 나중에
+                    입력할 수도 있어요.
+                  </small>
+                )}
+              </label>
+            )}
           {error && <p role="alert">{error}</p>}
           <button className="primary-button" disabled={saving || kit.demo}>
             {saving ? '저장 중…' : '기본 정보 확인'}

@@ -107,6 +107,16 @@ export default function PackageDetail({ kit }: { kit: Medkit }) {
               </p>
             </div>
           )}
+          {!kit.demo &&
+            item.inventory?.stock_enabled &&
+            item.inventory.estimated_qty == null && (
+              <Link
+                className="secondary-button"
+                to={`/?new_package=${encodeURIComponent(item.package_id)}`}
+              >
+                보관 수량 입력
+              </Link>
+            )}
           <dl className="detail-fields">
             <div>
               <dt>

@@ -228,7 +228,7 @@ def run_hardware(config):
         controller = CaptureController(config, camera, board, outbox, detector)
         if staged:
             controller.initialize_baseline(time.monotonic())
-            workers = [StageWorker(outbox, "MOVEMENT_REQUESTED", detector=detector.detector)]
+            workers = [StageWorker(outbox, "MOVEMENT_REQUESTED", detector=detector.detector, geometry=config.get('cabinet'))]
             if config["aws"]["enabled"]:
                 workers.extend(
                     [

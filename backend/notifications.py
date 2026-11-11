@@ -7,6 +7,7 @@ import os
 import re
 import time
 from urllib.parse import urlsplit
+
 from activity_api import ApiError
 
 
@@ -134,8 +135,14 @@ def deliver(store, box, send=send_webpush):
 # EventBridge 예약으로 폐기 추정과 실패한 알림 전송을 재검사한다.
 def lambda_handler(event, context):
     from activity_api import configuration, get_store
+    from capture_events import maintain_captures
     from inventory_events import expire_outbound
     config, store = configuration(), get_store()
-    expire_outbound(store, config['box'])
+    for maintenance in (maintain_captures, expire_outbound):
+        try:
+            maintenance(store, config['box'])
+        except Exception:
+            # 촬영·폐기 점검 장애에도 이미 저장된 푸시는 독립적으로 재시도한다.
+            print('MAINTENANCE_RETRY_SCHEDULED')
     deliver(store, config['box'])
     return {'ok': True}

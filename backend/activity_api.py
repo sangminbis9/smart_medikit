@@ -7,7 +7,6 @@ from datetime import date, datetime, timezone
 from decimal import Decimal
 from urllib.parse import urlsplit
 
-
 ACTIVITY_TABLE = "inha-capstone-02-medkit-activity"
 INVENTORY_TABLE = "inha-capstone-02-medkit-data"
 ID_PATTERN = re.compile(r"[A-Za-z0-9_-]{1,100}\Z")
@@ -175,11 +174,15 @@ class DynamoStore:
 
     # 보관함의 반출 이력을 끝까지 읽고 한도 초과 시 불완전함을 알린다.
     def events(self, box):
+        return self.records(box, 'OUT#')
+
+    # 촬영 확인과 반출 이력을 같은 보관함 키에서 페이지 끝까지 조회한다.
+    def records(self, box, prefix):
         items, start = [], None
         for _ in range(MAX_PAGES):
             query = {"KeyConditionExpression": "#pk = :pk AND begins_with(#sk, :prefix)",
                      "ExpressionAttributeNames": {"#pk": "pk", "#sk": "sk"},
-                     "ExpressionAttributeValues": {":pk": f"BOX#{box}", ":prefix": "OUT#"},
+                     "ExpressionAttributeValues": {":pk": f"BOX#{box}", ":prefix": prefix},
                      "ConsistentRead": True, "Limit": 100}
             if start:
                 query["ExclusiveStartKey"] = start
@@ -244,6 +247,7 @@ def get_store():
 
 # 손상되거나 일부만 읽힌 이력을 정상 빈 목록으로 숨기지 않는다.
 def list_activity(store, config):
+    from capture_events import list_reviews
     try:
         events = [event_view(item, config["box"], config["allow_estimated"]) for item in store.events(config["box"])]
         events = [item for item in events if item is not None]
@@ -251,7 +255,8 @@ def list_activity(store, config):
     except (ValueError, TypeError, KeyError):
         raise ApiError(503, "ACTIVITY_INVALID", "복용 기록을 확인하지 못했어요.") from None
     return {"pending": [item for item in events if item["status"] == "PENDING"],
-            "history": [item for item in events if item["status"] != "PENDING"]}
+            "history": [item for item in events if item["status"] != "PENDING"],
+            "reviews": list_reviews(store, config['box'])}
 
 
 # 외부에서 방향이 확인된 반출만 사용자 확인으로 확정한다.
@@ -306,13 +311,16 @@ def confirm_initial(store, config, package_id, body):
         raise ApiError(422, "INVALID_CONDITION", "약품 상태를 선택해 주세요.")
     expiry = actual_date(body["actualExpiry"])
     remaining = body["remainingQty"]
-    if condition == "NEW" and (expiry is not None or remaining is not None):
+    if condition == "NEW" and expiry is not None:
         raise ApiError(422, "INVALID_INITIAL", "약품 정보를 다시 확인해 주세요.")
     if remaining is not None:
         remaining = quantity(remaining, allow_zero=True)
     package = store.package(config["box"], package_id)
-    if package.get("first_registration_pending") is not True:
+    missing_quantity = isinstance(package.get('inventory'), dict) and package['inventory'].get('estimated_qty') is None
+    if package.get("first_registration_pending") is not True and not (missing_quantity and remaining is not None):
         raise ApiError(409, "ALREADY_CONFIRMED", "이미 초기 정보를 확인했어요.")
+    if condition == 'NEW' and remaining is not None and not missing_quantity:
+        raise ApiError(422, 'QUANTITY_ALREADY_KNOWN', '기존 수량은 새것 확인으로 변경할 수 없어요.')
     if remaining is not None and (store.form(package) == "OTHER" or not isinstance(package.get("inventory"), dict)
                                   or package["inventory"].get("stock_enabled") is not True):
         raise ApiError(422, "QUANTITY_NOT_AVAILABLE", "이 약품의 수량은 입력할 수 없어요.")
@@ -320,6 +328,9 @@ def confirm_initial(store, config, package_id, body):
     values = {":box": config["box"], ":true": True, ":false": False, ":condition": condition}
     update = "SET #pending = :false, #condition = :condition"
     condition_expr = "#box = :box AND #pending = :true"
+    if package.get('first_registration_pending') is not True:
+        condition_expr = '#box = :box'
+        del values[':true']
     if expiry is not None:
         old = package.get("expiry")
         if old is not None and not isinstance(old, dict):
@@ -336,6 +347,8 @@ def confirm_initial(store, config, package_id, body):
         old = package["inventory"]
         names["#inventory"] = "inventory"
         values[":inventory"] = {**old, "estimated_qty": remaining}
+        if condition == 'NEW':
+            values[':inventory']['initial_qty'] = remaining
         values[":old_inventory"] = old
         update += ", #inventory = :inventory"
         condition_expr += " AND #inventory = :old_inventory"
@@ -388,7 +401,13 @@ def lambda_handler(event, context):
         if method == "GET" and path == "/activity":
             result = list_activity(store, config)
         elif method == "POST" and confirm_match:
-            result = confirm_activity(store, config, confirm_match.group(1), parse_body(event))
+            body = parse_body(event)
+            if isinstance(body, dict) and 'review' in body:
+                from capture_events import resolve_review
+                exact_body(body, ('review',))
+                result = resolve_review(store, config['box'], confirm_match.group(1), body['review'])
+            else:
+                result = confirm_activity(store, config, confirm_match.group(1), body)
         elif method == "POST" and initial_match:
             result = confirm_initial(store, config, initial_match.group(1), parse_body(event))
         else:

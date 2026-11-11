@@ -69,6 +69,17 @@
 
 ## 3. 이벤트 처리 상태
 
+### 2026-11-11 종단 결함 수정 계약
+
+- 단계 수신은 모든 단계에서 재결합을 시도한다. 단계 미도착은 `PROCESSING`이며 `received_at`(서버 최초 수신)부터 900초가 지나면 사유와 함께 `REVIEW_REQUIRED`를 영속 저장한다. 촬영이 오래전이었어도 방금 재전송된 세션을 즉시 만료시키지 않는다. 유지보수는 미완료 세션을 순번대로 재확인한다. 선행 미완료 촬영은 순서를 보존하며 확인 대기로 전환되면 관련 없는 다음 세션을 막지 않는다.
+- 재고·OUT·NOTICE와 CAPTURE의 `COMPLETED`를 하나의 조건부 트랜잭션으로 저장한다. 같은 이벤트 재시도는 다시 차감하지 않고, 촬영 처리 중 사용자가 바꾼 재고·기한·최초 확인을 덮어쓰지 않는다.
+- Pi가 새 후보와 사라진 후보를 동시에 하나씩 감지하면 `candidate.direction=STATE`, `reason=OCCLUSION_STATE_REQUIRED`를 보낸다. 서버는 인식 제품이 현재 `STORED`이면 OUT, 신규/OUT이면 IN으로 결합한다. 이는 추정이며 사진만으로 실제 이동을 입증하지 않는다. 순수 상단 신규 후보는 계속 자동 IN이다.
+- Pi `movement.geometry`는 `position:{x,y,z_estimated,certainty}`, `size_class`, `dimensions`를 포함할 수 있다. 단위는 mm. `cabinet.corners`로 보정한 X/Y는 `ESTIMATED`, 미보정은 `UNCERTAIN`이며 Z는 겹친 기존 포장의 상대 크기 기반 추정이다. 신규 포장의 좌표·크기를 조회 API와 3D로 전달한다. 반출에는 기존 위치를 보존한다.
+- 운영 OCR의 기존 제품 저장은 유지하되 `event-id`/`session-id` 메타데이터를 검증하고 Pi 성공·실패 `RECOGNITION`을 저장한다. 비-Pi 입력의 기존 저장 의미는 유지한다. 서버는 `medicines` 형식과 `product_codes` 참조 형식을 모두 읽는다.
+- `GET /activity`에 `reviews:[{eventId,occurredAt,reason}]`를 추가한다. 기존 `POST /activity/{eventId}/confirm`은 `{review:{productCode:string|null,direction:IN|OUT|NONE}}`도 지원한다. OUT 복용 확인 본문은 그대로다. 확인 대기 CAPTURE만 처리하며 이후 포장 순번과 충돌하면 덮어쓰지 않는다. NONE은 약품 선택 없이 닫을 수 있다. 별도 `/reviews` 공개 경로나 새로운 접근 권한을 만들지 않는다.
+- `POST /packages/{packageId}/initial`의 NEW는 기존 수량이 null일 때만 선택적으로 `remainingQty`를 받아 초기/잔여 수량을 보완한다. 이미 최초 확인을 마쳤어도 수량이 null인 경우 보완 가능하다. 알려진 수량을 NEW로 덮어쓸 수 없으며 알 수 없는 포장 수량을 OCR 숫자로 임의 추정하지 않는다.
+- 재고 조회는 인식 이력이 앞 페이지를 차지해도 커서 끝까지 진행한다. 커서 반복·전체 조회 실패는 오류로 반환하며 일부 목록을 완전한 목록으로 표시하지 않는다. 촬영·폐기 유지보수 오류와 개별 누락 포장은 다른 알림 발송을 막지 않는다.
+
 | `processing_status` | 의미 | Pi 동작 |
 |---|---|---|
 | `PENDING` | AWS에 등록, 처리 대기 | 계속 조회 |

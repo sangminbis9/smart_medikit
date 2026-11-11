@@ -1,16 +1,18 @@
 """포장 OCR 전송과 닫힘 후 이동 판단을 독립 작업자로 실행한다."""
 
 import json
+
 import cv2
 import numpy as np
 
-from .movement import compare_interior
+from .movement import compare_interior, locate_candidate
 
 
 class StageWorker:
     # 단계별 작업자에 영속 큐와 별도 전송 연결을 주입한다.
-    def __init__(self, outbox, stage, transport=None, detector=None):
+    def __init__(self, outbox, stage, transport=None, detector=None, geometry=None):
         self.outbox, self.stage, self.transport, self.detector = outbox, stage, transport, detector
+        self.geometry = geometry
         with outbox._mutex, outbox._db:
             outbox._db.execute("CREATE TABLE IF NOT EXISTS movement_results(session_id TEXT PRIMARY KEY, result TEXT NOT NULL)")
             outbox._db.execute("CREATE TABLE IF NOT EXISTS interior_baseline(box_id TEXT PRIMARY KEY, sequence INTEGER, image BLOB)")
@@ -57,6 +59,8 @@ class StageWorker:
         first = self.detector.predict(before) if before is not None else []
         second = self.detector.predict(after) if after is not None else []
         result = compare_interior(before, after, first, second, automatic_in=True)
+        if result.get('candidate'):
+            result['geometry'] = locate_candidate(result['candidate'], self.geometry)
         result["observed_at"] = event["captured_at"]
         with store._mutex, store._db:
             store._db.execute("INSERT INTO movement_results VALUES(?,?)", (event["session_id"], json.dumps(result)))

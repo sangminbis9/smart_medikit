@@ -99,4 +99,23 @@ def load_config(path: Path) -> dict:
     token = config["aws"].get("bearer_token_file")
     if token:
         config["aws"]["bearer_token_file"] = str((path.parent / token).resolve())
+    geometry = config.get('cabinet')
+    if geometry is not None:
+        if type(geometry.get('calibrated')) is not bool:
+            raise ValueError('cabinet.calibrated는 true 또는 false여야 합니다.')
+        for key in ('width_mm', 'depth_mm', 'height_mm'):
+            value = geometry.get(key)
+            if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or not 0 < value <= 10000:
+                raise ValueError('보관함 치수는 0 초과 10000 이하 mm여야 합니다.')
+        corners = geometry.get('corners')
+        if (not isinstance(corners, list) or len(corners) != 4
+                or any(not isinstance(p, list) or len(p) != 2 or any(isinstance(v, bool) or not isinstance(v, (int, float)) or not math.isfinite(v) or not 0 <= v <= 1 for v in p) for p in corners)):
+            raise ValueError('내부 모서리는 0~1 정규화 좌표 네 쌍이어야 합니다.')
+        # 볼록 사각형과 일정한 회전 방향만 허용해 뒤집힘·특이 변환을 차단한다.
+        crosses = []
+        for i in range(4):
+            a, b, c = corners[i], corners[(i + 1) % 4], corners[(i + 2) % 4]
+            crosses.append((b[0]-a[0])*(c[1]-b[1])-(b[1]-a[1])*(c[0]-b[0]))
+        if not all(v > 0.001 for v in crosses):
+            raise ValueError('모서리는 좌상·우상·우하·좌하 순서의 볼록 사각형이어야 합니다.')
     return config

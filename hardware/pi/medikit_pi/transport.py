@@ -2,12 +2,16 @@
 
 from __future__ import annotations
 
-import json
 import hashlib
+import json
+import logging
 import re
+import uuid
 from pathlib import Path
 from urllib.parse import quote, urlsplit
 from urllib.request import HTTPRedirectHandler, Request, build_opener
+
+LOGGER = logging.getLogger(__name__)
 
 
 class _NoRedirect(HTTPRedirectHandler):
@@ -38,9 +42,11 @@ class S3Transport:
             raise ValueError("S3 prefix는 명시적인 상대 키 경로여야 합니다.")
         if not re.fullmatch(r"[A-Za-z0-9_-]+\.json", self.manifest_name):
             raise ValueError("완료 객체 이름은 경로가 없는 JSON 파일명이어야 합니다.")
-        self.ocr_prefix = config.get('ocr_input_prefix', self.prefix).strip('/')
-        if not re.fullmatch(r'[A-Za-z0-9_./-]+', self.ocr_prefix) or '..' in self.ocr_prefix.split('/'):
-            raise ValueError('OCR 입력 경로를 확인하세요.')
+        self.ocr_prefix = config.get("ocr_input_prefix", self.prefix).strip("/")
+        if not re.fullmatch(r"[A-Za-z0-9_./-]+", self.ocr_prefix) or ".." in self.ocr_prefix.split(
+            "/"
+        ):
+            raise ValueError("OCR 입력 경로를 확인하세요.")
         template = config["status_url_template"]
         if (
             template.count("{event_id}") != 1
@@ -81,6 +87,35 @@ class S3Transport:
             )
         return frozen
 
+    # 사진·이력을 생성하지 않고 계정·버킷 접근·SigV4 상태 조회를 점검한다.
+    def check_connection(self):
+        from botocore.config import Config
+
+        account = self.config.get("expected_account_id", "")
+        if not isinstance(account, str) or not re.fullmatch(r"[0-9]{12}", account):
+            raise ValueError("check-aws에는 expected_account_id 12자리가 필요합니다.")
+        if self.config["auth_mode"] != "sigv4":
+            raise ValueError("현재 배포의 check-aws는 SigV4 인증만 지원합니다.")
+        LOGGER.info("AWS 점검 1/3: 단기 자격증명과 학교 계정 확인")
+        self._credentials()
+        options = dict(
+            region_name=self.config["region"],
+            config=Config(connect_timeout=5, read_timeout=15, retries={"total_max_attempts": 2}),
+        )
+        identity = self.session.client("sts", **options).get_caller_identity()
+        if identity.get("Account") != account:
+            raise ValueError("학교 계정과 다른 자격증명입니다.")
+        LOGGER.info("AWS 점검 2/3: S3 버킷 소유 계정과 조회 권한 확인")
+        self.session.client("s3", **options).head_bucket(
+            Bucket=self.config["bucket"], ExpectedBucketOwner=account
+        )
+        LOGGER.info("AWS 점검 3/3: 촬영 상태 API의 SigV4 인증 확인")
+        # 새 임의 ID는 기존 촬영의 재고 반영을 재실행하지 않는다.
+        status = self.status(f"pi-check-{uuid.uuid4().hex}")
+        if status != "PROCESSING":
+            raise ValueError("미등록 점검 이벤트의 서버 응답이 계약과 다릅니다.")
+        return status
+
     # 촬영 사진을 먼저 전송하고 마지막 JSON 객체로 세션 완결성을 알린다.
     def upload(self, event: dict, directory: Path) -> None:
         self._credentials()
@@ -99,7 +134,7 @@ class S3Transport:
             raise ValueError("올바른 session_id가 필요합니다.")
         metadata = dict(event)
         for kind in ("package", "interior"):
-            prefix = self.ocr_prefix if kind == 'package' and event.get('stage') else self.prefix
+            prefix = self.ocr_prefix if kind == "package" and event.get("stage") else self.prefix
             key = f"{prefix}/{session_id}/{kind}.jpg"
             captured = event[f"{kind}_capture_ok"]
             metadata[f"{kind}_image_key"] = key if captured else None
@@ -112,14 +147,21 @@ class S3Transport:
                         Key=key,
                         Body=content,
                         ContentType="image/jpeg",
-                        Metadata={"event-id": event["event_id"], "session-id": session_id, "sha256": digest},
+                        Metadata={
+                            "event-id": event["event_id"],
+                            "session-id": session_id,
+                            "sha256": digest,
+                        },
                     )
                     if event.get("stage"):
                         request["IfNoneMatch"] = "*"
                     try:
                         self._s3.put_object(**request)
                     except Exception as error:
-                        if getattr(error, "response", {}).get("Error", {}).get("Code") != "PreconditionFailed":
+                        if (
+                            getattr(error, "response", {}).get("Error", {}).get("Code")
+                            != "PreconditionFailed"
+                        ):
                             raise
                         prior = self._s3.head_object(Bucket=self.config["bucket"], Key=key)
                         if prior.get("Metadata") != request["Metadata"]:
@@ -169,8 +211,13 @@ class S3Transport:
         if stage not in {"OCR_REQUESTED", "MOVEMENT_REQUESTED"}:
             raise ValueError("지원하지 않는 촬영 단계입니다.")
         kind = "package" if stage == "OCR_REQUESTED" else "interior"
-        payload = dict(event, package_capture_ok=kind == "package", interior_capture_ok=kind == "interior")
+        payload = dict(
+            event, package_capture_ok=kind == "package", interior_capture_ok=kind == "interior"
+        )
         # 별도 인스턴스를 사용해 병행 전송 중 완료 객체 이름이 섞이지 않게 한다.
-        config = dict(self.config, manifest_name="ocr-ready.json" if kind == "package" else "movement-ready.json")
+        config = dict(
+            self.config,
+            manifest_name="ocr-ready.json" if kind == "package" else "movement-ready.json",
+        )
         transport = S3Transport(config, session=self.session, opener=self.opener)
         transport.upload(payload, directory)

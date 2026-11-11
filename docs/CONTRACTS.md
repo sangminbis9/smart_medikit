@@ -53,6 +53,8 @@
 
 `hardware/pi`의 `aws.staged_capture=true`는 포장 저장 즉시 `OCR_REQUESTED`를 전송하고 내부 저장 후 별도 작업자로 `MOVEMENT_REQUESTED`를 분석한다. 두 작업은 서로의 완료를 기다리지 않는다. 기존 `Raspberry_Pi` 원본은 자동 동기화하지 않는다.
 
+2026-11-11 설치 준비: `hardware/pi/config.example.toml`에 실제 배포의 보관함·버킷·리전·상태 URL을 채우고 전송은 기본 비활성화한다. `check-aws`는 단기 인증·계정 일치·S3 HeadBucket·임의의 미등록 `pi-check-*` 상태 조회만 수행하며 촬영 객체나 재고를 생성하지 않는다. 기존 이벤트/API 필드는 변경하지 않는다. 현재 `reconcile`은 포장 미촬영 세션에서 재고를 변경하지 않으므로 반출·재반입도 포장 촬영이 필요하다. 내부 사진만으로 기존 약품 ID를 대응시키는 기능은 이 설치 준비에 포함하지 않는다.
+
 - 공통 식별자: `box_id`, `event_id`, `session_id`, `sequence`. 단계 시각 `captured_at`은 관측 시각이며 실제 손으로 꺼낸 정확한 시각은 아니다. 기존 `occurred_at`은 세션 시작 시각이다.
 - 포장 사진은 기존 `ocr-input/<session_id>/package.jpg`, 내부·단계 객체는 `medkit-sessions/<session_id>/`에 저장한다. 사진 메타데이터 `event-id`로 기존 `RECOGNITION` 결과와 연결하며 재전송은 조건부 쓰기로 같은 이미지 버전을 유지한다.
 - 단계 객체 `ocr-ready.json`, `movement-ready.json` 전송 후 `SESSION_CLOSED`의 `closed-ready.json`을 발행한다. OCR 완료 전에도 내부 판단은 계속한다. 재고 반영은 기존 순차 완료 조회로 순서를 보존한다.

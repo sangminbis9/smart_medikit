@@ -1,5 +1,5 @@
 # 상대 경로는 이 설정 파일의 폴더를 기준으로 한다.
-box_id = "prototype-01"
+box_id = "inha-capstone-02-medkit"
 pi_model = "unconfirmed"
 # 원본 Pi 프로그램과 사진·전송 대기열을 공유하지 않는다.
 data_dir = "../../local_data/hardware_pi"
@@ -59,13 +59,14 @@ package_retry_seconds = 1.0
 [aws]
 staged_capture = true
 ocr_input_prefix = "ocr-input"
-# 실기기 배선·단기 자격증명 확인 전에는 로컬 큐에 저장하며 연결 값은 README를 따른다.
+# 배선·인증 점검 후 config.toml에서만 true로 바꾼다.
 enabled = false
-contract_confirmed = false
+contract_confirmed = true
 poll_seconds = 2.5
-bucket = ""
-region = ""
-prefix = ""
-manifest_name = ""
-status_url_template = ""
+expected_account_id = "842544789367"
+bucket = "inha-capstone-02-s3"
+region = "ap-northeast-2"
+prefix = "medkit-sessions"
+manifest_name = "closed-ready.json"
+status_url_template = "https://yqcfg2houe.execute-api.ap-northeast-2.amazonaws.com/capture-events/{event_id}"
 auth_mode = "sigv4"

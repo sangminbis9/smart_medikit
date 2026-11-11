@@ -1,4 +1,6 @@
-# Raspberry Pi 자동 촬영 시스템 — hardware 참고용 복사본
+# Raspberry Pi 설치·AWS 연결 — hardware/pi 실행본
+
+최근 단계별 촬영·입출고 연결의 설치 대상은 **이 폴더(`hardware/pi`)**다. `Raspberry_Pi/`와 패키지명이 같지만 별도 코드이므로 명령은 반드시 이 폴더에서 실행한다. 예제에는 배포된 학교 계정·서울 리전 주소를 채웠으며 `aws.enabled=false`만 유지한다. 실제 설정은 Git에서 제외된 `config.toml`에 저장한다. 아래 절차는 설치 준비용이며 실제 Pi에서 실행 완료한 기록이 아니다.
 
 ## 내부 사진 전후 비교 실험
 
@@ -8,7 +10,7 @@
 
 `medikit_pi.movement`는 같은 구도에서 닫힌 보관함의 전후 사진을 각각 YOLOE로 탐지해 위치가 겹치는 후보를 대응시키고, 한 후보만 늘거나 줄면 반입 또는 반출 **추정 후보**를 만든다. 반입한 약은 최상단에 놓는 운영 조건을 전제로 하며, 새 포장에 아래 포장이 가려지거나 다시 드러날 가능성이 보이면 방향을 보류한다. 여러 변화·중복 대응·장면 전체 변화·사진 오류도 방향을 제안하지 않는다. 모든 결과는 `REVIEW_REQUIRED`이며 약품 식별, 실제 이동 및 복용을 확정하지 않는다. 포장 가림·위치 이동·탐지 실패가 입출고처럼 보일 수 있어 **실물 데이터로 검증하기 전 재고·알림·24시간 처리에 연결하지 않는다.**
 
-촬영 장치·기준 사진 보존과 비교 파이프라인은 아직 연결되지 않았다. 아래 명령은 별도로 준비한 두 사진을 로컬에서 비교하며 사진을 저장하거나 서버로 보내지 않는다. 출력 좌표도 약품 ID가 아니다.
+위 설명 중 보수적 비교는 아래 독립 CLI에 해당한다. `run`의 단계별 자동 모드에는 촬영·기준 사진·비교 작업자가 연결되어 있다. 아래 CLI는 별도로 준비한 두 사진만 비교하며 서버로 보내지 않는다. 출력 좌표도 약품 ID가 아니다.
 
 ```bash
 cd hardware/pi
@@ -48,17 +50,24 @@ S3 전송을 읽어 볼 때는 [`transport.py`](medikit_pi/transport.py)의 `S3T
 
 ## Pi 설치와 최초 실행
 
-프로젝트 루트에서 다음 순서로 준비한다. 아래 Linux/Pi 명령은 제공한 실행 경로이며 이 Windows 개발 환경에서 apt·GPIO·Picamera2 실기기 실행을 검증한 것은 아니다.
+### 1. OS·카메라·Python 환경
+
+지원 기준은 **64비트 Raspberry Pi OS Bookworm / Python 3.11 / Picamera2 카메라**다. 우선 `uname -m`이 `aarch64`인지, `python3 --version`을 확인한다. 실제 Pi 모델은 아직 지정하지 않았다. Camera Module 3 계열 AF 카메라를 전제로 하며 USB 카메라는 `run`의 Picamera2 입력을 대신하지 않는다.
+
+새 Pi의 사용자 홈에서 다음 순서로 준비한다. 저장소를 이미 받았다면 clone을 반복하지 말고 기존 저장소의 `hardware/pi`로 이동한다. 아래 Linux/Pi 명령은 제공한 실행 경로이며 이 Windows 개발 환경에서 apt·GPIO·Picamera2 실기기 실행을 검증한 것은 아니다.
 
 ```bash
 sudo apt update
-sudo apt install python3-picamera2 python3-opencv python3-gpiozero python3-lgpio python3-venv git
+sudo apt install python3-picamera2 python3-opencv python3-gpiozero python3-lgpio python3-venv git curl unzip
+git clone https://github.com/sangminbis9/smart_medikit.git
+cd smart_medikit
 cd hardware/pi
 python3 -m venv --system-site-packages .venv
 source .venv/bin/activate
 python -m pip install -r requirements.txt -c constraints-pi-bookworm.txt
 python -c "import numpy, cv2; from picamera2 import Picamera2; print(numpy.__version__, cv2.__version__)"
-cp config.example.toml config.toml
+# 기존 설정이 있으면 덮어쓰지 않는다.
+test -f config.toml || cp config.example.toml config.toml
 python -m medikit_pi --config config.toml check-config
 ```
 
@@ -66,14 +75,91 @@ Picamera2/libcamera는 OS 패키지를 사용한다. Pi에서 venv를 `--system-
 
 `config.toml`의 `pi_model`을 기록하고 `[gpio]`의 **모든 -1을 실제 BCM 번호**로 바꾼다. 센서 pull-up·닫힘 극성과 출력 active-high 설정을 배선에 맞춘다. 핀 중복/미설정이면 실기기 실행을 거부한다. 이 구현은 흰/파랑/초록/노랑/빨강의 개별 디지털 출력(또는 외부 드라이버 채널)을 사용한다. RGBW LED만 연결하는 경우 회로에 맞는 채널 매핑이 필요하다. LED 저항과 조명용 트랜지스터/드라이버를 사용하고 조명을 GPIO에 직접 전원 연결하지 않는다.
 
+### 2. 사용자가 채울 값과 실물 확인
+
+| 항목 | 설정·확인 내용 |
+|---|---|
+| `pi_model` | 사용 중인 Pi 모델·RAM을 기록한다. `unconfirmed`를 실제 값으로 바꾼다. |
+| `gpio.lid_pin` | 자석 센서의 **BCM** 번호. 커넥터의 물리 핀 번호와 구분한다. |
+| `gpio.lamp_pin` | 촬영 조명 드라이버 제어 핀. GPIO에 5V를 넣지 않는다. |
+| `white_pin`·`blue_pin`·`green_pin`·`yellow_pin`·`red_pin` | 개별 LED 출력 5개. 핀은 모두 서로 달라야 한다. 실제 LED 구성과 다르면 코드·회로 매핑이 필요하다. |
+| `lid_pull_up`·`lid_closed_when_active` | 닫힘을 닫힘으로 읽는지 확인한다. 기본 pull-up에서는 GND로 연결될 때 active다. |
+| `output_active_high` | 드라이버가 HIGH에서 켜지는지 확인한다. 모든 출력에 공통 적용된다. |
+| 카메라·조명 | 고정된 구도에서 뚜껑을 닫아도 내부 전체가 보이는지, 최상단 약의 가림·반사·초점 상태를 확인한다. |
+| 전원·냉각·시간·인터넷 | Pi 규격 전원, 발열, 여유 저장 공간, NTP 시간 동기화, 외부 HTTPS 연결을 확인한다. |
+
+핀 번호를 임의의 예제로 채우지 않았다. 배선을 먼저 결정한 뒤 `nano config.toml`로 수정한다. `check-config`는 형식만 검사하며 실제 GPIO를 움직이지 않는다.
+
+### 3. 탐지 모델 준비
+
 인터넷이 있는 설치 단계에서 모델을 한 번 준비한다.
 
 ```bash
 python -m medikit_pi --config config.toml prepare-model
-python -m medikit_pi --config config.toml run
+python -m medikit_pi --config config.toml check-config --hardware
 ```
 
 `prepare-model`은 공식 `yoloe-26n-seg.pt`와 텍스트 인코더를 내려받아 설정의 포장 설명을 임베딩으로 저장한다. **학습 명령이 아니다.** 첫 실행에는 CLIP 의존성 설치와 약 254 MB 텍스트 인코더 다운로드가 추가될 수 있다. 모델을 준비한 뒤에는 `run`이 로컬 `.pt`만 읽으며 네트워크에서 모델을 자동 설치하지 않는다. 프롬프트를 바꿨으면 모델을 다시 준비한다. 메모리가 부족한 Pi는 같은 설정으로 다른 64비트 컴퓨터에서 모델을 준비하고 `models/`의 결과 `.pt`를 복사한다. 가중치·설정·사진·DB는 Git에서 제외된다. Ultralytics 라이선스 조건은 배포 전에 확인한다.
+
+`check-config --hardware`는 GPIO 번호·중복, `pi_model`, 모델 파일 존재까지 확인한다. 카메라 작동·모델 로딩·센서 극성·실제 배선의 성공을 뜻하지 않는다. `rpicam-hello --timeout 3000`으로 카메라를 따로 확인한다.
+
+### 4. AWS 단기 로그인 (Pi에서 실행)
+
+최신 **AWS CLI v2**를 [AWS 공식 Linux ARM 설치 안내](https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html)에 따라 설치하고 `aws --version`을 확인한다. 배포 주소는 예제에 이미 있다. 장기 access key/secret을 입력하는 `aws configure` 방식은 사용하지 않는다.
+
+[AWS 공식 콘솔 로그인 안내](https://docs.aws.amazon.com/cli/latest/userguide/cli-configure-sign-in.html)의 `aws login --remote`와 `credential_process`를 사용한다. CLI는 2.32.0 이상이어야 하며 학교 계정에 `SignInLocalDevelopmentAccess`에 해당하는 로그인 권한이 필요하다. 이 권한이 실제 허용되는지는 아직 미검증이고, 아래 명령은 IAM 정책을 추가하지 않는다.
+
+```bash
+aws login --remote --profile medkit-signin --region ap-northeast-2
+aws configure set region ap-northeast-2 --profile medkit-pi
+aws configure set credential_process 'aws configure export-credentials --profile medkit-signin --format process' --profile medkit-pi
+export AWS_PROFILE=medkit-pi
+export AWS_EC2_METADATA_DISABLED=true
+```
+
+Pi 터미널에 나온 로그인 주소를 PC에서 열어 **학교 계정으로 MFA까지** 완료한다. 표시되는 인증 코드는 Pi 터미널에 직접 입력하고 채팅·문서에는 남기지 않는다. 프로필 설정과 단기 로그인 캐시는 해당 Linux 사용자 홈의 `.aws`에 저장되므로 Pi 앱도 **같은 사용자**로 실행한다. `sudo python`으로 실행하지 않는다. 기존 `AWS_ACCESS_KEY_ID`·`AWS_SECRET_ACCESS_KEY`·`AWS_SESSION_TOKEN` 환경변수가 있으면 프로필보다 우선할 수 있으므로 이 앱 실행용 셸에서는 제거한다. `export-credentials`를 단독 실행하거나 결과를 로그에 복사하지 않는다.
+
+로그인 세션은 최대 12시간 범위에서 갱신되고 이후 재로그인이 필요하다. 시연 전 같은 `aws login` 명령을 실행한다. 권한 오류가 나면 학교 관리자에게 로그인 허용과 아래 작업 권한을 확인받는다. 기존 Lambda 실행 역할을 Pi에 그대로 연결하거나 콘솔 내부 세션을 추출하는 방식은 사용하지 않는다. 상시 무인 운용용 장치 인증은 이번 대화형 설치 범위 밖이다.
+
+| Pi에 필요한 권한 | 대상 |
+|---|---|
+| `s3:PutObject`, `s3:GetObject` | `arn:aws:s3:::inha-capstone-02-s3/ocr-input/*`, `arn:aws:s3:::inha-capstone-02-s3/medkit-sessions/*` (재전송 시 HeadObject 포함) |
+| `execute-api:Invoke` | `arn:aws:execute-api:ap-northeast-2:842544789367:yqcfg2houe/*/GET/capture-events/*` |
+| `s3:ListBucket` | `arn:aws:s3:::inha-capstone-02-s3` (`check-aws`의 HeadBucket 점검용; 실제 업로드와 다른 권한) |
+
+이는 필요한 동작 목록이며 IAM을 변경하는 배포 정책이 아니다. KMS 암호화 키가 별도로 강제되는 환경이라면 해당 키의 권한도 관리자가 확인해야 한다. Pi는 DynamoDB 직접 쓰기나 Lambda 배포 권한이 필요 없다.
+
+### 5. 연결 점검 후 촬영 활성화
+
+AWS 전송을 끈 채로 먼저 실행한다.
+
+```bash
+python -m medikit_pi --config config.toml check-aws
+```
+
+이 명령은 **단기 토큰·학교 계정 → S3 버킷 소유 계정/HeadBucket → SigV4 상태 API** 순서로 확인한다. 임의의 새 `pi-check-*` ID를 조회해 `PROCESSING`을 확인하며 사진 업로드·촬영 기록 생성·재고 변경·푸시 발송은 하지 않는다. 따라서 성공해도 `PutObject`, OCR 식별, 실제 입출고 정확도까지 검증한 것은 아니다. 오류는 단계와 예외 유형만 출력한다. 1단계 실패는 로그인·프로필·시간·네트워크, 2단계는 버킷/조회 권한, 3단계는 API Invoke 권한·SigV4를 점검한다.
+
+실행 전 `config.toml`의 `[aws] enabled = true`로 바꾼다. `contract_confirmed=true`, `staged_capture=true`와 배포 주소는 유지한다. 새 터미널에서는 위 `AWS_PROFILE` 설정도 다시 적용한다.
+
+```bash
+python -m medikit_pi --config config.toml check-config --hardware
+python -m medikit_pi --config config.toml run
+```
+
+처음에는 뚜껑을 닫고 시작해 내부 기준 사진 처리를 마친 뒤 연다. 흰 LED 후 포장을 보여주고 파란 LED가 켜지면 약을 **최상단**에 넣고 닫는다. 닫힘 사진 분석은 OCR 완료를 기다리지 않지만 서버의 약품 등록·알림은 식별과 이동 결과가 합쳐진 뒤 진행된다.
+
+**현재 구현은 반출 때도 꺼낸 약을 카메라에 보여 포장 촬영을 남겨야 한다.** 포장 사진 없이 꺼내기만 하면 어떤 약인지 연결하지 않아 반출 재고·복용 확인 알림이 생성되지 않는다. 재반입도 같은 포장을 촬영한다. 동시에 여러 약을 움직이지 않고 한 세션에 약 하나씩 다룬다. 물리적으로 하나의 제품은 하나의 포장이라는 운영 조건을 지킨다.
+
+### 6. 최초 실물 검증 순서
+
+1. 빈 통·닫힘 상태에서 시작해 기준 사진을 확보한다. 센서가 뒤집혀 있거나 닫힘 촬영이 실패하면 먼저 배선·구도·조명을 수정한다.
+2. 개인정보 없는 약 포장 1개를 촬영해 넣고 닫는다. 홈의 신규 약 이름·최초 등록 안내·푸시를 확인한다.
+3. 같은 약을 꺼내 포장을 촬영하고 닫는다. 반출 알림을 눌러 복용 기록의 확인 대기/Y/N을 확인한다. 테스트 중 실제로 복용하지 않았다면 N으로 기록한다.
+4. 같은 약을 다시 촬영해 넣는다. 중복 포장이 생기지 않고 재반입이 반영되는지 확인한다.
+5. 인터넷을 잠시 끊고 한 세션을 만든 뒤 복구한다. 로컬 큐가 같은 ID로 재전송되고 포장·이력·알림이 중복되지 않는지 확인한다.
+6. 별도 합성 검증 대상으로 24시간 미반입 처리와 재반입 시 이전 폐기 대상 해제를 확인한다. 약의 실제 폐기를 입증하는 시험은 아니다.
+
+전송을 끈 `run`도 큐를 쌓는다. 나중에 활성화하면 그 사진들이 전송되므로 로컬 촬영 시험은 다른 `data_dir`를 사용한다. **실사용을 시작한 큐 DB를 지우거나 옛 사본으로 되돌리지 않는다.** 세션 순번도 저장되어 있어 초기화하면 서버의 기존 `last_sequence`와 충돌할 수 있다. 처음 생성하는 실기기 큐만 새 경로를 사용하고, 그 이후에는 같은 큐·보관함 ID를 유지한다.
 
 `Ctrl+C`로 종료하면 조명·카메라·GPIO를 정리하고 현재 세션의 확보된 사진을 보존한다. 비정상 종료된 촬영은 다음 시작에서 복구한다. 카메라 오류는 기본 2초 간격으로 재시작하고, 내부 촬영은 실패 한도 후 큐에 남긴다. 디스크 쓰기 실패는 성공 표시를 하지 않는다. 동기화가 꺼져 있거나 오랫동안 끊긴 경우 로컬 저장 공간을 운영자가 확인해야 한다.
 
@@ -146,32 +232,21 @@ python -m medikit_pi --config config.toml video --input ../../local_data/test.mp
 
 2026-11-10 `backend/`의 단계 수신·재고·이력 API와 웹을 배포했다. 실제 Pi 설치·배선·단기 자격증명은 아직 확인하지 않아 예제의 `aws.enabled=false`는 유지한다. 촬영과 영속 큐는 로컬에서 동작하며, 서버 저장 성공 전에는 전송 완료로 표시하지 않는다.
 
-`hardware/pi` 작업본의 [단계 분리 계약 2.2절](../../docs/CONTRACTS.md#22-촬영-단계-분리-2026-11-10-aws웹-배포-실기기-검증-전)을 사용하려면 실제 `config.toml`의 최상위 `box_id`를 `inha-capstone-02-medkit`으로 지정하고 다음 배포 값을 적용한다. 단기 자격증명 공급자와 GPIO를 먼저 준비한다. `Raspberry_Pi` 원본에는 이번 변경이 자동 반영되지 않는다.
-
-```toml
-[aws]
-enabled = true
-contract_confirmed = true
-staged_capture = true
-ocr_input_prefix = "ocr-input"
-poll_seconds = 2.5
-bucket = "inha-capstone-02-s3"
-region = "ap-northeast-2"
-prefix = "medkit-sessions"
-manifest_name = "closed-ready.json"
-status_url_template = "https://yqcfg2houe.execute-api.ap-northeast-2.amazonaws.com/capture-events/{event_id}"
-auth_mode = "sigv4"
-```
+배포 값은 [config.example.toml](config.example.toml)에 한 곳으로 모았다. [단계 분리 계약 2.2절](../../docs/CONTRACTS.md#22-촬영-단계-분리-2026-11-10-aws웹-배포-실기기-검증-전)을 따르며 위 설치 절차의 인증·배선 점검 후 `config.toml`에서만 전송을 켠다. `Raspberry_Pi` 원본에는 이번 변경이 자동 반영되지 않는다.
 
 포장 JPEG는 기존 OCR Lambda를 즉시 실행하고 내부 판단은 별도 작업자로 수행한다. 각 단계 JSON과 종료 객체는 새 촬영 Lambda가 결합한다. API는 `processing_status`의 기존 enum을 반환하며 SigV4 요청 `200`·무인증 요청 `403`을 확인했다. `POST /capture-events`는 사용하지 않는다. prefix·보관함 ID·상태 URL을 미완료 큐가 있는 동안 바꾸지 않는다. 실제 Pi의 전체 촬영 경로는 별도 검증이 필요하다.
 
-Boto3의 외부 `credential_process` 등 갱신 가능한 공급자로 **단기 세션 토큰이 포함된 자격증명**을 제공한다. 장기 access key/secret을 Pi나 소스에 내장하지 않는다. API가 bearer 방식이면 `auth_mode="bearer"`와 외부 `bearer_token_file` 경로를 추가한다. 토큰·AWS 응답 본문·사진·OCR 원문은 로그에 기록하지 않는다. S3/IAM/API 접근제어와 비용 정책은 별도 팀 배포 작업이며 이 프로그램은 원격 자원이나 IAM 설정을 변경하지 않는다.
+Boto3의 외부 `credential_process` 등 갱신 가능한 공급자로 **단기 세션 토큰이 포함된 자격증명**을 제공한다. 현재 촬영 API는 SigV4 전용이다. 코드의 기존 bearer 호환 경로를 실제 배포에서 지원하는 것으로 해석하지 않는다. 토큰·AWS 응답 본문·사진·OCR 원문은 로그에 기록하지 않는다. 이 설치 준비는 원격 자원이나 IAM 설정을 변경하지 않는다.
 
-`COMPLETED`/`REVIEW_REQUIRED` 확인 후 정상 종료 상태를 먼저 저장하고 Pi 사진을 삭제한다. `FAILED`/통신 실패는 동일 ID를 보존해 최대 60초 백오프로 재시도한다. AWS가 영구 실패하면 해당 선두 세션에서 전송이 대기하며 촬영은 계속 큐에 쌓인다. `REVIEW_REQUIRED`는 다음 세션 전송을 허용한다. 내부 사진이 실패한 경우 `POSITION_UNCERTAIN` 및 기존 위치 유지, 포장 미촬영 시 내부 전후 비교는 서버가 수행해야 한다.
+`COMPLETED`/`REVIEW_REQUIRED` 확인 후 정상 종료 상태를 먼저 저장하고 Pi 세션 사진을 삭제한다(마지막 내부 기준 사진은 별도 보존). `FAILED`/통신 실패는 동일 ID를 보존해 최대 60초 백오프로 재시도한다. AWS가 영구 실패하면 해당 선두 세션에서 전송이 대기하며 촬영은 계속 큐에 쌓인다. `REVIEW_REQUIRED`는 다음 세션 전송을 허용한다. 현재 단계 수신기는 포장 사진 없는 내부 촬영 세션을 기준 확보용으로 종료하며 재고를 바꾸지 않는다. 실제 약품 연결에는 포장 촬영이 필요하다.
 
 포장 촬영 성공은 실제 반출·복용을 입증하지 않는다. 처방전 상세사진 보완은 기존 웹 흐름을 사용하며, 이름·환자번호 등 개인정보가 있는 영역은 촬영에서 제외하거나 가린 후 사용한다. 이 Pi 모듈은 개인정보 자동 OCR 마스킹을 제공하지 않는다. 로컬 큐는 기본 전송 완료까지 사진을 보관하므로 장치 저장소의 물리 접근도 제한한다.
 
 ## 검증 명령과 남은 실험
+
+2026-11-11 설치 준비 검증: 기존 Windows 가상환경에서 이 폴더를 작업 디렉터리로 **88개 테스트·하위 검사 3개 통과**. 새 점검 8개는 전송 비활성 기본값, 쓰기 없는 점검, 다른 계정·장기 키·버킷 거부·예상 밖 API 응답 차단, 오류 로그의 비밀값 제외, GPIO 미설정·중복 거부를 확인한다. 최초 실행은 Windows 샌드박스 임시 파일 권한 문제로 실패했고 정상 권한에서 재실행했다. 실제 Pi 배선·Linux 설치·학교 계정의 `aws login --remote` 권한·실물 촬영 전체 경로는 아직 검증하지 않았다.
+
+같은 날 변경한 Python 4개 파일의 Ruff 검사·포맷, CLI 도움말·예제 형식 검사를 통과했다. 기존 CloudShell 단기 세션에서는 점검과 동일한 STS 계정 대조·소유자 지정 HeadBucket·새 임의 ID의 SigV4 상태 조회를 실행해 **계정 일치·버킷 접근·HTTP 200/PROCESSING**을 확인했다. 사진이나 촬영 이력은 생성하지 않았다. CloudShell 인증 성공은 Pi의 대화형 로그인 권한 확인을 대신하지 않는다.
 
 `hardware/pi/`를 작업 폴더로 한 별도 Python 프로세스에서 실행한다. 원본과 복사본은 같은 패키지·테스트 이름을 사용하므로 저장소 루트에서 두 테스트 묶음을 한꺼번에 수집하지 않는다. 기존 PC 검증은 부모 README의 명령을 사용한다. PC와 Pi용 의존성 제약을 한 가상환경에 섞지 않는다.
 

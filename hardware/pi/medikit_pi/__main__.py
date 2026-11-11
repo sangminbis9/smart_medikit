@@ -48,7 +48,11 @@ def parse_args(argv=None):
     commands = parser.add_subparsers(dest="command", required=True)
     commands.add_parser("run", help="Pi 카메라·GPIO로 실행")
     commands.add_parser("prepare-model", help="사전 학습 모델에 포장 설명을 저장")
-    commands.add_parser("check-config", help="설정 형식 검사")
+    check = commands.add_parser("check-config", help="설정 형식 검사")
+    check.add_argument(
+        "--hardware", action="store_true", help="GPIO 번호·Pi 모델명·모델 파일도 검사"
+    )
+    commands.add_parser("check-aws", help="업로드 없이 단기 인증·S3·상태 API 점검")
     webcam = commands.add_parser("webcam", help="PC 웹캠에서 실시간 포장 후보만 표시")
     webcam.add_argument("--camera", type=int, default=0, help="웹캠 번호")
     webcam.add_argument(
@@ -196,8 +200,8 @@ def run_hardware(config):
     from .detection import AsyncDetector, YOLOEDetector
     from .gpio import Board
     from .outbox import Outbox, SyncWorker
-    from .transport import S3Transport
     from .stages import StageWorker, stage_loop
+    from .transport import S3Transport
 
     settings = config["detector"]
     board = camera = outbox = detector = controller = None
@@ -226,10 +230,16 @@ def run_hardware(config):
             controller.initialize_baseline(time.monotonic())
             workers = [StageWorker(outbox, "MOVEMENT_REQUESTED", detector=detector.detector)]
             if config["aws"]["enabled"]:
-                workers.extend([StageWorker(outbox, stage, S3Transport(config["aws"]))
-                                for stage in ("OCR_REQUESTED", "MOVEMENT_REQUESTED")])
+                workers.extend(
+                    [
+                        StageWorker(outbox, stage, S3Transport(config["aws"]))
+                        for stage in ("OCR_REQUESTED", "MOVEMENT_REQUESTED")
+                    ]
+                )
             for stage_worker in workers:
-                thread = threading.Thread(target=stage_loop, args=(stage_worker, stopped), daemon=True)
+                thread = threading.Thread(
+                    target=stage_loop, args=(stage_worker, stopped), daemon=True
+                )
                 thread.start()
                 stage_threads.append(thread)
         if config["aws"]["enabled"]:
@@ -288,7 +298,11 @@ def run_hardware(config):
         safely_finish(controller)
         for resource in (detector, camera, board):
             safely_close(resource)
-        if outbox and (sender is None or not sender.is_alive()) and not any(thread.is_alive() for thread in stage_threads):
+        if (
+            outbox
+            and (sender is None or not sender.is_alive())
+            and not any(thread.is_alive() for thread in stage_threads)
+        ):
             safely_close(outbox)
     return 0
 
@@ -300,7 +314,24 @@ def main(argv=None):
     try:
         config = load_config(args.config.resolve())
         if args.command == "check-config":
+            if args.hardware:
+                from .gpio import validate_pins
+
+                LOGGER.info("실기기 설정 점검: GPIO 번호")
+                validate_pins(config["gpio"])
+                LOGGER.info("실기기 설정 점검: Pi 모델명")
+                if not config.get("pi_model") or config["pi_model"] == "unconfirmed":
+                    raise ValueError("pi_model에 실제 Pi 모델명을 입력하세요.")
+                LOGGER.info("실기기 설정 점검: 준비된 모델 파일")
+                if not config["detector"]["model_path"].is_file():
+                    raise ValueError("prepare-model로 모델을 먼저 준비하세요.")
             LOGGER.info("설정 형식 확인 완료. GPIO 배선·모델·AWS 연결은 실행 시 별도 확인합니다.")
+            return 0
+        if args.command == "check-aws":
+            from .transport import S3Transport
+
+            S3Transport(config["aws"]).check_connection()
+            LOGGER.info("AWS 읽기 점검 완료. 사진 업로드·OCR·입출고 판정은 실물 시험이 필요합니다.")
             return 0
         if args.command == "prepare-model":
             from .detection import prepare_model

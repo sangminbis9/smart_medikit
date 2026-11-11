@@ -25,7 +25,7 @@
 
 [`Raspberry_Pi/`](Raspberry_Pi/README.md)는 YOLOE-26n 후보 감지, Picamera2 자동 촬영, GPIO 및 영속 순차 큐를 구현한다. 요청에 따라 Pi 제어 소스는 이 폴더에 두며, 기존 `hardware/`의 PC 카메라 촬영 실험은 유지한다. AWS는 배포 계약 미확정으로 기본 비활성화되어 있다.
 
-[`hardware/pi/`](hardware/pi/README.md)는 PC 개발 중 Pi·S3 전송 코드를 참고하기 위해 원본을 보존하고 복사한 작업본이다. 기존 DroidCam 실행에는 연결하지 않았으며, 두 위치의 변경은 자동 동기화되지 않는다.
+[`hardware/pi/`](hardware/pi/README.md)는 원본을 보존하고 복사한 뒤 단계별 OCR 전송·내부 비교를 추가한 **현재 Pi 설치 대상**이다. 배포된 AWS 연결값, `check-aws` 점검, 설치·GPIO·단기 로그인 절차는 해당 README를 따른다. 기존 DroidCam 실행에는 연결하지 않았으며 `Raspberry_Pi/`와 변경이 자동 동기화되지 않는다. 실제 Pi에서 전체 촬영 경로를 검증하는 작업은 남아 있다.
 
 PC 웹캠 실시간 객체 탐지는 `Raspberry_Pi`에서 `python -m medikit_pi --config config.example.toml webcam --camera 0`으로 실행한다. 준비된 YOLOE 모델을 사용하며 자동 촬영·저장·AWS 전송은 하지 않는다. 환경 설치와 카메라 선택은 [Pi/PC 실행 안내](Raspberry_Pi/README.md)를 참고한다.
 

@@ -3,17 +3,22 @@
 from __future__ import annotations
 
 
+# GPIO를 열지 않고 센서·조명·상태 LED의 BCM 번호를 검사한다.
+def validate_pins(config: dict):
+    names = ("lid_pin", "lamp_pin", "white_pin", "blue_pin", "green_pin", "yellow_pin", "red_pin")
+    pins = [config.get(name, -1) for name in names]
+    if any(type(pin) is not int or not 0 <= pin <= 27 for pin in pins):
+        raise ValueError("센서·조명·LED의 BCM 핀을 0~27로 설정하세요.")
+    if len(set(pins)) != len(pins):
+        raise ValueError("센서·조명·LED는 서로 다른 BCM 핀을 사용해야 합니다.")
+
+
 class Board:
     COLORS = ("white", "blue", "green", "yellow", "red")
 
     # 핀 충돌과 미설정을 확인한 뒤 모든 출력을 꺼진 상태로 연다.
     def __init__(self, config: dict):
-        names = ("lid_pin", "lamp_pin", *(f"{color}_pin" for color in self.COLORS))
-        pins = [config.get(name, -1) for name in names]
-        if any(type(pin) is not int or not 0 <= pin <= 27 for pin in pins):
-            raise ValueError("센서·조명·LED의 BCM 핀을 0~27로 설정하세요.")
-        if len(set(pins)) != len(pins):
-            raise ValueError("센서·조명·LED는 서로 다른 BCM 핀을 사용해야 합니다.")
+        validate_pins(config)
         from gpiozero import DigitalInputDevice, OutputDevice
 
         self._devices = []

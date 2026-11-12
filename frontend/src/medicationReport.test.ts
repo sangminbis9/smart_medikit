@@ -5,6 +5,7 @@ import type { Activity, OutboundEvent } from './activity';
 import {
   buildReportRecords,
   groupReportRecords,
+  groupReportCategories,
   reportRange,
   validReportRange,
 } from './medicationReport';
@@ -300,6 +301,116 @@ describe('선택된 기록의 약별 요약', function grouping() {
       [],
     );
     expect(groupReportRecords(records)).toHaveLength(3);
+  });
+});
+
+describe('처방 묶음별 보고서 분류', function categories() {
+  // 같은 약이 서로 다른 처방에 들어간 합성 자료를 준비한다.
+  function plans(): MedicationState {
+    const state = manual();
+    state.plans[0].title = '감기약';
+    state.records[0].result = 'all';
+    state.records[0].takenMedicineIds = ['m1', 'm2'];
+    const second = structuredClone(state.plans[0]);
+    second.id = 'plan2';
+    second.title = '혈당약';
+    second.medicines = second.medicines.slice(0, 1);
+    state.plans.push(second);
+    state.records.push({
+      ...state.records[0],
+      occurrenceId: 'medication:plan2:2026-11-10T09:00+09:00',
+      takenMedicineIds: ['m1'],
+    });
+    return state;
+  }
+  // 기존 처방 이름·ID를 보존해야 두 화면이 같은 카테고리로 묶을 수 있다.
+  it('수동 약에 처방 ID와 이름을 보존하고 보관함에는 넣지 않는다', function metadata() {
+    const rows = buildReportRecords(activity([outbound()]), plans(), []);
+    const manualRows = rows.filter(
+      // 수동 일정 항목만 골라 부모 묶음을 확인한다.
+      function manualRow(item) {
+        return item.dateKind === '일정 날짜';
+      },
+    );
+    expect(manualRows).toHaveLength(3);
+    expect(manualRows[0]).toMatchObject({
+      planId: 'plan1',
+      planTitle: '감기약',
+    });
+    expect(
+      rows.find(
+        // 보관함 항목은 임의의 처방 카테고리에 연결하지 않는다.
+        function cabinet(item) {
+          return item.dateKind === '반출 날짜';
+        },
+      )?.planId,
+    ).toBeUndefined();
+  });
+  // 같은 공식 품목이라도 서로 다른 처방의 확인·추정을 합치면 안 된다.
+  it('동일 품목도 처방 묶음별로 분리하고 보관함에는 카테고리 제목을 붙이지 않는다', function separate() {
+    const rows = buildReportRecords(activity([outbound()]), plans(), [], {
+      links: [
+        {
+          planId: 'plan1',
+          medicineId: 'm1',
+          productCode: '123456789',
+          productName: '합성 품목',
+        },
+        {
+          planId: 'plan2',
+          medicineId: 'm1',
+          productCode: '123456789',
+          productName: '합성 품목',
+        },
+      ],
+      details: {},
+    });
+    expect(groupReportRecords(rows)).toHaveLength(4);
+    const grouped = groupReportCategories(rows);
+    expect(
+      grouped.map(
+        // 처방 두 개와 제목 없는 개별 보관함 표시를 확인한다.
+        function category(item) {
+          return [item.title, item.groups.length];
+        },
+      ),
+    ).toEqual([
+      ['감기약', 2],
+      ['혈당약', 1],
+      [null, 1],
+    ]);
+  });
+  // 동명 처방은 제목이 아니라 원래 ID로 구분하고 선택하지 않은 카테고리는 제거한다.
+  it('같은 이름의 별도 처방은 분리하며 선택된 기록만 카테고리를 만든다', function duplicateTitle() {
+    const state = plans();
+    state.plans[1].title = '감기약';
+    const rows = buildReportRecords(activity([]), state, []);
+    const grouped = groupReportCategories(rows);
+    expect(grouped).toHaveLength(2);
+    expect(grouped[0].key).not.toBe(grouped[1].key);
+    expect(
+      groupReportCategories(
+        rows.filter(
+          // 한 묶음을 모두 제외하면 빈 섹션이 남지 않아야 한다.
+          function included(item) {
+            return item.planId === 'plan1';
+          },
+        ),
+      ),
+    ).toHaveLength(1);
+    expect(groupReportCategories([])).toEqual([]);
+  });
+  // 묶음만 등록했거나 제목이 비어 있어도 임의의 약 이름을 만들지 않는다.
+  it('개별 약 없는 이름 없는 묶음에도 안전한 카테고리 제목을 사용한다', function unnamed() {
+    const state = manual();
+    state.plans[0].title = '';
+    state.plans[0].medicines = [];
+    state.records[0].takenMedicineIds = [];
+    const grouped = groupReportCategories(
+      buildReportRecords(activity([]), state, []),
+    );
+    expect(grouped[0].title).toBe('이름 없는 처방 묶음');
+    expect(grouped[0].groups[0].records[0].incomplete).toBe(true);
   });
 });
 

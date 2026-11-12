@@ -208,6 +208,9 @@ test('복약에서 기록을 선택해 약별 요약과 날짜 내역을 본다'
   expect(backStyle.radius).toBeGreaterThanOrEqual(12);
   expect(backStyle.font).toBeGreaterThanOrEqual(16);
   expect(backStyle.height).toBeGreaterThanOrEqual(44);
+  await expect(
+    page.getByRole('link', { name: '복약으로 돌아가기' }),
+  ).toHaveText('←');
   const list = page.getByRole('region', { name: '복용 기록 선택' });
   await expect(list.getByRole('checkbox')).toHaveCount(3);
   await expect(
@@ -245,6 +248,124 @@ test('복약에서 기록을 선택해 약별 요약과 날짜 내역을 본다'
     await page.evaluate(function fits() {
       return document.documentElement.scrollWidth <= window.innerWidth;
     }),
+  ).toBe(true);
+  await page.getByRole('link', { name: '복약으로 돌아가기' }).click();
+  await expect(page).toHaveURL(/\/schedule$/);
+});
+
+// 두 처방의 개별 약 선택과 보고서 분류를 같은 기준으로 검증한다.
+test('선택과 보고서 모두 처방 이름으로 묶고 보관함 약은 별도 카테고리를 만들지 않는다', async function prescriptionCategories({
+  page,
+}) {
+  // 입력한 처방 묶음 이름과 포함된 약을 합성한다.
+  function plan(
+    id: string,
+    title: string,
+    names: string[],
+  ): MedicationState['plans'][number] {
+    return {
+      id,
+      title,
+      notes: '',
+      endedOn: null,
+      timing: {
+        mode: 'regular',
+        schedule: {
+          startDate: '2026-11-12',
+          endDate: '2026-11-12',
+          weekdays: [0, 1, 2, 3, 4, 5, 6],
+          times: ['09:00'],
+        },
+      },
+      medicines: names.map(
+        // 같은 이름이 다른 처방에도 포함되는 경우를 유지한다.
+        function medicine(name, index) {
+          return {
+            id: `${id}-${index}`,
+            name,
+            strength: '',
+            dose: '1정',
+            timing: null,
+          };
+        },
+      ),
+    };
+  }
+  const state: MedicationState = {
+    version: 1,
+    records: [],
+    plans: [
+      plan('cold', '감기약', [
+        '공통 시험약',
+        '감기약 B',
+        '감기약 C',
+        '감기약 D',
+      ]),
+      plan('glucose', '혈당약', ['공통 시험약', '혈당약 B']),
+    ],
+  };
+  const writes = await prepare(page, 'none', state);
+  await page.goto('/schedule/report');
+  const selection = page.getByRole('region', { name: '복용 기록 선택' });
+  const cold = selection.getByRole('region', {
+    name: '감기약 처방 묶음',
+    exact: true,
+  });
+  const glucose = selection.getByRole('region', {
+    name: '혈당약 처방 묶음',
+    exact: true,
+  });
+  await expect(cold.getByRole('checkbox')).toHaveCount(4);
+  await expect(glucose.getByRole('checkbox')).toHaveCount(2);
+  await expect(
+    cold.getByRole('heading', { name: '공통 시험약', exact: true }),
+  ).toHaveCount(1);
+  await expect(
+    glucose.getByRole('heading', { name: '공통 시험약', exact: true }),
+  ).toHaveCount(1);
+  await expect(
+    selection.getByRole('checkbox', { name: /합성 일반약/ }),
+  ).toHaveCount(2);
+  await expect(
+    page.getByRole('heading', { name: '보관함 약', exact: true }),
+  ).toHaveCount(0);
+  await cold.getByRole('checkbox', { name: /감기약 B/ }).uncheck();
+  await page.getByRole('button', { name: '선택 완료 · 보고서 보기' }).click();
+  const report = page.getByRole('region', { name: '진료용 복용 이력' });
+  await expect(
+    report
+      .getByRole('region', { name: '감기약 처방 묶음', exact: true })
+      .getByRole('article'),
+  ).toHaveCount(3);
+  await expect(
+    report
+      .getByRole('region', { name: '혈당약 처방 묶음', exact: true })
+      .getByRole('article'),
+  ).toHaveCount(2);
+  await expect(
+    report.getByRole('article', { name: '합성 일반약', exact: true }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole('heading', { name: '보관함 약', exact: true }),
+  ).toHaveCount(0);
+  await page.getByRole('button', { name: '선택 수정' }).click();
+  await expect(
+    cold.getByRole('checkbox', { name: /감기약 B/ }),
+  ).not.toBeChecked();
+  for (const checkbox of await glucose.getByRole('checkbox').all())
+    await checkbox.uncheck();
+  await page.getByRole('button', { name: '선택 완료 · 보고서 보기' }).click();
+  await expect(
+    report.getByRole('region', { name: '혈당약 처방 묶음', exact: true }),
+  ).toHaveCount(0);
+  expect(writes).toEqual([]);
+  expect(
+    await page.evaluate(
+      // 처방 이름과 개별 약이 좁은 휴대폰 너비를 넘지 않아야 한다.
+      function fits() {
+        return document.documentElement.scrollWidth <= window.innerWidth;
+      },
+    ),
   ).toBe(true);
 });
 

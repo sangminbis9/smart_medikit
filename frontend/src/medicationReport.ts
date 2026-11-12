@@ -6,6 +6,8 @@ import type { ProductLink, ProductDetail } from './medicationProducts';
 export type ReportRecord = {
   id: string;
   groupKey: string;
+  planId?: string;
+  planTitle?: string;
   name: string;
   strength: string;
   ingredients: string[];
@@ -31,6 +33,11 @@ export type ReportGroup = {
 export type ReportProducts = {
   links: ProductLink[];
   details: Record<string, ProductDetail>;
+};
+export type ReportCategory = {
+  key: string;
+  title: string | null;
+  groups: ReportGroup[];
 };
 
 // 직접 입력한 날짜가 실제 달력 날짜인지 검증한다.
@@ -183,6 +190,8 @@ export function buildReportRecords(
         result.push({
           id: `manual:${occurrence.id}:unknown`,
           groupKey: `plan:${occurrence.planId}`,
+          planId: occurrence.planId,
+          planTitle: occurrence.title,
           name: occurrence.title || '이름 없는 처방 묶음',
           strength: '',
           ingredients: [],
@@ -207,6 +216,8 @@ export function buildReportRecords(
             ? `product:${link.productCode}:${medicine.strength.trim()}`
             : JSON.stringify(['manual', occurrence.planId, medicine.id]),
           name: medicine.name,
+          planId: occurrence.planId,
+          planTitle: occurrence.title,
           strength: medicine.strength,
           ingredients:
             detail?.productCode === link?.productCode
@@ -234,10 +245,14 @@ export function buildReportRecords(
 export function groupReportRecords(records: ReportRecord[]): ReportGroup[] {
   const groups = new Map<string, ReportGroup>();
   for (const record of [...records].sort(newestFirst)) {
-    let group = groups.get(record.groupKey);
+    // 같은 품목이어도 서로 다른 처방 묶음이나 보관함 기록과 합치지 않는다.
+    const key = record.planId
+      ? JSON.stringify([record.planId, record.groupKey])
+      : record.groupKey;
+    let group = groups.get(key);
     if (!group) {
       group = {
-        key: record.groupKey,
+        key,
         name: record.name,
         strength: record.strength,
         ingredients: [...record.ingredients],
@@ -248,7 +263,7 @@ export function groupReportRecords(records: ReportRecord[]): ReportGroup[] {
         scheduledCount: 0,
         records: [],
       };
-      groups.set(record.groupKey, group);
+      groups.set(key, group);
     }
     group.count++;
     if (record.certainty === 'scheduled') group.scheduledCount++;
@@ -261,4 +276,35 @@ export function groupReportRecords(records: ReportRecord[]): ReportGroup[] {
     group.records.push(record);
   }
   return [...groups.values()];
+}
+
+// 처방 ID로 약별 묶음을 모으고 보관함 약은 제목 없는 개별 항목으로 유지한다.
+export function groupReportCategories(
+  records: ReportRecord[],
+): ReportCategory[] {
+  const categories = new Map<string, ReportCategory>();
+  for (const group of groupReportRecords(records)) {
+    const record = group.records[0];
+    const key = JSON.stringify(
+      record.planId ? ['plan', record.planId] : ['individual', group.key],
+    );
+    let category = categories.get(key);
+    if (!category) {
+      category = {
+        key,
+        title: record.planId
+          ? record.planTitle?.trim() || '이름 없는 처방 묶음'
+          : null,
+        groups: [],
+      };
+      categories.set(key, category);
+    }
+    category.groups.push(group);
+  }
+  return [...categories.values()].sort(
+    // 처방 카테고리를 먼저 보이되 보관함 약에는 별도 제목을 추가하지 않는다.
+    function prescriptionsFirst(left, right) {
+      return Number(left.title === null) - Number(right.title === null);
+    },
+  );
 }

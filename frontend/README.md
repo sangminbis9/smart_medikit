@@ -99,7 +99,7 @@ VAPID 공개키 조회, 구독 등록/해제, Lambda Web Push 발송과 알림 �
 1. `main`에서 변경 내용을 검증·커밋하고 `git push origin main`으로 GitHub에 반영합니다. 별도 작업 브랜치나 PR은 사용자가 명시적으로 요청한 경우에만 사용합니다.
 2. Amplify Hosting에서 GitHub 저장소 `sangminbis9/smart_medikit`과 **`main`**을 선택합니다. **모노레포 경로를 `frontend`**로 지정합니다. `AMPLIFY_MONOREPO_APP_ROOT=frontend`도 확인합니다. 기존에 다른 브랜치를 연결했다면 배포 대상에 `main`을 추가로 연결합니다.
 3. 루트 [`amplify.yml`](../amplify.yml)을 사용합니다. Node 22 → `npm ci` → 타입·린트·단위 테스트 → 빌드, 산출물은 `frontend/dist`입니다. AWS 백엔드 생성 단계는 없습니다.
-4. **Rewrites and redirects**의 JSON 편집기에 [`amplify-rewrites.json`](../amplify-rewrites.json)을 적용합니다. 이 JSON은 자동 로딩되지 않습니다. `/care`, `/care/…`, `/schedule`, `/alerts`, `/device`, `/packages/…`만 앱 셸로 연결하며 `/sw.js`, Manifest, 아이콘, `/assets/…`, API 경로는 제외합니다.
+4. **Rewrites and redirects**의 JSON 편집기에 [`amplify-rewrites.json`](../amplify-rewrites.json)을 적용합니다. 이 JSON은 자동 로딩되지 않습니다. `/care`, `/care/…`, `/schedule`, `/schedule/report`, `/alerts`, `/device`, `/packages/…`만 앱 셸로 연결하며 `/sw.js`, Manifest, 아이콘, `/assets/…`, API 경로는 제외합니다. 보고서 버튼으로는 이동되지만 직접 접속·새로고침이 404면 이 규칙의 적용 여부를 확인합니다.
 5. 루트 [`customHttp.yml`](../customHttp.yml)의 응답 헤더가 Hosting에 반영됐는지 확인합니다. Service Worker는 재검증하고 HTML·Manifest를 무기한 캐시하지 않습니다.
 6. 빈 화면 배포라면 `VITE_` 값 없이 배포합니다. 실서버 연결 시에는 위 표를 입력하고 재빌드한 뒤 API/S3 CORS와 서버 접근 제어를 별도로 검증합니다.
 7. HTTPS 주소에서 직접 경로 새로고침, Manifest, 앱 설치, 오프라인 새로고침, 새 버전 안내를 확인합니다. iPhone 실기기 및 실제 푸시 수신은 후속 검증입니다.

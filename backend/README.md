@@ -2,6 +2,8 @@
 
 ## 종단 결함 수정 배포 (2026-11-11)
 
+2026-11-12 기준 수정된 OCR·capture·activity·notifications·read Lambda와 웹이 배포되었다. 실제 S3 시작 합성 이미지로 OCR·포장 생성·홈/3D·반출 Y/N·재반입·폐기 조건·정정과 푸시 서비스 발송 수락을 확인했다. 실제 Pi 카메라·GPIO·인식 정확도와 24시간 실시간 경과는 확인하지 않았다. 상세 결과와 시험 데이터 정리는 [종단 점검](../docs/PIPELINE_AUDIT.md)을 따른다. 아래 날짜가 명시된 이전 검증은 해당 시점의 기록이다.
+
 `python backend/deploy_pipeline_fixes.py`는 기존 함수 5개의 패키지와 리비전을 읽고 변경 패키지를 준비한다. `--apply`에서만 코드를 갱신한다. 역할·환경변수·VAPID·API 인증·기존 의존성은 보존한다. 운영 OCR은 검토한 소스 해시일 때만 Pi ID·완료 기록 연결을 삽입하며 알 수 없는 버전은 중단한다. 갱신 전 ZIP은 CloudShell의 `~/medkit-pipeline-backup-20261111`에 접근 제한 파일로 보존한다.
 
 단계 역순·지연·15분 확인 대기, 재고/촬영 종료의 원자 저장, 제품 상태를 이용한 가림 판별, 3D 좌표 전달, 초기 수량 보완, 전체 재고 페이지 조회, 촬영 정정, 유지보수 오류 격리를 같은 변경으로 적용한다. 계약은 [CONTRACTS.md](../docs/CONTRACTS.md)의 2026-11-11 수정 계약을 따른다. 실제 배포·종단 검증 결과는 [PIPELINE_AUDIT.md](../docs/PIPELINE_AUDIT.md)에 기록한다.

@@ -4,7 +4,7 @@ Raspberry Pi 카메라가 도착하기 전에 iPhone의 DroidCam 영상을 OpenC
 
 실제 Pi용 자동 촬영·GPIO·영속 큐 코드는 [`Raspberry_Pi/`](../Raspberry_Pi/README.md)에 별도로 있다. 이 폴더의 촬영·품질 검사 실험을 Pi 실행 흐름에 통합한 상태는 아니다. PC의 대상 제거 후 재촬영 규칙은 시연 반복용이며, 최종 Pi의 개폐 세션당 1회 규칙을 변경하지 않는다.
 
-Pi 기능과 S3 전송을 참고할 수 있도록 원본을 보존한 복사본을 [`pi/`](pi/README.md)에 두었다. 기존 `camera_preview.py`·촬영 기준·설치 환경은 그대로이며 사진은 계속 `local_data/camera_captures/`에만 저장한다. 복사본의 카메라·센서·전송 코드는 이 PC 실행 흐름에 연결하지 않았다. 원본과 복사본은 자동 동기화되지 않으며, Pi 복사본의 설치·검증은 해당 폴더에서 별도로 수행한다.
+현재 Pi 설치 대상은 단계별 OCR·내부 비교와 AWS 전송을 구현한 [`pi/`](pi/README.md)다. 기존 `camera_preview.py` PC 실험과는 연결하지 않았고 초기 `Raspberry_Pi/` 원본과 자동 동기화되지 않는다. 실제 Pi 배선·촬영 검증은 남아 있다.
 
 ## 환경과 설치
 

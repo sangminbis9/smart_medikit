@@ -6,7 +6,7 @@
 
 2026-11-10 추가: 실기기 `aws.staged_capture=true` 모드는 포장 저장 직후 OCR 전송을 시작하고 내부 저장 후 별도 로컬 분석을 시작한다. OCR 전송 실패나 지연은 로컬 판단을 막지 않는다. 시작할 때 뚜껑이 닫혀 있으면 기준 사진을 먼저 확보한다. 자동 모드는 최상단 새 후보 하나를 방향 확인 없이 반입 추정으로 처리한다. 아래 CLI는 기존 보수적 실험 방식이다. 기준 사진이 없으면 첫 동작을 임의 반입으로 만들지 않는다.
 
-실제 연결에는 촬영 API 배포 후 `prefix=medkit-sessions`, `ocr_input_prefix=ocr-input`, `manifest_name=closed-ready.json`, 새 상태 URL과 단기 SigV4 인증 설정이 필요하다. AWS는 기본 비활성화다. 마지막 내부 기준 JPEG 한 장은 로컬 SQLite에 보관하며 완료된 세션 사진은 기존 정리 정책을 따른다. 실기기와 실제 AWS 통합 검증은 아직 수행하지 않았다.
+실제 연결에는 `prefix=medkit-sessions`, `ocr_input_prefix=ocr-input`, `manifest_name=closed-ready.json`, 배포된 상태 URL과 단기 SigV4 인증이 필요하다. AWS는 예제에서 기본 비활성화다. 마지막 내부 기준 JPEG 한 장은 로컬 SQLite에 보관하며 완료된 세션 사진은 기존 정리 정책을 따른다. AWS S3부터의 합성 이미지 통합 검증은 완료했지만 실제 Pi 촬영·배선·로그인은 검증하지 않았다. [종단 점검](../../docs/PIPELINE_AUDIT.md)
 
 `medikit_pi.movement`는 같은 구도에서 닫힌 보관함의 전후 사진을 각각 YOLOE로 탐지해 위치가 겹치는 후보를 대응시키고, 한 후보만 늘거나 줄면 반입 또는 반출 **추정 후보**를 만든다. 반입한 약은 최상단에 놓는 운영 조건을 전제로 하며, 새 포장에 아래 포장이 가려지거나 다시 드러날 가능성이 보이면 방향을 보류한다. 여러 변화·중복 대응·장면 전체 변화·사진 오류도 방향을 제안하지 않는다. 모든 결과는 `REVIEW_REQUIRED`이며 약품 식별, 실제 이동 및 복용을 확정하지 않는다. 포장 가림·위치 이동·탐지 실패가 입출고처럼 보일 수 있어 **실물 데이터로 검증하기 전 재고·알림·24시간 처리에 연결하지 않는다.**
 
@@ -23,9 +23,9 @@ python -m medikit_pi.movement --config config.toml --before before.jpg --after a
 
 기존 [PC 카메라 미리보기](../README.md)는 그대로 사용하며, 이 복사본의 기능을 호출하거나 AWS에 업로드하지 않는다. 복사본도 기본 `aws.enabled=false`이며 로컬 데이터는 원본과 분리된 `local_data/hardware_pi/`에 저장한다. 단, 복사본의 Pi 실행 모드는 전송을 꺼도 큐를 쌓으므로 이후 AWS를 활성화하면 그 큐도 전송 대상이다.
 
-기본 실기기 설치 대상은 **64비트 Raspberry Pi OS Bookworm, Python 3.11**이다. 영상 모드는 Python 3.11 이상을 지원한다. Pi 모델·GPIO·실제 조명/센서는 아직 미확정이며, 실제 Pi에서 성능과 배선 검증을 수행하지 않았다. 아래 2026-10-26 검증 기록은 원본의 기록이며 복사본에서 실기기나 AWS 연결을 검증했다는 뜻은 아니다.
+기본 실기기 설치 대상은 **64비트 Raspberry Pi OS Bookworm, Python 3.11**이다. 영상 모드는 Python 3.11 이상을 지원한다. Pi 모델·GPIO·실제 조명/센서는 아직 미확정이며, 실제 Pi에서 성능과 배선 검증을 수행하지 않았다. 아래 2026-10-26 검증 기록은 원본의 기록이며 실기기 통합 성공을 뜻하지 않는다.
 
-S3 전송을 읽어 볼 때는 [`transport.py`](medikit_pi/transport.py)의 `S3Transport.upload()`와 `status()`, [`outbox.py`](medikit_pi/outbox.py)의 `Outbox`와 `SyncWorker.step()`, [`__main__.py`](medikit_pi/__main__.py)의 `run_hardware()` 순서로 확인한다. 버킷·리전·상태 URL은 [`config.example.toml`](config.example.toml)의 `[aws]`에 있으나 실제 연결값은 비어 있다.
+S3 전송을 읽어 볼 때는 [`transport.py`](medikit_pi/transport.py)의 `S3Transport.upload()`와 `status()`, [`outbox.py`](medikit_pi/outbox.py)의 `Outbox`와 `SyncWorker.step()`, [`__main__.py`](medikit_pi/__main__.py)의 `run_hardware()` 순서로 확인한다. 버킷·리전·상태 URL은 [`config.example.toml`](config.example.toml)의 `[aws]`에 배포값이 입력되어 있고 전송은 기본적으로 꺼져 있다.
 
 ## 구성과 동작
 

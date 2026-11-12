@@ -2,23 +2,25 @@
 
 > **상세 요구사항의 최종 기준:** [`../plan.md`](../plan.md). 이 문서는 **각 팀원이 어디까지 책임지는지**에 집중한다.
 
+> **현재 구현과 검증:** Pi 설치 대상은 `hardware/pi`다. 포장 촬영 후 OCR 업로드와 닫힘 후 내부 판단을 독립 실행하고 서버가 결과를 결합한다. 운영 OCR은 ECR이 아닌 기존 Python ZIP에 Pi 어댑터를 추가한 배포다. 아래 다이어그램의 WebSocket·보완 OCR·복약 예약은 설계 경계를 포함하며 모든 경로가 배포 완료되었다는 의미는 아니다. S3부터의 합성 검증 및 실물 Pi 미검증 범위는 [종단 점검](PIPELINE_AUDIT.md)을 따른다.
+
 ## 1. 전체 데이터 흐름
 
 ```text
-[약 상자 / 처방약 봉투]
+[일반의약품 포장]
     ↓ 뚜껑 카메라 제시 (앱 사전 등록 불필요)
 [Raspberry Pi / Python / OpenCV]
   - 개폐 센서, RGBW LED, 영상 안정화, 세션당 포장 촬영 1회
   - 뚜껑 닫힘 후 내부 이미지 촬영, 순차 로컬 큐
     ↓ S3에 이벤트 단위 업로드
-[Amazon S3 → Lambda 컨테이너(ECR)]
+[Amazon S3 → 기존 Python ZIP OCR Lambda]
   - PaddleOCR + OpenCV, 포장 후보 탐색, 최초 등록 또는 기존 포장 매칭
-  - 식약처 제품정보, DUR 안전정보 연계
+  - 식약처 제품정보 조회
     ↓
 [Lambda + DynamoDB]
   - 반입/반출, 재고/복약 추정, 안전정보·만료일, 이벤트 멱등성
-  - 보류·정정 이력 저장 및 복용 알림 예약
-    ├─ API Gateway WebSocket → 활성 React 웹앱 실시간 갱신
+  - 보류·정정 이력과 반출 확인·폐기 추정, 알림 처리
+    ├─ API Gateway 조회 → React 웹앱 갱신 (WebSocket은 선택적)
     └─ Lambda → 브라우저 푸시 서비스(Web Push/VAPID)
                → 구독 브라우저/PWA Service Worker → 알림 표시
 [React(TypeScript) + Tailwind CSS + Three.js 직접 연동]
@@ -27,15 +29,19 @@
 
 [GitHub main 직접 push → Amplify Hosting → HTTPS 웹/PWA 제공]
   - Manifest·Service Worker·React 정적 빌드 배포
+
+[수동 복용약 등록 → 별도 복용약 API → 전용 DynamoDB]
+  - 처방 묶음·약별 일정·식약처 제품 정보·복용 기록
+  - 물리적 포장 재고와 별도 저장
 ```
 
-보완 정보가 부족할 때만 **웹 촬영/파일 선택 → 개인정보 제거 → 제한된 임시 S3 → 기존 ECR Lambda/PaddleOCR → 사용자 검토·확인** 경로를 사용한다. Pi 촬영 세션과 구분하며 보완 업로드만으로 입출고·차감을 만들지 않는다. 성공·실패·취소 및 중단 작업의 임시 이미지는 삭제한다.
+웹 촬영을 통한 처방 정보 보완은 별도 설계 경계이며 현재 수동 복용약 등록의 필수 경로가 아니다. 구현할 경우 개인정보 제거·임시 원본 정리와 Pi 이벤트 분리 정책을 따른다. 현재 수동 복용약은 입력 정보와 식약처 후보의 비교로 제품 정보를 연결한다.
 
 ## 2. 3인 개발 경계
 
 | 영역 | 담당 | 입력 | 출력 / 책임 |
 |---|---|---|---|
-| `Raspberry_Pi/` (`hardware/`는 PC 입력 실험 유지) | Raspberry Pi / 비전 | 개폐 센서, 카메라 | YOLOE-26n 후보 감지, 촬영 세션, 전처리 이미지, 영속 순차 전송 큐, LED |
+| `hardware/pi/` (`Raspberry_Pi/`는 초기 원본, `hardware/`는 PC 실험 유지) | Raspberry Pi / 비전 | 개폐 센서, 카메라 | YOLOE-26n 후보 감지, 촬영 세션, 전처리 이미지, 영속 순차 전송 큐, LED |
 | `backend/` | AWS / OCR / DB | 세션·보완 이미지, 외부 의약품 데이터, 웹 요청·브라우저 구독 | 제품 식별, 상태 갱신, 재고/복용 추정, API, WebSocket, 보완 OCR·이미지 삭제, Web Push 발송·구독 저장·VAPID 비밀키 관리 |
 | `frontend/` | React / PWA / Three.js | 기존 Figma, 조회 API, 실시간 이벤트, Web Push | PC·Android·iPhone 반응형 화면, 촬영/파일 선택·검토·정정, Three.js 직접 연동, Manifest·Service Worker·구독·권한·설치 안내, Amplify·GitHub 배포 연동 |
 
@@ -58,7 +64,7 @@
 - **단일 Raspberry Pi 기반 프로토타입 1대.** 개발팀이 Wi-Fi·AWS 연동을 미리 설정한다.
 - React 웹앱은 회원가입·로그인·초대코드·보관함 페어링 없이 HTTPS URL 접속으로 테스트용 단일 보관함 데이터를 연다. 기본 기능은 PWA 설치를 강제하지 않는다.
 - 약품 식별 스티커/ArUco/QR코드 부착과 실제 포장 사진을 3D 텍스처로 렌더링하는 기능은 제외한다.
-- 인증 없는 공개 쓰기 API나 실제 개인정보를 수집하는 공개 서비스로 출시한다고 가정하지 않는다.
+- 사용자 승인에 따른 무인증 공개 시연은 수동 복용약과 별도 반출·최초 정보 API에 적용되어 있다. 실제 개인정보를 입력하는 공개 서비스로 출시한다고 가정하지 않는다. 공개 범위는 [백엔드 안내](../backend/README.md)에서 확인한다.
 
 ## 5. 웹 실행·푸시·배포 경계
 

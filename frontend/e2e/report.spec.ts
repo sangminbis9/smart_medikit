@@ -218,6 +218,9 @@ test('복약에서 기록을 선택해 약별 요약과 날짜 내역을 본다'
   ).toHaveAttribute('aria-pressed', 'true');
   await expect(list.getByText('미복용 시험약')).toHaveCount(0);
   await expect(list.getByText('제외된 처방약')).toHaveCount(0);
+  await page.getByRole('button', { name: '직접 설정', exact: true }).click();
+  await page.getByLabel('시작일', { exact: true }).fill('2026-11-01');
+  await page.getByLabel('종료일', { exact: true }).fill('2026-11-12');
   // 기존 복약 탭의 자동 품목 연결은 별도 동작이며 보고서 선택 시점부터 검사한다.
   writes.length = 0;
   const excluded = list.getByRole('checkbox', {
@@ -228,6 +231,15 @@ test('복약에서 기록을 선택해 약별 요약과 날짜 내역을 본다'
   await expect(
     page.getByRole('heading', { name: '진료용 복용 이력', exact: true }),
   ).toBeVisible();
+  await expect(
+    page.getByRole('button', { name: '선택 수정', exact: true }),
+  ).toHaveCount(0);
+  await expect(
+    page.getByRole('link', { name: '복약으로 돌아가기' }),
+  ).toHaveCount(0);
+  await expect(
+    page.getByRole('button', { name: '기록 선택으로 돌아가기' }),
+  ).toHaveText('←');
   const group = page.getByRole('article', { name: '합성 일반약', exact: true });
   await expect(group.getByText('확인 1회', { exact: true })).toBeVisible();
   await expect(group.getByText('합성성분', { exact: true })).toBeVisible();
@@ -236,7 +248,15 @@ test('복약에서 기록을 선택해 약별 요약과 날짜 내역을 본다'
   await expect(
     page.getByRole('article', { name: '합성 처방약 250mg' }),
   ).toContainText('일정 날짜');
-  await page.getByRole('button', { name: '선택 수정' }).click();
+  await page.getByRole('button', { name: '기록 선택으로 돌아가기' }).click();
+  await expect(page).toHaveURL(/\/schedule\/report$/);
+  await expect(list).toBeVisible();
+  await expect(page.getByLabel('시작일', { exact: true })).toHaveValue(
+    '2026-11-01',
+  );
+  await expect(page.getByLabel('종료일', { exact: true })).toHaveValue(
+    '2026-11-12',
+  );
   await expect(excluded).not.toBeChecked();
   // 보고서 선택은 서버의 Y/N을 수정하지 않는다.
   await expect
@@ -348,7 +368,7 @@ test('선택과 보고서 모두 처방 이름으로 묶고 보관함 약은 별
   await expect(
     page.getByRole('heading', { name: '보관함 약', exact: true }),
   ).toHaveCount(0);
-  await page.getByRole('button', { name: '선택 수정' }).click();
+  await page.getByRole('button', { name: '기록 선택으로 돌아가기' }).click();
   await expect(
     cold.getByRole('checkbox', { name: /감기약 B/ }),
   ).not.toBeChecked();
@@ -448,7 +468,7 @@ test('보고서 생성 후의 서버 변경은 선택 수정에서 다시 검토
   await expect(
     page.getByRole('article', { name: '합성 처방약 250mg' }),
   ).toBeVisible();
-  await page.getByRole('button', { name: '선택 수정' }).click();
+  await page.getByRole('button', { name: '기록 선택으로 돌아가기' }).click();
   await expect(
     page.getByRole('region', { name: '복용 기록 선택' }).getByRole('checkbox'),
   ).toHaveCount(2);
@@ -502,6 +522,12 @@ test('오프라인에서 직접 기간을 바꾸면 이전 보고서를 끝낸�
   await page.getByRole('button', { name: '직접 설정', exact: true }).click();
   await page.getByRole('button', { name: '선택 완료 · 보고서 보기' }).click();
   await context.setOffline(true);
+  await expect(
+    page.getByRole('link', { name: '복약으로 돌아가기' }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole('button', { name: '기록 선택으로 돌아가기' }),
+  ).toHaveCount(0);
   await page.getByLabel('시작일', { exact: true }).fill('2026-07-01');
   await page.getByLabel('종료일', { exact: true }).fill('2026-07-31');
   await context.setOffline(false);
@@ -529,7 +555,7 @@ test('선택 수정에서 바뀐 보관함 기록을 다시 조회한다', async
       await route.fulfill({ json: { pending: [], history: [], reviews: [] } });
     },
   );
-  await page.getByRole('button', { name: '선택 수정' }).click();
+  await page.getByRole('button', { name: '기록 선택으로 돌아가기' }).click();
   await expect(
     page.getByRole('region', { name: '복용 기록 선택' }).getByRole('checkbox'),
   ).toHaveCount(1);
@@ -650,7 +676,7 @@ test('확인 기록 없는 수동 일정이 회차별 체크와 추정 요약으
   ).toBeVisible();
   await group.getByText('날짜별 내역', { exact: true }).click();
   await expect(group).toContainText('09:00 예정');
-  await page.getByRole('button', { name: '선택 수정' }).click();
+  await page.getByRole('button', { name: '기록 선택으로 돌아가기' }).click();
   await expect(excluded).not.toBeChecked();
   await page.getByRole('button', { name: '직접 설정', exact: true }).click();
   await page.getByLabel('시작일', { exact: true }).fill('2026-11-12');

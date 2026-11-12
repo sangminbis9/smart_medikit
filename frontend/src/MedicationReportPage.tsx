@@ -179,60 +179,54 @@ export default function MedicationReport({
   }
   return (
     <div className="standard-page report-page">
-      <Link
-        to="/schedule"
-        className="report-back"
-        aria-label="복약으로 돌아가기"
-        title="복약으로 돌아가기"
-      >
-        <span aria-hidden="true">←</span>
-      </Link>
-      <div className="page-heading">
-        <div>
-          <h1>진료용 보고서</h1>
-          <p>보여줄 기록을 고르고 약별로 정리해요.</p>
-        </div>
-        <button type="button" className="soft-button" onClick={retry}>
-          새로고침
-        </button>
-      </div>
-      {kit.demo && (
-        <p className="report-notice" role="status">
-          진료용 보고서는 시연 모드를 종료한 뒤 AWS에 저장된 기록으로 만들어요.
-        </p>
-      )}
-      {!kit.online && (
-        <p className="report-notice" role="alert">
-          인터넷 연결을 확인한 뒤 기록을 다시 불러와주세요.
-        </p>
-      )}
-      {medications.status !== 'ready' && !kit.demo && (
-        <MedicationAccess
-          status={medications.status}
-          error={medications.error}
-          busy={medications.busy}
-          onUnlock={medications.unlock}
-          onReload={medications.reload}
-          publicAccess={medications.publicAccess}
-        />
-      )}
-      {status === 'error' && !kit.demo && kit.online && (
-        <p className="report-notice" role="alert">
-          {error}
-        </p>
-      )}
-      {!ready && (
-        <p className="caption" role="status">
-          두 종류의 기록을 모두 불러온 뒤 보고서를 볼 수 있어요.
-        </p>
-      )}
       <ReportSelection
         key={`${kit.demo}:${selectionVersion}`}
         source={source}
         ready={ready}
         productWarning={productWarning}
         onRefresh={refreshSources}
-      />
+      >
+        <div className="page-heading">
+          <div>
+            <h1>진료용 보고서</h1>
+            <p>보여줄 기록을 고르고 약별로 정리해요.</p>
+          </div>
+          <button type="button" className="soft-button" onClick={retry}>
+            새로고침
+          </button>
+        </div>
+        {kit.demo && (
+          <p className="report-notice" role="status">
+            진료용 보고서는 시연 모드를 종료한 뒤 AWS에 저장된 기록으로
+            만들어요.
+          </p>
+        )}
+        {!kit.online && (
+          <p className="report-notice" role="alert">
+            인터넷 연결을 확인한 뒤 기록을 다시 불러와주세요.
+          </p>
+        )}
+        {medications.status !== 'ready' && !kit.demo && (
+          <MedicationAccess
+            status={medications.status}
+            error={medications.error}
+            busy={medications.busy}
+            onUnlock={medications.unlock}
+            onReload={medications.reload}
+            publicAccess={medications.publicAccess}
+          />
+        )}
+        {status === 'error' && !kit.demo && kit.online && (
+          <p className="report-notice" role="alert">
+            {error}
+          </p>
+        )}
+        {!ready && (
+          <p className="caption" role="status">
+            두 종류의 기록을 모두 불러온 뒤 보고서를 볼 수 있어요.
+          </p>
+        )}
+      </ReportSelection>
     </div>
   );
 }
@@ -243,11 +237,13 @@ function ReportSelection({
   ready,
   productWarning,
   onRefresh,
+  children,
 }: {
   source: ReportSource | null;
   ready: boolean;
   productWarning: boolean;
   onRefresh: () => void;
+  children: ReactNode;
 }) {
   const [preset, setPreset] = useState<1 | 3 | 6 | 'custom'>(1);
   const [range, setRange] = useState(
@@ -349,124 +345,152 @@ function ReportSelection({
     window.scrollTo(0, 0);
   }
 
+  // 보고서에서는 선택을 수정하고 선택 화면에서는 복약 화면으로 돌아간다.
+  const header = (
+    <>
+      {preview && ready ? (
+        <button
+          type="button"
+          className="report-back"
+          aria-label="기록 선택으로 돌아가기"
+          title="기록 선택으로 돌아가기"
+          onClick={editSelection}
+        >
+          <span aria-hidden="true">←</span>
+        </button>
+      ) : (
+        <Link
+          to="/schedule"
+          className="report-back"
+          aria-label="복약으로 돌아가기"
+          title="복약으로 돌아가기"
+        >
+          <span aria-hidden="true">←</span>
+        </Link>
+      )}
+      {children}
+    </>
+  );
+
   if (preview && ready)
     return (
-      <section className="report-document" aria-label="진료용 복용 이력">
-        <div className="report-document-heading">
-          <div>
-            <h2>진료용 복용 이력</h2>
-            <p>
-              조회 기간 {previewRange.start} ~ {previewRange.end}
-            </p>
+      <>
+        {header}
+        <section className="report-document" aria-label="진료용 복용 이력">
+          <div className="report-document-heading">
+            <div>
+              <h2>진료용 복용 이력</h2>
+              <p>
+                조회 기간 {previewRange.start} ~ {previewRange.end}
+              </p>
+            </div>
           </div>
-          <button type="button" className="soft-button" onClick={editSelection}>
-            선택 수정
-          </button>
-        </div>
-        <p className="report-totals">
-          약별 요약 {groupCount}개 · 선택한 기록 {previewRecords.length}건
-        </p>
-        <p className="report-caption">
-          선택 완료 시점의 사용자 확인·일정 기반 추정 기록입니다. 보관함 기록은
-          반출 날짜, 수동 처방약은 일정 날짜 기준이며 추정 항목은 실제 복용
-          확인이 아닙니다.
-        </p>
-        {productWarning && (
-          <p className="report-caption">
-            일부 제품·성분 정보는 확인되지 않아 표시하지 않았어요.
+          <p className="report-totals">
+            약별 요약 {groupCount}개 · 선택한 기록 {previewRecords.length}건
           </p>
-        )}
-        <div className="report-groups">
-          {categories.map(
-            // 수동 처방만 카테고리 제목을 붙이고 개별 보관함 약은 그대로 표시한다.
-            function category(category) {
-              return (
-                <ReportCategorySection key={category.key} category={category}>
-                  {category.groups.map(
-                    // 동일 약의 확인 횟수와 선택된 날짜별 내역을 함께 보여준다.
-                    function group(item) {
-                      const Heading = category.title === null ? 'h3' : 'h4';
-                      return (
-                        <article
-                          className="report-drug"
-                          key={item.key}
-                          aria-label={[item.name, item.strength]
-                            .filter(Boolean)
-                            .join(' ')}
-                        >
-                          <div className="report-drug-heading">
-                            <Heading>
-                              {item.name}{' '}
-                              {item.strength && <span>{item.strength}</span>}
-                            </Heading>
-                            <strong>
-                              {item.scheduledCount ? '기록' : '확인'}{' '}
-                              {item.count}회
-                            </strong>
-                          </div>
-                          {item.scheduledCount > 0 && (
-                            <p className="report-caption">
-                              사용자 확인 {item.confirmedCount}회 / 일정 기반
-                              추정 {item.scheduledCount}회
-                            </p>
-                          )}
-                          {item.ingredients.length > 0 && (
-                            <p className="report-ingredients">
-                              {item.ingredients.join(', ')}
-                            </p>
-                          )}
-                          <p className="report-drug-period">
-                            기록 기간 {item.start} ~ {item.end}
-                          </p>
-                          <details>
-                            <summary>날짜별 내역</summary>
-                            <ul className="report-detail-list">
-                              {item.records.map(
-                                // 확인 시각 대신 반출·일정 날짜와 저장된 양만 표시한다.
-                                function detail(record) {
-                                  return (
-                                    <li key={record.id}>
-                                      <span>
-                                        <span>{record.dateKind}</span>{' '}
-                                        <time dateTime={record.date}>
-                                          {record.date}
-                                        </time>
-                                        {record.time && (
-                                          <span> · {record.time} 예정</span>
-                                        )}
-                                        {record.certainty === 'scheduled' && (
-                                          <span className="report-estimate">
-                                            일정 기반 추정
-                                          </span>
-                                        )}
-                                      </span>
-                                      <span>
-                                        {record.incomplete
-                                          ? '개별 약 정보 없음'
-                                          : record.amount
-                                            ? `${record.dateKind === '일정 날짜' ? '입력 복용량' : '확인 수량'} ${record.amount}`
-                                            : '수량 정보 없음'}
-                                      </span>
-                                    </li>
-                                  );
-                                },
-                              )}
-                            </ul>
-                          </details>
-                        </article>
-                      );
-                    },
-                  )}
-                </ReportCategorySection>
-              );
-            },
+          <p className="report-caption">
+            선택 완료 시점의 사용자 확인·일정 기반 추정 기록입니다. 보관함
+            기록은 반출 날짜, 수동 처방약은 일정 날짜 기준이며 추정 항목은 실제
+            복용 확인이 아닙니다.
+          </p>
+          {productWarning && (
+            <p className="report-caption">
+              일부 제품·성분 정보는 확인되지 않아 표시하지 않았어요.
+            </p>
           )}
-        </div>
-      </section>
+          <div className="report-groups">
+            {categories.map(
+              // 수동 처방만 카테고리 제목을 붙이고 개별 보관함 약은 그대로 표시한다.
+              function category(category) {
+                return (
+                  <ReportCategorySection key={category.key} category={category}>
+                    {category.groups.map(
+                      // 동일 약의 확인 횟수와 선택된 날짜별 내역을 함께 보여준다.
+                      function group(item) {
+                        const Heading = category.title === null ? 'h3' : 'h4';
+                        return (
+                          <article
+                            className="report-drug"
+                            key={item.key}
+                            aria-label={[item.name, item.strength]
+                              .filter(Boolean)
+                              .join(' ')}
+                          >
+                            <div className="report-drug-heading">
+                              <Heading>
+                                {item.name}{' '}
+                                {item.strength && <span>{item.strength}</span>}
+                              </Heading>
+                              <strong>
+                                {item.scheduledCount ? '기록' : '확인'}{' '}
+                                {item.count}회
+                              </strong>
+                            </div>
+                            {item.scheduledCount > 0 && (
+                              <p className="report-caption">
+                                사용자 확인 {item.confirmedCount}회 / 일정 기반
+                                추정 {item.scheduledCount}회
+                              </p>
+                            )}
+                            {item.ingredients.length > 0 && (
+                              <p className="report-ingredients">
+                                {item.ingredients.join(', ')}
+                              </p>
+                            )}
+                            <p className="report-drug-period">
+                              기록 기간 {item.start} ~ {item.end}
+                            </p>
+                            <details>
+                              <summary>날짜별 내역</summary>
+                              <ul className="report-detail-list">
+                                {item.records.map(
+                                  // 확인 시각 대신 반출·일정 날짜와 저장된 양만 표시한다.
+                                  function detail(record) {
+                                    return (
+                                      <li key={record.id}>
+                                        <span>
+                                          <span>{record.dateKind}</span>{' '}
+                                          <time dateTime={record.date}>
+                                            {record.date}
+                                          </time>
+                                          {record.time && (
+                                            <span> · {record.time} 예정</span>
+                                          )}
+                                          {record.certainty === 'scheduled' && (
+                                            <span className="report-estimate">
+                                              일정 기반 추정
+                                            </span>
+                                          )}
+                                        </span>
+                                        <span>
+                                          {record.incomplete
+                                            ? '개별 약 정보 없음'
+                                            : record.amount
+                                              ? `${record.dateKind === '일정 날짜' ? '입력 복용량' : '확인 수량'} ${record.amount}`
+                                              : '수량 정보 없음'}
+                                        </span>
+                                      </li>
+                                    );
+                                  },
+                                )}
+                              </ul>
+                            </details>
+                          </article>
+                        );
+                      },
+                    )}
+                  </ReportCategorySection>
+                );
+              },
+            )}
+          </div>
+        </section>
+      </>
     );
 
   return (
     <>
+      {header}
       <section className="report-period" aria-label="조회 기간">
         <h2>조회 기간</h2>
         <div className="report-presets">

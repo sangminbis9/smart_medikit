@@ -22,6 +22,7 @@ registerRoute(
     allowlist: [
       /^\/$/,
       /^\/(schedule|alerts|device)\/?$/,
+      /^\/schedule\/report\/?$/,
       /^\/packages\/[^/.]+\/?$/,
       /^\/care(?:\/[a-z-]+)?\/?$/,
     ],

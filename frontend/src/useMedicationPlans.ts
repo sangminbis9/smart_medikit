@@ -536,6 +536,27 @@ export function useMedicationPlans(demo: boolean) {
     lock();
   }
 
+  // 보고서가 기존 화면의 캐시 대신 인증된 최신 스냅샷을 읽도록 제공한다.
+  const readSnapshot = useCallback(
+    async function readSnapshot(): Promise<Snapshot> {
+      if (
+        demo ||
+        status !== 'ready' ||
+        !apiUrl ||
+        (!publicAccess && !token.current)
+      )
+        throw new Error('복용약 목록의 연결과 잠금을 확인해주세요.');
+      const session = generation.current;
+      const next = parseSnapshot(
+        await request('/medications', 'GET', token.current),
+      );
+      if (session !== generation.current)
+        throw new Error('복용약 접근 상태가 변경됐어요. 다시 불러와주세요.');
+      return next;
+    },
+    [demo, status],
+  );
+
   return {
     state: demo ? demoState : snapshot.state,
     status: demo ? ('ready' as const) : status,
@@ -553,6 +574,7 @@ export function useMedicationPlans(demo: boolean) {
     toggleEnded,
     record,
     reload,
+    readSnapshot,
     resetDemo,
     unlock,
     lock,

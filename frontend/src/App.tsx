@@ -13,6 +13,7 @@ import { useMedicationPlans } from './useMedicationPlans';
 import { Badge, Icon } from './ui';
 import Home, { Search } from './Home';
 import Schedule from './Schedule';
+import MedicationReport from './MedicationReportPage';
 import Alerts from './Alerts';
 import PackageDetail from './PackageDetail';
 import Device from './Device';
@@ -178,6 +179,10 @@ export default function App() {
             <Route
               path="/schedule"
               element={<Schedule kit={kit} medications={medications} />}
+            />
+            <Route
+              path="/schedule/report"
+              element={<MedicationReport kit={kit} medications={medications} />}
             />
             <Route path="/care" element={<CareIndex />} />
             <Route path="/care/:symptomId" element={<CareDetail kit={kit} />} />

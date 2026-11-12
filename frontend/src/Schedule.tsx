@@ -1,4 +1,5 @@
 import { useState, type FormEvent } from 'react';
+import { Link } from 'react-router-dom';
 import { dayKey, displayMedicineName, timeLabel, type Dose } from './data';
 import type { Medkit } from './useMedkit';
 import { Badge, Dialog, EmptyState, Icon, Note } from './ui';
@@ -136,6 +137,9 @@ export default function Schedule({
         <div>
           <h1>복약</h1>
           <p>일정과 기록을 함께 확인해요.</p>
+          <Link className="text-button" to="/schedule/report">
+            진료용 보고서
+          </Link>
         </div>
         <button className="soft-button" onClick={today}>
           오늘

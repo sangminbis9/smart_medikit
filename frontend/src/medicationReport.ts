@@ -11,6 +11,8 @@ export type ReportRecord = {
   ingredients: string[];
   date: string;
   dateKind: '반출 날짜' | '일정 날짜';
+  time?: string;
+  certainty: 'confirmed' | 'scheduled';
   amount: string | null;
   incomplete: boolean;
 };
@@ -22,6 +24,8 @@ export type ReportGroup = {
   start: string;
   end: string;
   count: number;
+  confirmedCount: number;
+  scheduledCount: number;
   records: ReportRecord[];
 };
 export type ReportProducts = {
@@ -63,17 +67,19 @@ export function reportRange(
 function newestFirst(left: ReportRecord, right: ReportRecord): number {
   return (
     right.date.localeCompare(left.date) ||
+    (right.time ?? '').localeCompare(left.time ?? '') ||
     left.name.localeCompare(right.name, 'ko') ||
     left.id.localeCompare(right.id)
   );
 }
 
-// 기존 서버 확인만 변환하고 반출·일정 날짜를 실제 섭취 시각으로 해석하지 않는다.
+// 기존 확인과 지난 일정의 추정을 구분하고 날짜를 실제 섭취 시각으로 해석하지 않는다.
 export function buildReportRecords(
   activity: Activity,
   state: MedicationState,
   packages: Package[],
   products: ReportProducts = { links: [], details: {} },
+  period?: { start: string; end: string; now: Date },
 ): ReportRecord[] {
   const result: ReportRecord[] = [];
   const packageMap = new Map<string, Package>();
@@ -92,6 +98,7 @@ export function buildReportRecords(
       ingredients: code ? (medicine?.ingredients ?? []) : [],
       date: dayKey(event.occurredAt),
       dateKind: '반출 날짜',
+      certainty: 'confirmed',
       amount:
         event.quantity === null
           ? null
@@ -107,7 +114,50 @@ export function buildReportRecords(
     const match = /:(\d{4}-\d{2}-\d{2})T\d{2}:\d{2}\+09:00$/.exec(
       record.occurrenceId,
     );
-    if (match) dates.add(match[1]);
+    if (
+      match &&
+      (!period || (match[1] >= period.start && match[1] <= period.end))
+    )
+      dates.add(match[1]);
+  }
+  // 조회 기간과 실제 등록 일정이 겹치는 날짜만 추가하고 미래 날짜는 순회하지 않는다.
+  if (period && validReportRange(period.start, period.end)) {
+    const today = dayKey(period.now);
+    let first: string | null = null;
+    let last: string | null = null;
+    for (const plan of state.plans) {
+      const timings = plan.medicines.length
+        ? plan.medicines.map(
+            // 약별 예외가 있으면 공통 일정보다 우선한다.
+            function timing(medicine) {
+              return medicine.timing ?? plan.timing;
+            },
+          )
+        : [plan.timing];
+      for (const timing of timings) {
+        if (timing.mode !== 'regular' || !timing.schedule) continue;
+        const schedule = timing.schedule;
+        const start =
+          period.start > schedule.startDate ? period.start : schedule.startDate;
+        let end = period.end < today ? period.end : today;
+        if (schedule.endDate && schedule.endDate < end) end = schedule.endDate;
+        if (plan.endedOn && plan.endedOn < end) end = plan.endedOn;
+        if (start > end) continue;
+        if (first === null || start < first) first = start;
+        if (last === null || end > last) last = end;
+      }
+    }
+    if (first !== null && last !== null) {
+      const cursor = new Date(`${first}T00:00:00Z`);
+      for (
+        let day = first;
+        day <= last;
+        day = cursor.toISOString().slice(0, 10)
+      ) {
+        dates.add(day);
+        cursor.setUTCDate(cursor.getUTCDate() + 1);
+      }
+    }
   }
   const links = new Map<string, ProductLink>();
   for (const link of products.links)
@@ -115,8 +165,20 @@ export function buildReportRecords(
   for (const date of dates) {
     for (const occurrence of occurrencesOnDay(state, date)) {
       const record = occurrence.record;
-      if (!record || (record.result !== 'all' && record.result !== 'some'))
+      if (record && record.result !== 'all' && record.result !== 'some')
         continue;
+      // 확인이 없는 회차만 지난 예정 시각에 근거한 추정으로 표시하며 서버에는 저장하지 않는다.
+      if (
+        !record &&
+        (!period ||
+          !validReportRange(period.start, period.end) ||
+          date < period.start ||
+          date > period.end ||
+          Date.parse(`${date}T${occurrence.time}:00+09:00`) >
+            period.now.getTime())
+      )
+        continue;
+      const certainty = record ? 'confirmed' : 'scheduled';
       if (occurrence.medicines.length === 0) {
         result.push({
           id: `manual:${occurrence.id}:unknown`,
@@ -126,12 +188,14 @@ export function buildReportRecords(
           ingredients: [],
           date,
           dateKind: '일정 날짜',
+          time: occurrence.time,
+          certainty,
           amount: null,
           incomplete: true,
         });
       }
       for (const medicine of occurrence.medicines) {
-        if (!record.takenMedicineIds.includes(medicine.id)) continue;
+        if (record && !record.takenMedicineIds.includes(medicine.id)) continue;
         const link = links.get(
           JSON.stringify([occurrence.planId, medicine.id]),
         );
@@ -155,6 +219,8 @@ export function buildReportRecords(
               : [],
           date,
           dateKind: '일정 날짜',
+          time: occurrence.time,
+          certainty,
           amount: medicine.dose || null,
           incomplete: false,
         });
@@ -164,7 +230,7 @@ export function buildReportRecords(
   return result.sort(newestFirst);
 }
 
-// 선택된 건만 동일 약 식별자로 묶어 기간·확인 횟수·날짜별 내역을 계산한다.
+// 선택된 건을 동일 약 식별자로 묶어 기간·확인/추정 횟수·날짜별 내역을 계산한다.
 export function groupReportRecords(records: ReportRecord[]): ReportGroup[] {
   const groups = new Map<string, ReportGroup>();
   for (const record of [...records].sort(newestFirst)) {
@@ -178,11 +244,15 @@ export function groupReportRecords(records: ReportRecord[]): ReportGroup[] {
         start: record.date,
         end: record.date,
         count: 0,
+        confirmedCount: 0,
+        scheduledCount: 0,
         records: [],
       };
       groups.set(record.groupKey, group);
     }
     group.count++;
+    if (record.certainty === 'scheduled') group.scheduledCount++;
+    else group.confirmedCount++;
     // 같은 품목의 최신 건에 성분이 없어도 선택된 다른 건의 확인 자료를 유지한다.
     if (!group.ingredients.length && record.ingredients.length)
       group.ingredients = [...record.ingredients];

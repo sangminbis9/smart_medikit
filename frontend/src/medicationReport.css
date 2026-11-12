@@ -6,6 +6,24 @@
   display: inline-block;
   margin-bottom: 18px;
 }
+a.report-navigation {
+  display: inline-flex;
+  min-height: 48px;
+  max-width: 100%;
+  margin-top: 12px;
+  font-size: 17px;
+  font-weight: 600;
+}
+.report-estimate {
+  display: inline-block;
+  margin-top: 6px;
+  padding: 3px 8px;
+  border-radius: 8px;
+  color: #8b4b29;
+  background: #fff4e8;
+  font-size: 12px;
+  line-height: 1.5;
+}
 .report-page h2 {
   font-size: 18px;
 }

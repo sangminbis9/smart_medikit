@@ -137,7 +137,10 @@ export default function Schedule({
         <div>
           <h1>복약</h1>
           <p>일정과 기록을 함께 확인해요.</p>
-          <Link className="text-button" to="/schedule/report">
+          <Link
+            className="primary-button report-navigation"
+            to="/schedule/report"
+          >
             진료용 보고서
           </Link>
         </div>

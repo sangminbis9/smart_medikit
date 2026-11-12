@@ -5,6 +5,7 @@ import type { MedicationState } from '../src/medicationPlans';
 async function prepare(
   page: Page,
   failed: 'activity' | 'medications' | 'none' = 'none',
+  manualState?: MedicationState,
 ) {
   await page.clock.install({ time: new Date('2026-11-12T03:00:00Z') });
   const writes: string[] = [];
@@ -19,8 +20,8 @@ async function prepare(
         timing: {
           mode: 'regular',
           schedule: {
-            startDate: '2026-01-01',
-            endDate: '',
+            startDate: '2026-11-10',
+            endDate: '2026-11-10',
             weekdays: [0, 1, 2, 3, 4, 5, 6],
             times: ['09:00'],
           },
@@ -152,7 +153,7 @@ async function prepare(
       await route.fulfill(
         failed === 'medications'
           ? { status: 503, json: {} }
-          : { json: { revision: 1, state } },
+          : { json: { revision: 1, state: manualState ?? state } },
       );
     } else if (path.endsWith('/links'))
       await route.fulfill({ json: { links: [] } });
@@ -167,8 +168,46 @@ test('복약에서 기록을 선택해 약별 요약과 날짜 내역을 본다'
 }) {
   const writes = await prepare(page);
   await page.goto('/schedule');
-  await page.getByRole('link', { name: '진료용 보고서', exact: true }).click();
+  const reportLink = page.getByRole('link', {
+    name: '진료용 보고서',
+    exact: true,
+  });
+  const linkStyle = await reportLink.evaluate(
+    // 글자 링크가 아닌 큰 배경색 버튼인지 실제 렌더링으로 검사한다.
+    function style(element) {
+      const css = getComputedStyle(element);
+      return {
+        background: css.backgroundColor,
+        radius: parseFloat(css.borderRadius),
+        font: parseFloat(css.fontSize),
+        height: element.getBoundingClientRect().height,
+      };
+    },
+  );
+  expect(linkStyle.background).not.toBe('rgba(0, 0, 0, 0)');
+  expect(linkStyle.radius).toBeGreaterThanOrEqual(12);
+  expect(linkStyle.font).toBeGreaterThanOrEqual(16);
+  expect(linkStyle.height).toBeGreaterThanOrEqual(44);
+  await reportLink.click();
   await expect(page).toHaveURL(/\/schedule\/report$/);
+  const backStyle = await page
+    .getByRole('link', { name: '복약으로 돌아가기' })
+    .evaluate(
+      // 돌아가기 링크에도 같은 버튼의 시각·터치 크기가 적용됐는지 검사한다.
+      function style(element) {
+        const css = getComputedStyle(element);
+        return {
+          background: css.backgroundColor,
+          radius: parseFloat(css.borderRadius),
+          font: parseFloat(css.fontSize),
+          height: element.getBoundingClientRect().height,
+        };
+      },
+    );
+  expect(backStyle.background).not.toBe('rgba(0, 0, 0, 0)');
+  expect(backStyle.radius).toBeGreaterThanOrEqual(12);
+  expect(backStyle.font).toBeGreaterThanOrEqual(16);
+  expect(backStyle.height).toBeGreaterThanOrEqual(44);
   const list = page.getByRole('region', { name: '복용 기록 선택' });
   await expect(list.getByRole('checkbox')).toHaveCount(3);
   await expect(
@@ -435,4 +474,114 @@ test('제품 연결 조회 중 수동 약이 변경되면 보고서를 보류한
   await expect(
     page.getByRole('button', { name: '선택 완료 · 보고서 보기' }),
   ).toBeDisabled();
+});
+
+// 수동 일정만 등록한 경우도 이미 지난 회차를 추정 항목으로 선택할 수 있어야 한다.
+test('확인 기록 없는 수동 일정이 회차별 체크와 추정 요약으로 나타난다', async function registeredSchedule({
+  page,
+}) {
+  const state: MedicationState = {
+    version: 1,
+    plans: [
+      {
+        id: 'scheduled-plan',
+        title: '감기약',
+        notes: '',
+        endedOn: null,
+        timing: {
+          mode: 'regular',
+          schedule: {
+            startDate: '2026-11-10',
+            endDate: '',
+            weekdays: [0, 1, 2, 3, 4, 5, 6],
+            times: ['09:00'],
+          },
+        },
+        medicines: [
+          {
+            id: 'scheduled-medicine',
+            name: '합성 일정약',
+            strength: '',
+            dose: '1정',
+            timing: null,
+          },
+        ],
+      },
+    ],
+    records: [],
+  };
+  const writes = await prepare(page, 'none', state);
+  await page.goto('/schedule/report');
+  const list = page.getByRole('region', { name: '복용 기록 선택' });
+  await expect(list.getByRole('checkbox')).toHaveCount(5);
+  await expect(list.getByText('일정 기반 추정', { exact: true })).toHaveCount(
+    3,
+  );
+  const excluded = list.getByRole('checkbox', {
+    name: /2026-11-11.*합성 일정약/,
+  });
+  await excluded.uncheck();
+  await page.getByRole('button', { name: '선택 완료 · 보고서 보기' }).click();
+  const group = page.getByRole('article', { name: '합성 일정약', exact: true });
+  await expect(group.getByText('기록 2회', { exact: true })).toBeVisible();
+  await expect(
+    group.getByText('사용자 확인 0회 / 일정 기반 추정 2회', { exact: true }),
+  ).toBeVisible();
+  await group.getByText('날짜별 내역', { exact: true }).click();
+  await expect(group).toContainText('09:00 예정');
+  await page.getByRole('button', { name: '선택 수정' }).click();
+  await expect(excluded).not.toBeChecked();
+  await page.getByRole('button', { name: '직접 설정', exact: true }).click();
+  await page.getByLabel('시작일', { exact: true }).fill('2026-11-12');
+  await page.getByLabel('종료일', { exact: true }).fill('2026-11-12');
+  await expect(list.getByRole('checkbox')).toHaveCount(1);
+  await expect(list.getByRole('checkbox').first()).toBeChecked();
+  expect(writes).toEqual([]);
+  expect(state.records).toEqual([]);
+});
+
+// 열어 둔 선택 화면도 예정 시각을 지나면 새 회차를 표시해야 한다.
+test('오전 9시가 되면 서버 기록 없이 오늘의 추정 회차가 나타난다', async function clockBoundary({
+  page,
+}) {
+  const state: MedicationState = {
+    version: 1,
+    plans: [
+      {
+        id: 'clock-plan',
+        title: '감기약',
+        notes: '',
+        endedOn: null,
+        timing: {
+          mode: 'regular',
+          schedule: {
+            startDate: '2026-11-10',
+            endDate: '',
+            weekdays: [0, 1, 2, 3, 4, 5, 6],
+            times: ['09:00', '18:00'],
+          },
+        },
+        medicines: [],
+      },
+    ],
+    records: [],
+  };
+  const writes = await prepare(page, 'none', state);
+  await page.clock.setSystemTime(new Date('2026-11-11T23:59:45Z'));
+  await page.goto('/schedule/report');
+  const list = page.getByRole('region', { name: '복용 기록 선택' });
+  await expect(list.getByRole('checkbox')).toHaveCount(6);
+  await page.clock.runFor(30000);
+  await expect(list.getByRole('checkbox')).toHaveCount(7);
+  await expect(
+    list.getByRole('checkbox', {
+      name: /2026-11-12.*감기약.*09:00 예정.*일정 기반 추정/,
+    }),
+  ).toBeChecked();
+  await expect(
+    list.getByRole('checkbox', {
+      name: /2026-11-11.*감기약.*18:00 예정.*일정 기반 추정/,
+    }),
+  ).toHaveCount(1);
+  expect(writes).toEqual([]);
 });

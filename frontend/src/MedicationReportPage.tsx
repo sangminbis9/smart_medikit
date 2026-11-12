@@ -1,7 +1,8 @@
-import { useEffect, useState, type ChangeEvent } from 'react';
+import { useEffect, useMemo, useState, type ChangeEvent } from 'react';
 import { Link } from 'react-router-dom';
-import { activitySchema, activityUrl } from './activity';
-import { dayKey } from './data';
+import { activitySchema, activityUrl, type Activity } from './activity';
+import { dayKey, type Package } from './data';
+import type { MedicationState } from './medicationPlans';
 import {
   buildReportRecords,
   groupReportRecords,
@@ -15,6 +16,13 @@ import type { MedicationPlansStore } from './useMedicationPlans';
 import MedicationAccess from './MedicationAccess';
 import './medicationReport.css';
 
+type ReportSource = {
+  activity: Activity;
+  state: MedicationState;
+  packages: Package[];
+  products: ReportProducts;
+};
+
 // 서버 기록은 읽기만 하며 기존 인증·시연 경계를 그대로 적용한다.
 export default function MedicationReport({
   kit,
@@ -25,7 +33,7 @@ export default function MedicationReport({
 }) {
   const [attempt, setAttempt] = useState(0);
   const [selectionVersion, setSelectionVersion] = useState(0);
-  const [records, setRecords] = useState<ReportRecord[]>([]);
+  const [source, setSource] = useState<ReportSource | null>(null);
   const [status, setStatus] = useState<'loading' | 'ready' | 'error'>(
     'loading',
   );
@@ -73,20 +81,11 @@ export default function MedicationReport({
           if (!active) return;
           const products: ReportProducts = { links: [], details: {} };
           let missingProducts = false;
-          if (before.state.records.length) {
+          if (before.state.plans.length) {
             try {
               products.links = await productSource.links();
-              const used = buildReportRecords(
-                { pending: [], history: [], reviews: [] },
-                before.state,
-                [],
-                products,
-              );
               const codes = new Set<string>();
-              for (const record of used) {
-                const match = /^product:(\d{9}):/.exec(record.groupKey);
-                if (match) codes.add(match[1]);
-              }
+              for (const link of products.links) codes.add(link.productCode);
               // 선택적인 제품 정보만 실패하면 확인된 복용 기록은 유지한다.
               for (const code of codes) {
                 if (!active) return;
@@ -110,9 +109,7 @@ export default function MedicationReport({
             throw new Error('RECORD_CHANGED');
           if (!active) return;
           const packages = kit.status === 'ready' ? kit.data.packages : [];
-          setRecords(
-            buildReportRecords(activity, before.state, packages, products),
-          );
+          setSource({ activity, state: before.state, packages, products });
           setProductWarning(
             missingProducts ||
               kit.status !== 'ready' ||
@@ -175,7 +172,10 @@ export default function MedicationReport({
   }
   return (
     <div className="standard-page report-page">
-      <Link to="/schedule" className="text-button report-back">
+      <Link
+        to="/schedule"
+        className="primary-button report-navigation report-back"
+      >
         복약으로 돌아가기
       </Link>
       <div className="page-heading">
@@ -219,7 +219,7 @@ export default function MedicationReport({
       )}
       <ReportSelection
         key={`${kit.demo}:${selectionVersion}`}
-        records={records}
+        source={source}
         ready={ready}
         productWarning={productWarning}
         onRefresh={refreshSources}
@@ -230,12 +230,12 @@ export default function MedicationReport({
 
 // 날짜별 건 선택과 선택한 약별 읽기 전용 보고서를 같은 화면에서 전환한다.
 function ReportSelection({
-  records,
+  source,
   ready,
   productWarning,
   onRefresh,
 }: {
-  records: ReportRecord[];
+  source: ReportSource | null;
   ready: boolean;
   productWarning: boolean;
   onRefresh: () => void;
@@ -246,6 +246,35 @@ function ReportSelection({
     function initialRange() {
       return reportRange(1);
     },
+  );
+  const [now, setNow] = useState(Date.now);
+  useEffect(function observeScheduleClock() {
+    // 예정 시각이 지나거나 화면으로 복귀하면 서버 쓰기 없이 추정 목록만 갱신한다.
+    function refreshClock() {
+      if (!document.hidden) setNow(Date.now());
+    }
+    const timer = window.setInterval(refreshClock, 30000);
+    document.addEventListener('visibilitychange', refreshClock);
+    // 화면을 떠나면 타이머와 이벤트를 정리한다.
+    return function cleanup() {
+      window.clearInterval(timer);
+      document.removeEventListener('visibilitychange', refreshClock);
+    };
+  }, []);
+  const records = useMemo(
+    // 표시 기간의 일정만 생성하며 확인 기록과 추정을 같은 회차에 중복 추가하지 않는다.
+    function recordsForPeriod() {
+      return source
+        ? buildReportRecords(
+            source.activity,
+            source.state,
+            source.packages,
+            source.products,
+            { ...range, now: new Date(now) },
+          )
+        : [];
+    },
+    [source, range, now],
   );
   const [excluded, setExcluded] = useState<Set<string>>(new Set());
   const [preview, setPreview] = useState(false);
@@ -325,12 +354,12 @@ function ReportSelection({
           </button>
         </div>
         <p className="report-totals">
-          약별 요약 {groups.length}개 · 선택한 확인 기록 {previewRecords.length}
-          건
+          약별 요약 {groups.length}개 · 선택한 기록 {previewRecords.length}건
         </p>
         <p className="report-caption">
-          선택 완료 시점의 사용자 확인 기록입니다. 보관함 기록은 반출 날짜, 수동
-          처방약은 일정 날짜 기준입니다.
+          선택 완료 시점의 사용자 확인·일정 기반 추정 기록입니다. 보관함 기록은
+          반출 날짜, 수동 처방약은 일정 날짜 기준이며 추정 항목은 실제 복용
+          확인이 아닙니다.
         </p>
         {productWarning && (
           <p className="report-caption">
@@ -354,8 +383,16 @@ function ReportSelection({
                       {item.name}{' '}
                       {item.strength && <span>{item.strength}</span>}
                     </h3>
-                    <strong>확인 {item.count}회</strong>
+                    <strong>
+                      {item.scheduledCount ? '기록' : '확인'} {item.count}회
+                    </strong>
                   </div>
+                  {item.scheduledCount > 0 && (
+                    <p className="report-caption">
+                      사용자 확인 {item.confirmedCount}회 / 일정 기반 추정{' '}
+                      {item.scheduledCount}회
+                    </p>
+                  )}
                   {item.ingredients.length > 0 && (
                     <p className="report-ingredients">
                       {item.ingredients.join(', ')}
@@ -377,6 +414,14 @@ function ReportSelection({
                                 <time dateTime={record.date}>
                                   {record.date}
                                 </time>
+                                {record.time && (
+                                  <span> · {record.time} 예정</span>
+                                )}
+                                {record.certainty === 'scheduled' && (
+                                  <span className="report-estimate">
+                                    일정 기반 추정
+                                  </span>
+                                )}
                               </span>
                               <span>
                                 {record.incomplete
@@ -491,7 +536,7 @@ function ReportSelection({
                               type="checkbox"
                               checked={!excluded.has(item.id)}
                               onChange={toggle}
-                              aria-label={`${item.date} ${item.name} ${item.strength} ${item.dateKind}`}
+                              aria-label={`${item.date} ${item.name} ${item.strength} ${item.dateKind}${item.time ? ` ${item.time} 예정` : ''} ${item.certainty === 'scheduled' ? '일정 기반 추정' : '사용자 확인'}${item.amount ? ` ${item.amount}` : ''}`}
                             />
                             <span>
                               <strong>
@@ -499,12 +544,18 @@ function ReportSelection({
                               </strong>
                               <small>
                                 {item.dateKind}
+                                {item.time && ` · ${item.time} 예정`}
                                 {item.incomplete
                                   ? ' · 개별 약 정보 없음'
                                   : item.amount
                                     ? ` · ${item.dateKind === '일정 날짜' ? '입력 복용량' : '확인 수량'} ${item.amount}`
                                     : ' · 수량 정보 없음'}
                               </small>
+                              {item.certainty === 'scheduled' && (
+                                <span className="report-estimate">
+                                  일정 기반 추정
+                                </span>
+                              )}
                             </span>
                           </label>
                         </li>

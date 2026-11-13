@@ -273,8 +273,8 @@ test('복약에서 기록을 선택해 약별 요약과 날짜 내역을 본다'
   await expect(page).toHaveURL(/\/schedule$/);
 });
 
-// 두 처방의 개별 약 선택과 보고서 분류를 같은 기준으로 검증한다.
-test('선택과 보고서 모두 처방 이름으로 묶고 보관함 약은 별도 카테고리를 만들지 않는다', async function prescriptionCategories({
+// 선택은 날짜별 처방/약을 구분하고 최종 보고서는 기존 약별 요약을 유지한다.
+test('선택은 날짜별 처방과 약으로 묶고 보고서는 약별 요약을 유지한다', async function prescriptionCategories({
   page,
 }) {
   // 입력한 처방 묶음 이름과 포함된 약을 합성한다.
@@ -324,14 +324,43 @@ test('선택과 보고서 모두 처방 이름으로 묶고 보관함 약은 별
       plan('glucose', '혈당약', ['공통 시험약', '혈당약 B']),
     ],
   };
+  const coldPlan = state.plans[0];
+  if (coldPlan.timing.mode === 'regular')
+    coldPlan.timing.schedule.startDate = '2026-11-10';
   const writes = await prepare(page, 'none', state);
   await page.goto('/schedule/report');
   const selection = page.getByRole('region', { name: '복용 기록 선택' });
-  const cold = selection.getByRole('region', {
+  await expect(selection.getByRole('heading', { level: 3 })).toHaveText([
+    '2026-11-12',
+    '2026-11-11',
+    '2026-11-10',
+  ]);
+  const today = selection.getByRole('region', {
+    name: '2026-11-12 기록',
+    exact: true,
+  });
+  const yesterday = selection.getByRole('region', {
+    name: '2026-11-11 기록',
+    exact: true,
+  });
+  const oldest = selection.getByRole('region', {
+    name: '2026-11-10 기록',
+    exact: true,
+  });
+  await expect(today.getByRole('checkbox')).toHaveCount(6);
+  await expect(yesterday.getByRole('checkbox')).toHaveCount(5);
+  await expect(oldest.getByRole('checkbox')).toHaveCount(5);
+  await expect(
+    yesterday.getByRole('region', { name: '혈당약 처방 묶음', exact: true }),
+  ).toHaveCount(0);
+  await expect(
+    yesterday.getByRole('checkbox', { name: /합성 일반약/ }),
+  ).toHaveCount(1);
+  const cold = today.getByRole('region', {
     name: '감기약 처방 묶음',
     exact: true,
   });
-  const glucose = selection.getByRole('region', {
+  const glucose = today.getByRole('region', {
     name: '혈당약 처방 묶음',
     exact: true,
   });
@@ -350,13 +379,22 @@ test('선택과 보고서 모두 처방 이름으로 묶고 보관함 약은 별
     page.getByRole('heading', { name: '보관함 약', exact: true }),
   ).toHaveCount(0);
   await cold.getByRole('checkbox', { name: /감기약 B/ }).uncheck();
+  await expect(
+    yesterday.getByRole('checkbox', { name: /감기약 B/ }),
+  ).toBeChecked();
   await page.getByRole('button', { name: '선택 완료 · 보고서 보기' }).click();
   const report = page.getByRole('region', { name: '진료용 복용 이력' });
   await expect(
     report
       .getByRole('region', { name: '감기약 처방 묶음', exact: true })
       .getByRole('article'),
-  ).toHaveCount(3);
+  ).toHaveCount(4);
+  await expect(
+    report.getByRole('region', { name: '2026-11-12 기록', exact: true }),
+  ).toHaveCount(0);
+  const coldB = report.getByRole('article', { name: '감기약 B', exact: true });
+  await expect(coldB).toContainText('기록 2회');
+  await expect(coldB).toContainText('기록 기간 2026-11-10 ~ 2026-11-11');
   await expect(
     report
       .getByRole('region', { name: '혈당약 처방 묶음', exact: true })
@@ -372,6 +410,9 @@ test('선택과 보고서 모두 처방 이름으로 묶고 보관함 약은 별
   await expect(
     cold.getByRole('checkbox', { name: /감기약 B/ }),
   ).not.toBeChecked();
+  await expect(
+    yesterday.getByRole('checkbox', { name: /감기약 B/ }),
+  ).toBeChecked();
   for (const checkbox of await glucose.getByRole('checkbox').all())
     await checkbox.uncheck();
   await page.getByRole('button', { name: '선택 완료 · 보고서 보기' }).click();

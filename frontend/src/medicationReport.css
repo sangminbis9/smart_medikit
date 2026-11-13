@@ -107,6 +107,15 @@ a.report-navigation {
   color: #206d5c;
   white-space: nowrap;
 }
+.report-selection-day {
+  margin-top: 28px;
+}
+.report-selection-date {
+  padding-bottom: 12px;
+  border-bottom: 2px solid #dfe6e0;
+  font-size: 18px;
+  font-weight: 700;
+}
 .report-category {
   margin-top: 24px;
   padding: 18px;
@@ -123,7 +132,7 @@ a.report-navigation {
 .report-selection-drug {
   margin-top: 26px;
 }
-.report-selection-drug :is(h3, h4) {
+.report-selection-drug :is(h4, h5) {
   padding-bottom: 10px;
   color: #163c34;
   border-bottom: 1px solid #e5ebe7;

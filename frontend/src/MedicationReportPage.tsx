@@ -301,7 +301,14 @@ function ReportSelection({
       return !excluded.has(item.id);
     },
   );
-  const categories = groupReportCategories(preview ? previewRecords : visible);
+  // 날짜를 먼저 나눈 뒤 각 날짜 안에서 기존 처방·약품 분류를 재사용한다.
+  const recordsByDate = new Map<string, ReportRecord[]>();
+  for (const item of visible) {
+    const dayRecords = recordsByDate.get(item.date);
+    if (dayRecords) dayRecords.push(item);
+    else recordsByDate.set(item.date, [item]);
+  }
+  const categories = groupReportCategories(previewRecords);
   const groupCount = categories.reduce(
     // 처방 카테고리 수가 아니라 실제 표시하는 약별 항목 수를 집계한다.
     function count(total, category) {
@@ -403,7 +410,11 @@ function ReportSelection({
               // 수동 처방만 카테고리 제목을 붙이고 개별 보관함 약은 그대로 표시한다.
               function category(category) {
                 return (
-                  <ReportCategorySection key={category.key} category={category}>
+                  <ReportCategorySection
+                    key={category.key}
+                    category={category}
+                    heading="h3"
+                  >
                     {category.groups.map(
                       // 동일 약의 확인 횟수와 선택된 날짜별 내역을 함께 보여준다.
                       function group(item) {
@@ -553,79 +564,115 @@ function ReportSelection({
         {ready && valid && visible.length === 0 && (
           <p className="report-empty">선택한 기간에 복용 확인 기록이 없어요.</p>
         )}
-        {categories.map(
-          // 선택과 보고서가 같은 처방 묶음 구성을 사용한다.
-          function category(category) {
-            return (
-              <ReportCategorySection key={category.key} category={category}>
-                {category.groups.map(
-                  // 처방 안에 포함된 개별 약 아래 날짜별 체크 항목을 표시한다.
-                  function drug(group) {
-                    const Heading = category.title === null ? 'h3' : 'h4';
-                    return (
-                      <div className="report-selection-drug" key={group.key}>
-                        <Heading>
-                          {group.records[0].incomplete
-                            ? '개별 약 정보 없음'
-                            : `${group.name} ${group.strength}`.trim()}
-                        </Heading>
-                        <ul>
-                          {group.records.map(
-                            // 기존 복용 기록 한 건의 포함 여부만 변경한다.
-                            function record(item) {
-                              // 체크 상태는 원본과 분리된 화면 메모리에만 보존한다.
-                              function toggle() {
-                                setExcluded(function change(previous) {
-                                  const next = new Set(previous);
-                                  if (next.has(item.id)) next.delete(item.id);
-                                  else next.add(item.id);
-                                  return next;
-                                });
-                              }
+        {[...recordsByDate]
+          .sort(
+            // 날짜 최상위 구분은 기존 기록 목록과 같은 최신순으로 보여준다.
+            function newestDate([left], [right]) {
+              return right.localeCompare(left);
+            },
+          )
+          .map(
+            // 같은 날짜의 처방 묶음과 개별 약을 하나의 날짜 영역에 표시한다.
+            function day([date, dayRecords]) {
+              return (
+                <section
+                  className="report-selection-day"
+                  key={date}
+                  aria-label={`${date} 기록`}
+                >
+                  <h3 className="report-selection-date">
+                    <time dateTime={date}>{date}</time>
+                  </h3>
+                  {groupReportCategories(dayRecords).map(
+                    // 같은 날짜의 수동 처방만 묶고 보관함 약은 개별 표시한다.
+                    function category(category) {
+                      return (
+                        <ReportCategorySection
+                          key={category.key}
+                          category={category}
+                          heading="h4"
+                        >
+                          {category.groups.map(
+                            // 날짜 안의 개별 약 아래 건별 체크 항목을 표시한다.
+                            function drug(group) {
+                              const Heading =
+                                category.title === null ? 'h4' : 'h5';
                               return (
-                                <li key={item.id}>
-                                  <label className="report-record">
-                                    <input
-                                      type="checkbox"
-                                      checked={!excluded.has(item.id)}
-                                      onChange={toggle}
-                                      aria-label={`${item.date} ${item.planTitle ? `${item.planTitle} ` : ''}${item.name} ${item.strength} ${item.dateKind}${item.time ? ` ${item.time} 예정` : ''} ${item.certainty === 'scheduled' ? '일정 기반 추정' : '사용자 확인'}${item.amount ? ` ${item.amount}` : ''}`}
-                                    />
-                                    <span>
-                                      <strong>
-                                        <time dateTime={item.date}>
-                                          {item.date}
-                                        </time>
-                                        {item.time && ` · ${item.time} 예정`}
-                                      </strong>
-                                      <small>
-                                        {item.dateKind}
-                                        {item.incomplete
-                                          ? ' · 개별 약 정보 없음'
-                                          : item.amount
-                                            ? ` · ${item.dateKind === '일정 날짜' ? '입력 복용량' : '확인 수량'} ${item.amount}`
-                                            : ' · 수량 정보 없음'}
-                                      </small>
-                                      {item.certainty === 'scheduled' && (
-                                        <span className="report-estimate">
-                                          일정 기반 추정
-                                        </span>
-                                      )}
-                                    </span>
-                                  </label>
-                                </li>
+                                <div
+                                  className="report-selection-drug"
+                                  key={group.key}
+                                >
+                                  <Heading>
+                                    {group.records[0].incomplete
+                                      ? '개별 약 정보 없음'
+                                      : `${group.name} ${group.strength}`.trim()}
+                                  </Heading>
+                                  <ul>
+                                    {group.records.map(
+                                      // 기존 복용 기록 한 건의 포함 여부만 변경한다.
+                                      function record(item) {
+                                        // 체크 상태는 원본과 분리된 화면 메모리에만 보존한다.
+                                        function toggle() {
+                                          setExcluded(
+                                            function change(previous) {
+                                              const next = new Set(previous);
+                                              if (next.has(item.id))
+                                                next.delete(item.id);
+                                              else next.add(item.id);
+                                              return next;
+                                            },
+                                          );
+                                        }
+                                        return (
+                                          <li key={item.id}>
+                                            <label className="report-record">
+                                              <input
+                                                type="checkbox"
+                                                checked={!excluded.has(item.id)}
+                                                onChange={toggle}
+                                                aria-label={`${item.date} ${item.planTitle ? `${item.planTitle} ` : ''}${item.name} ${item.strength} ${item.dateKind}${item.time ? ` ${item.time} 예정` : ''} ${item.certainty === 'scheduled' ? '일정 기반 추정' : '사용자 확인'}${item.amount ? ` ${item.amount}` : ''}`}
+                                              />
+                                              <span>
+                                                <strong>
+                                                  <time dateTime={item.date}>
+                                                    {item.date}
+                                                  </time>
+                                                  {item.time &&
+                                                    ` · ${item.time} 예정`}
+                                                </strong>
+                                                <small>
+                                                  {item.dateKind}
+                                                  {item.incomplete
+                                                    ? ' · 개별 약 정보 없음'
+                                                    : item.amount
+                                                      ? ` · ${item.dateKind === '일정 날짜' ? '입력 복용량' : '확인 수량'} ${item.amount}`
+                                                      : ' · 수량 정보 없음'}
+                                                </small>
+                                                {item.certainty ===
+                                                  'scheduled' && (
+                                                  <span className="report-estimate">
+                                                    일정 기반 추정
+                                                  </span>
+                                                )}
+                                              </span>
+                                            </label>
+                                          </li>
+                                        );
+                                      },
+                                    )}
+                                  </ul>
+                                </div>
                               );
                             },
                           )}
-                        </ul>
-                      </div>
-                    );
-                  },
-                )}
-              </ReportCategorySection>
-            );
-          },
-        )}
+                        </ReportCategorySection>
+                      );
+                    },
+                  )}
+                </section>
+              );
+            },
+          )}
       </section>
       <div className="report-footer">
         <span>{selected.length}건 선택</span>
@@ -646,9 +693,11 @@ function ReportSelection({
 function ReportCategorySection({
   category,
   children,
+  heading: Heading,
 }: {
   category: ReportCategory;
   children: ReactNode;
+  heading: 'h3' | 'h4';
 }) {
   if (category.title === null) return <>{children}</>;
   return (
@@ -656,7 +705,7 @@ function ReportCategorySection({
       className="report-category"
       aria-label={`${category.title} 처방 묶음`}
     >
-      <h3 className="report-category-title">{category.title}</h3>
+      <Heading className="report-category-title">{category.title}</Heading>
       {children}
     </section>
   );

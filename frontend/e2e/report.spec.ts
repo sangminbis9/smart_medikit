@@ -130,6 +130,8 @@ async function prepare(
           {
             ...base,
             eventId: 'old',
+            packageId: 'p-old',
+            medicineName: '과거 반출약',
             status: 'TAKEN',
             occurredAt: '2026-06-01T00:00:00Z',
           },
@@ -162,338 +164,231 @@ async function prepare(
   return writes;
 }
 
-// 건별 제외 후 요약과 복귀가 원본 저장 없이 동작하는지 검증한다.
-test('복약에서 기록을 선택해 약별 요약과 날짜 내역을 본다', async function report({
+// 날짜별 회차가 아니라 처방 카드와 반출 약품을 선택하는 전체 흐름을 검증한다.
+test('처방 카드와 반출 약품을 기본 선택하고 제외·복귀·간단 보고서를 제공한다', async function report({
   page,
 }) {
   const writes = await prepare(page);
   await page.goto('/schedule');
-  const reportLink = page.getByRole('link', {
-    name: '진료용 보고서',
+  await page.getByRole('link', { name: '진료용 보고서' }).click();
+  const selection = page.getByRole('region', { name: '보고서 항목 선택' });
+  const prescriptions = selection.getByRole('region', {
+    name: '복용 중인 처방약',
     exact: true,
   });
-  const linkStyle = await reportLink.evaluate(
-    // 글자 링크가 아닌 큰 배경색 버튼인지 실제 렌더링으로 검사한다.
-    function style(element) {
-      const css = getComputedStyle(element);
-      return {
-        background: css.backgroundColor,
-        radius: parseFloat(css.borderRadius),
-        font: parseFloat(css.fontSize),
-        height: element.getBoundingClientRect().height,
-      };
-    },
+  const cabinet = selection.getByRole('region', {
+    name: '약통에서 반출된 약품',
+    exact: true,
+  });
+  await expect(selection.getByRole('checkbox')).toHaveCount(2);
+  const prescription = prescriptions.getByRole('checkbox', {
+    name: /합성 처방/,
+  });
+  await expect(prescription).toBeChecked();
+  await expect(prescriptions).toContainText('1일분');
+  await expect(prescriptions).toContainText(
+    '합성 처방약 250mg, 제외된 처방약 500mg',
   );
-  expect(linkStyle.background).not.toBe('rgba(0, 0, 0, 0)');
-  expect(linkStyle.radius).toBeGreaterThanOrEqual(12);
-  expect(linkStyle.font).toBeGreaterThanOrEqual(16);
-  expect(linkStyle.height).toBeGreaterThanOrEqual(44);
-  await reportLink.click();
-  await expect(page).toHaveURL(/\/schedule\/report$/);
-  const backStyle = await page
-    .getByRole('link', { name: '복약으로 돌아가기' })
-    .evaluate(
-      // 돌아가기 링크에도 같은 버튼의 시각·터치 크기가 적용됐는지 검사한다.
-      function style(element) {
-        const css = getComputedStyle(element);
-        return {
-          background: css.backgroundColor,
-          radius: parseFloat(css.borderRadius),
-          font: parseFloat(css.fontSize),
-          height: element.getBoundingClientRect().height,
-        };
-      },
-    );
-  expect(backStyle.background).not.toBe('rgba(0, 0, 0, 0)');
-  expect(backStyle.radius).toBeGreaterThanOrEqual(12);
-  expect(backStyle.font).toBeGreaterThanOrEqual(16);
-  expect(backStyle.height).toBeGreaterThanOrEqual(44);
   await expect(
-    page.getByRole('link', { name: '복약으로 돌아가기' }),
-  ).toHaveText('←');
-  const list = page.getByRole('region', { name: '복용 기록 선택' });
-  await expect(list.getByRole('checkbox')).toHaveCount(3);
-  await expect(
-    page.getByRole('button', { name: '최근 1개월', exact: true }),
-  ).toHaveAttribute('aria-pressed', 'true');
-  await expect(list.getByText('미복용 시험약')).toHaveCount(0);
-  await expect(list.getByText('제외된 처방약')).toHaveCount(0);
+    cabinet.getByRole('checkbox', { name: '합성 일반약', exact: true }),
+  ).toBeChecked();
+  await expect(selection.getByRole('heading', { name: /2026-/ })).toHaveCount(
+    0,
+  );
   await page.getByRole('button', { name: '직접 설정', exact: true }).click();
   await page.getByLabel('시작일', { exact: true }).fill('2026-11-01');
   await page.getByLabel('종료일', { exact: true }).fill('2026-11-12');
-  // 기존 복약 탭의 자동 품목 연결은 별도 동작이며 보고서 선택 시점부터 검사한다.
+  // 기존 복약 화면의 자동 연결과 보고서 전용 선택의 쓰기를 분리해 검사한다.
   writes.length = 0;
-  const excluded = list.getByRole('checkbox', {
-    name: /2026-11-11.*합성 일반약/,
-  });
-  await excluded.uncheck();
+  await prescription.uncheck();
   await page.getByRole('button', { name: '선택 완료 · 보고서 보기' }).click();
+  const report = page.getByRole('region', {
+    name: '진료용 약품 보고서',
+    exact: true,
+  });
   await expect(
-    page.getByRole('heading', { name: '진료용 복용 이력', exact: true }),
+    report.getByRole('article', { name: '합성 일반약', exact: true }),
   ).toBeVisible();
+  await expect(report.getByText('합성 처방', { exact: true })).toHaveCount(0);
+  await expect(report.locator('details')).toHaveCount(0);
+  await expect(report).not.toContainText('일정 기반');
+  await expect(report).not.toContainText('날짜별');
+  await expect(report).not.toContainText('09:00');
+  await expect(report).not.toContainText('확인 2회');
   await expect(
     page.getByRole('button', { name: '선택 수정', exact: true }),
   ).toHaveCount(0);
-  await expect(
-    page.getByRole('link', { name: '복약으로 돌아가기' }),
-  ).toHaveCount(0);
-  await expect(
-    page.getByRole('button', { name: '기록 선택으로 돌아가기' }),
-  ).toHaveText('←');
-  const group = page.getByRole('article', { name: '합성 일반약', exact: true });
-  await expect(group.getByText('확인 1회', { exact: true })).toBeVisible();
-  await expect(group.getByText('합성성분', { exact: true })).toBeVisible();
-  await group.getByText('날짜별 내역', { exact: true }).click();
-  await expect(group.getByText('반출 날짜', { exact: true })).toBeVisible();
-  await expect(
-    page.getByRole('article', { name: '합성 처방약 250mg' }),
-  ).toContainText('일정 날짜');
   await page.getByRole('button', { name: '기록 선택으로 돌아가기' }).click();
   await expect(page).toHaveURL(/\/schedule\/report$/);
-  await expect(list).toBeVisible();
+  await expect(prescription).not.toBeChecked();
   await expect(page.getByLabel('시작일', { exact: true })).toHaveValue(
     '2026-11-01',
   );
   await expect(page.getByLabel('종료일', { exact: true })).toHaveValue(
     '2026-11-12',
   );
-  await expect(excluded).not.toBeChecked();
-  // 보고서 선택은 서버의 Y/N을 수정하지 않는다.
-  await expect
-    .poll(function noWrites() {
-      return writes;
-    })
-    .toEqual([]);
-  expect(
-    await page.evaluate(function fits() {
-      return document.documentElement.scrollWidth <= window.innerWidth;
-    }),
-  ).toBe(true);
-  await page.getByRole('link', { name: '복약으로 돌아가기' }).click();
-  await expect(page).toHaveURL(/\/schedule$/);
-});
-
-// 선택은 날짜별 처방/약을 구분하고 최종 보고서는 기존 약별 요약을 유지한다.
-test('선택은 날짜별 처방과 약으로 묶고 보고서는 약별 요약을 유지한다', async function prescriptionCategories({
-  page,
-}) {
-  // 입력한 처방 묶음 이름과 포함된 약을 합성한다.
-  function plan(
-    id: string,
-    title: string,
-    names: string[],
-  ): MedicationState['plans'][number] {
-    return {
-      id,
-      title,
-      notes: '',
-      endedOn: null,
-      timing: {
-        mode: 'regular',
-        schedule: {
-          startDate: '2026-11-12',
-          endDate: '2026-11-12',
-          weekdays: [0, 1, 2, 3, 4, 5, 6],
-          times: ['09:00'],
-        },
-      },
-      medicines: names.map(
-        // 같은 이름이 다른 처방에도 포함되는 경우를 유지한다.
-        function medicine(name, index) {
-          return {
-            id: `${id}-${index}`,
-            name,
-            strength: '',
-            dose: '1정',
-            timing: null,
-          };
-        },
-      ),
-    };
-  }
-  const state: MedicationState = {
-    version: 1,
-    records: [],
-    plans: [
-      plan('cold', '감기약', [
-        '공통 시험약',
-        '감기약 B',
-        '감기약 C',
-        '감기약 D',
-      ]),
-      plan('glucose', '혈당약', ['공통 시험약', '혈당약 B']),
-    ],
-  };
-  const coldPlan = state.plans[0];
-  if (coldPlan.timing.mode === 'regular')
-    coldPlan.timing.schedule.startDate = '2026-11-10';
-  const writes = await prepare(page, 'none', state);
-  await page.goto('/schedule/report');
-  const selection = page.getByRole('region', { name: '복용 기록 선택' });
-  await expect(selection.getByRole('heading', { level: 3 })).toHaveText([
-    '2026-11-12',
-    '2026-11-11',
-    '2026-11-10',
-  ]);
-  const today = selection.getByRole('region', {
-    name: '2026-11-12 기록',
-    exact: true,
-  });
-  const yesterday = selection.getByRole('region', {
-    name: '2026-11-11 기록',
-    exact: true,
-  });
-  const oldest = selection.getByRole('region', {
-    name: '2026-11-10 기록',
-    exact: true,
-  });
-  await expect(today.getByRole('checkbox')).toHaveCount(6);
-  await expect(yesterday.getByRole('checkbox')).toHaveCount(5);
-  await expect(oldest.getByRole('checkbox')).toHaveCount(5);
-  await expect(
-    yesterday.getByRole('region', { name: '혈당약 처방 묶음', exact: true }),
-  ).toHaveCount(0);
-  await expect(
-    yesterday.getByRole('checkbox', { name: /합성 일반약/ }),
-  ).toHaveCount(1);
-  const cold = today.getByRole('region', {
-    name: '감기약 처방 묶음',
-    exact: true,
-  });
-  const glucose = today.getByRole('region', {
-    name: '혈당약 처방 묶음',
-    exact: true,
-  });
-  await expect(cold.getByRole('checkbox')).toHaveCount(4);
-  await expect(glucose.getByRole('checkbox')).toHaveCount(2);
-  await expect(
-    cold.getByRole('heading', { name: '공통 시험약', exact: true }),
-  ).toHaveCount(1);
-  await expect(
-    glucose.getByRole('heading', { name: '공통 시험약', exact: true }),
-  ).toHaveCount(1);
-  await expect(
-    selection.getByRole('checkbox', { name: /합성 일반약/ }),
-  ).toHaveCount(2);
-  await expect(
-    page.getByRole('heading', { name: '보관함 약', exact: true }),
-  ).toHaveCount(0);
-  await cold.getByRole('checkbox', { name: /감기약 B/ }).uncheck();
-  await expect(
-    yesterday.getByRole('checkbox', { name: /감기약 B/ }),
-  ).toBeChecked();
-  await page.getByRole('button', { name: '선택 완료 · 보고서 보기' }).click();
-  const report = page.getByRole('region', { name: '진료용 복용 이력' });
-  await expect(
-    report
-      .getByRole('region', { name: '감기약 처방 묶음', exact: true })
-      .getByRole('article'),
-  ).toHaveCount(4);
-  await expect(
-    report.getByRole('region', { name: '2026-11-12 기록', exact: true }),
-  ).toHaveCount(0);
-  const coldB = report.getByRole('article', { name: '감기약 B', exact: true });
-  await expect(coldB).toContainText('기록 2회');
-  await expect(coldB).toContainText('기록 기간 2026-11-10 ~ 2026-11-11');
-  await expect(
-    report
-      .getByRole('region', { name: '혈당약 처방 묶음', exact: true })
-      .getByRole('article'),
-  ).toHaveCount(2);
-  await expect(
-    report.getByRole('article', { name: '합성 일반약', exact: true }),
-  ).toBeVisible();
-  await expect(
-    page.getByRole('heading', { name: '보관함 약', exact: true }),
-  ).toHaveCount(0);
-  await page.getByRole('button', { name: '기록 선택으로 돌아가기' }).click();
-  await expect(
-    cold.getByRole('checkbox', { name: /감기약 B/ }),
-  ).not.toBeChecked();
-  await expect(
-    yesterday.getByRole('checkbox', { name: /감기약 B/ }),
-  ).toBeChecked();
-  for (const checkbox of await glucose.getByRole('checkbox').all())
-    await checkbox.uncheck();
+  await prescription.check();
   await page.getByRole('button', { name: '선택 완료 · 보고서 보기' }).click();
   await expect(
-    report.getByRole('region', { name: '혈당약 처방 묶음', exact: true }),
-  ).toHaveCount(0);
-  expect(writes).toEqual([]);
+    report.getByRole('article', { name: '합성 처방', exact: true }),
+  ).toContainText('1일분');
+  await expect(report).toContainText('제외된 처방약 500mg');
+  await page.setViewportSize({ width: 320, height: 740 });
   expect(
     await page.evaluate(
-      // 처방 이름과 개별 약이 좁은 휴대폰 너비를 넘지 않아야 한다.
+      // 두 분류와 처방 안의 긴 약 이름이 좁은 화면을 넘지 않아야 한다.
       function fits() {
         return document.documentElement.scrollWidth <= window.innerWidth;
       },
     ),
   ).toBe(true);
-});
-
-// 기간 확대·직접 입력과 빈 선택 상태를 확인한다.
-test('1·3·6개월과 직접 기간을 적용하고 선택을 초기화한다', async function periods({
-  page,
-}) {
-  const writes = await prepare(page);
-  await page.goto('/schedule/report');
-  const list = page.getByRole('region', { name: '복용 기록 선택' });
-  await expect(list.getByRole('checkbox')).toHaveCount(3);
-  await page.getByRole('button', { name: '최근 3개월', exact: true }).click();
-  await expect(list.getByRole('checkbox')).toHaveCount(3);
-  await page.getByRole('button', { name: '최근 6개월', exact: true }).click();
-  await expect(list.getByRole('checkbox')).toHaveCount(4);
-  await page.getByRole('button', { name: '직접 설정', exact: true }).click();
-  await page.getByLabel('시작일', { exact: true }).fill('2026-11-10');
-  await page.getByLabel('종료일', { exact: true }).fill('2026-11-10');
-  await expect(list.getByRole('checkbox')).toHaveCount(2);
-  await list.getByRole('checkbox').first().uncheck();
-  await list.getByRole('checkbox').last().uncheck();
-  await expect(
-    page.getByRole('button', { name: '선택 완료 · 보고서 보기' }),
-  ).toBeDisabled();
-  await page.getByRole('button', { name: '최근 1개월', exact: true }).click();
-  await expect(list.getByRole('checkbox', { checked: true })).toHaveCount(3);
-  await page.getByRole('button', { name: '직접 설정', exact: true }).click();
-  await page.getByLabel('시작일', { exact: true }).fill('2026-12-01');
-  await expect(page.getByRole('alert')).toContainText('기간');
-  await expect(
-    page.getByRole('button', { name: '선택 완료 · 보고서 보기' }),
-  ).toBeDisabled();
-  await page.getByLabel('시작일', { exact: true }).fill('2026-07-01');
-  await page.getByLabel('종료일', { exact: true }).fill('2026-07-31');
-  await expect(
-    page.getByText('선택한 기간에 복용 확인 기록이 없어요.'),
-  ).toBeVisible();
+  await page.getByRole('button', { name: '기록 선택으로 돌아가기' }).click();
+  await page.getByRole('link', { name: '복약으로 돌아가기' }).click();
+  await expect(page).toHaveURL(/\/schedule$/);
   expect(writes).toEqual([]);
 });
 
-// 어느 한 출처가 실패하면 정상 전체 보고서로 숨기지 않는다.
-for (const source of ['activity', 'medications'] as const) {
-  // 실패 출처와 관계없이 보고서 생성 차단을 확인한다.
-  test(`${source} 조회 실패는 빈 이력이 아닌 오류로 표시한다`, async function failure({
-    page,
-  }) {
-    await prepare(page, source);
-    await page.goto('/schedule/report');
-    await expect(
-      page.getByRole('button', { name: '선택 완료 · 보고서 보기' }),
-    ).toBeDisabled();
-    await expect(
-      page.getByText('두 종류의 기록을 모두 불러온 뒤 보고서를 볼 수 있어요.'),
-    ).toBeVisible();
+// 등록 처방의 전체 기간과 종료일 없는 표시가 조회 기간에 의해 잘리지 않아야 한다.
+test('5일분·상시 복용 중과 전체 포함 약을 한 카드에 표시한다', async function durations({
+  page,
+}) {
+  const state: MedicationState = {
+    version: 1,
+    records: [],
+    plans: [
+      {
+        id: 'cold',
+        title: '감기 처방약',
+        notes: '',
+        endedOn: null,
+        timing: {
+          mode: 'regular',
+          schedule: {
+            startDate: '2026-11-12',
+            endDate: '2026-11-16',
+            weekdays: [1],
+            times: ['23:00'],
+          },
+        },
+        medicines: [
+          { id: 'a', name: 'A정', strength: '', dose: '1정', timing: null },
+          { id: 'b', name: 'B캡슐', strength: '', dose: '1캡슐', timing: null },
+        ],
+      },
+      {
+        id: 'pressure',
+        title: '고혈압 처방약',
+        notes: '',
+        endedOn: null,
+        timing: {
+          mode: 'regular',
+          schedule: {
+            startDate: '2026-11-01',
+            endDate: '',
+            weekdays: [0],
+            times: ['09:00'],
+          },
+        },
+        medicines: [
+          { id: 'c', name: 'C정', strength: '5mg', dose: '1정', timing: null },
+        ],
+      },
+    ],
+  };
+  const writes = await prepare(page, 'none', state);
+  const productReads: string[] = [];
+  // 처방 이름만 보여주기 위해 제품·성분 API를 추가 조회하지 않는다.
+  page.on('request', function product(request) {
+    if (request.url().includes('/medicine-products/'))
+      productReads.push(request.url());
   });
-}
+  await page.goto('/schedule/report');
+  const selection = page.getByRole('region', { name: '보고서 항목 선택' });
+  await expect(selection.getByRole('checkbox')).toHaveCount(3);
+  await page.getByRole('button', { name: '직접 설정', exact: true }).click();
+  await page.getByLabel('시작일', { exact: true }).fill('2026-11-12');
+  await page.getByLabel('종료일', { exact: true }).fill('2026-11-12');
+  await expect(selection).toContainText('감기 처방약');
+  await expect(selection).toContainText('5일분');
+  await expect(selection).toContainText('상시 복용 중');
+  await expect(selection).toContainText('A정, B캡슐');
+  await page.getByRole('button', { name: '선택 완료 · 보고서 보기' }).click();
+  const report = page.getByRole('region', {
+    name: '진료용 약품 보고서',
+    exact: true,
+  });
+  await expect(
+    report.getByRole('article', { name: '감기 처방약', exact: true }),
+  ).toContainText('5일분');
+  await expect(
+    report.getByRole('article', { name: '고혈압 처방약', exact: true }),
+  ).toContainText('상시 복용 중');
+  await expect(report).not.toContainText('2026-11-16');
+  await expect(report).not.toContainText('추정');
+  expect(productReads).toEqual([]);
+  expect(writes).toEqual([]);
+});
 
-// 다른 기기의 새 기록이 이미 검토한 보고서에 자동으로 들어가면 안 된다.
-test('보고서 생성 후의 서버 변경은 선택 수정에서 다시 검토한다', async function snapshot({
+// 기간 버튼·빈 선택·잘못된 날짜를 기존 조회 규칙에 맞춰 검증한다.
+test('기간 변경은 카드 선택을 초기화하고 빈 결과와 잘못된 기간을 구분한다', async function periods({
   page,
 }) {
   await prepare(page);
   await page.goto('/schedule/report');
+  const selection = page.getByRole('region', { name: '보고서 항목 선택' });
+  await expect(selection.getByRole('checkbox')).toHaveCount(2);
+  for (const checkbox of await selection.getByRole('checkbox').all())
+    await checkbox.uncheck();
+  const show = page.getByRole('button', { name: '선택 완료 · 보고서 보기' });
+  await expect(show).toBeDisabled();
+  await page.getByRole('button', { name: '최근 3개월', exact: true }).click();
+  await expect(selection.getByRole('checkbox').first()).toBeChecked();
+  await page.getByRole('button', { name: '최근 6개월', exact: true }).click();
+  await expect(selection.getByRole('checkbox')).toHaveCount(3);
   await expect(
-    page.getByRole('region', { name: '복용 기록 선택' }).getByRole('checkbox'),
-  ).toHaveCount(3);
+    selection.getByRole('checkbox', { name: '과거 반출약', exact: true }),
+  ).toBeChecked();
+  await page.getByRole('button', { name: '직접 설정', exact: true }).click();
+  await page.getByLabel('시작일', { exact: true }).fill('2026-07-01');
+  await page.getByLabel('종료일', { exact: true }).fill('2026-07-31');
+  await expect(selection).toContainText('선택한 기간에 표시할 항목이 없어요.');
+  await expect(show).toBeDisabled();
+  await page.getByLabel('시작일', { exact: true }).fill('2026-08-01');
+  await expect(page.getByRole('alert')).toContainText(
+    '조회 기간의 시작일과 종료일',
+  );
+  await expect(show).toBeDisabled();
+});
+
+for (const failed of ['activity', 'medications'] as const) {
+  // 한쪽 조회 실패를 빈 정상 보고서나 한쪽 자료만의 결과로 숨기지 않는다.
+  test(`${failed} 조회 실패는 보고서 생성을 막는다`, async function unavailable({
+    page,
+  }) {
+    await prepare(page, failed);
+    await page.goto('/schedule/report');
+    await expect(page.getByRole('alert')).toBeVisible();
+    await expect(
+      page.getByRole('button', { name: '선택 완료 · 보고서 보기' }),
+    ).toBeDisabled();
+    await expect(
+      page.getByRole('region', { name: '진료용 약품 보고서', exact: true }),
+    ).toHaveCount(0);
+  });
+}
+
+// 선택 완료 시점의 목록은 고정하고 수정으로 돌아올 때 양쪽 출처를 새로 읽는다.
+test('보고서는 선택 시점에 고정되고 화살표 복귀에서 두 출처를 재조회한다', async function snapshot({
+  page,
+}) {
+  const writes = await prepare(page);
+  await page.goto('/schedule/report');
+  await expect(page.getByRole('checkbox')).toHaveCount(2);
   await page.getByRole('button', { name: '선택 완료 · 보고서 보기' }).click();
+  const report = page.getByRole('region', {
+    name: '진료용 약품 보고서',
+    exact: true,
+  });
   await page.route(
     '**/medication-api/medications',
     async function changed(route) {
@@ -502,274 +397,119 @@ test('보고서 생성 후의 서버 변경은 선택 수정에서 다시 검토
       });
     },
   );
-  await page.clock.runFor(31000);
-  await expect(
-    page.getByRole('heading', { name: '진료용 복용 이력', exact: true }),
-  ).toBeVisible();
-  await expect(
-    page.getByRole('article', { name: '합성 처방약 250mg' }),
-  ).toBeVisible();
+  await page.route(
+    'https://activity.test/**',
+    async function changedActivity(route) {
+      await route.fulfill({ json: { pending: [], history: [], reviews: [] } });
+    },
+  );
+  await expect(report.getByRole('article')).toHaveCount(2);
   await page.getByRole('button', { name: '기록 선택으로 돌아가기' }).click();
   await expect(
-    page.getByRole('region', { name: '복용 기록 선택' }).getByRole('checkbox'),
-  ).toHaveCount(2);
+    page.getByText('선택한 기간에 표시할 항목이 없어요.'),
+  ).toBeVisible();
+  await expect(
+    page.getByRole('button', { name: '선택 완료 · 보고서 보기' }),
+  ).toBeDisabled();
+  expect(writes).toEqual([]);
 });
 
-// 명시적 새로고침이 느린 수동 출처를 기다리지 않으면 오래된 기록이 확정된다.
-test('새로고침은 두 출처의 새 응답이 끝날 때까지 생성을 차단한다', async function refreshBarrier({
+// 새로고침의 두 응답이 모두 오기 전에는 이전 자료로 생성을 허용하지 않는다.
+test('새로고침은 양쪽 응답을 기다리고 선택을 초기화한다', async function refresh({
   page,
 }) {
   await prepare(page);
   await page.goto('/schedule/report');
-  await expect(
-    page.getByRole('region', { name: '복용 기록 선택' }).getByRole('checkbox'),
-  ).toHaveCount(3);
-  let release = function noop() {};
-  const held = new Promise<void>(function wait(resolve) {
-    release = resolve;
-  });
+  await expect(page.getByRole('checkbox')).toHaveCount(2);
+  await page.getByRole('checkbox').first().uncheck();
+  let releaseActivity!: () => void;
+  let releaseManual!: () => void;
+  const activityWait = new Promise<void>(
+    // 반출 이력 응답을 테스트가 허용할 때까지 보류한다.
+    function wait(resolve) {
+      releaseActivity = resolve;
+    },
+  );
+  const manualWait = new Promise<void>(
+    // 수동 처방 응답을 테스트가 허용할 때까지 보류한다.
+    function wait(resolve) {
+      releaseManual = resolve;
+    },
+  );
+  await page.route(
+    'https://activity.test/**',
+    async function waitActivity(route) {
+      await activityWait;
+      await route.fallback();
+    },
+  );
   await page.route(
     '**/medication-api/medications',
-    async function delayed(route) {
-      await held;
-      await route.fulfill({
-        json: { revision: 2, state: { version: 1, plans: [], records: [] } },
-      });
+    async function waitManual(route) {
+      await manualWait;
+      await route.fallback();
     },
   );
   await page.getByRole('button', { name: '새로고침', exact: true }).click();
-  // 다른 합성 API가 응답한 뒤에도 수동 출처는 의도적으로 대기시킨다.
-  await page.waitForTimeout(300);
-  const disabled = await page
-    .getByRole('button', { name: '선택 완료 · 보고서 보기' })
-    .isDisabled();
-  release();
-  expect(disabled).toBe(true);
-  await expect(
-    page.getByRole('region', { name: '복용 기록 선택' }).getByRole('checkbox'),
-  ).toHaveCount(2);
+  const show = page.getByRole('button', { name: '선택 완료 · 보고서 보기' });
+  await expect(show).toBeDisabled();
+  releaseManual();
+  await expect(show).toBeDisabled();
+  releaseActivity();
+  await expect(page.getByRole('checkbox')).toHaveCount(2);
+  await expect(page.getByRole('checkbox').first()).toBeChecked();
+  await expect(show).toBeEnabled();
 });
 
-// 비정상 연결 중 바뀐 날짜를 이전 보고서 기록에 붙이지 않는다.
-test('오프라인에서 직접 기간을 바꾸면 이전 보고서를 끝낸다', async function offlineRange({
+// 오프라인이면 정상 보고서 대신 선택 화면과 기존 복약 이동을 유지한다.
+test('오프라인에서는 생성을 막고 복약 화면으로 돌아갈 수 있다', async function offline({
   page,
   context,
 }) {
   await prepare(page);
   await page.goto('/schedule/report');
-  await expect(
-    page.getByRole('region', { name: '복용 기록 선택' }).getByRole('checkbox'),
-  ).toHaveCount(3);
-  await page.getByRole('button', { name: '직접 설정', exact: true }).click();
+  await expect(page.getByRole('checkbox')).toHaveCount(2);
   await page.getByRole('button', { name: '선택 완료 · 보고서 보기' }).click();
   await context.setOffline(true);
   await expect(
     page.getByRole('link', { name: '복약으로 돌아가기' }),
   ).toBeVisible();
   await expect(
-    page.getByRole('button', { name: '기록 선택으로 돌아가기' }),
-  ).toHaveCount(0);
-  await page.getByLabel('시작일', { exact: true }).fill('2026-07-01');
-  await page.getByLabel('종료일', { exact: true }).fill('2026-07-31');
-  await context.setOffline(false);
-  await expect(
-    page.getByText('선택한 기간에 복용 확인 기록이 없어요.'),
-  ).toBeVisible();
-  await expect(
-    page.getByRole('heading', { name: '진료용 복용 이력', exact: true }),
-  ).toHaveCount(0);
-});
-
-// 선택 수정은 수동 약뿐 아니라 보관함 이력도 다시 읽어야 한다.
-test('선택 수정에서 바뀐 보관함 기록을 다시 조회한다', async function activityRefresh({
-  page,
-}) {
-  await prepare(page);
-  await page.goto('/schedule/report');
-  await expect(
-    page.getByRole('region', { name: '복용 기록 선택' }).getByRole('checkbox'),
-  ).toHaveCount(3);
-  await page.getByRole('button', { name: '선택 완료 · 보고서 보기' }).click();
-  await page.route(
-    'https://activity.test/activity',
-    async function changed(route) {
-      await route.fulfill({ json: { pending: [], history: [], reviews: [] } });
-    },
-  );
-  await page.getByRole('button', { name: '기록 선택으로 돌아가기' }).click();
-  await expect(
-    page.getByRole('region', { name: '복용 기록 선택' }).getByRole('checkbox'),
-  ).toHaveCount(1);
-});
-
-// 두 조회 사이의 약 변경을 검출해 이전 기록에 새 약 성분을 붙이지 않는다.
-test('제품 연결 조회 중 수동 약이 변경되면 보고서를 보류한다', async function productRace({
-  page,
-}) {
-  await prepare(page);
-  await page.route(
-    '**/medication-api/medicine-products/links',
-    async function links(route) {
-      await page.route(
-        '**/medication-api/medications',
-        async function changed(next) {
-          await next.fulfill({
-            json: {
-              revision: 2,
-              state: { version: 1, plans: [], records: [] },
-            },
-          });
-        },
-      );
-      await route.fulfill({
-        json: {
-          links: [
-            {
-              planId: 'plan1',
-              medicineId: 'm1',
-              productCode: '987654321',
-              productName: '변경된 시험약',
-            },
-          ],
-        },
-      });
-    },
-  );
-  await page.route(
-    '**/medication-api/medicine-products/987654321',
-    async function detail(route) {
-      await route.fulfill({
-        json: {
-          productCode: '987654321',
-          productName: '변경된 시험약',
-          manufacturer: '',
-          ingredients: [{ name: '다른 시험성분' }],
-          indications: '',
-          dosage: '',
-          precautions: '',
-          source: 'MFDS_PERMIT_DETAIL',
-          checkedAt: '2026-11-12T00:00:00Z',
-        },
-      });
-    },
-  );
-  await page.goto('/schedule/report');
-  await expect(
-    page.getByText(
-      '조회 중 복용 기록이 변경됐어요. 새로고침 후 다시 선택해주세요.',
-    ),
-  ).toBeVisible();
-  await expect(
     page.getByRole('button', { name: '선택 완료 · 보고서 보기' }),
   ).toBeDisabled();
+  await expect(
+    page.getByRole('region', { name: '진료용 약품 보고서', exact: true }),
+  ).toHaveCount(0);
 });
 
-// 수동 일정만 등록한 경우도 이미 지난 회차를 추정 항목으로 선택할 수 있어야 한다.
-test('확인 기록 없는 수동 일정이 회차별 체크와 추정 요약으로 나타난다', async function registeredSchedule({
+// 재고 정보가 사라졌다 돌아와도 제외한 반출 약품이 자동으로 선택되면 안 된다.
+test('재고 조회 실패와 복구에도 반출 약품 제외를 유지한다', async function inventoryIdentity({
   page,
 }) {
-  const state: MedicationState = {
-    version: 1,
-    plans: [
-      {
-        id: 'scheduled-plan',
-        title: '감기약',
-        notes: '',
-        endedOn: null,
-        timing: {
-          mode: 'regular',
-          schedule: {
-            startDate: '2026-11-10',
-            endDate: '',
-            weekdays: [0, 1, 2, 3, 4, 5, 6],
-            times: ['09:00'],
-          },
-        },
-        medicines: [
-          {
-            id: 'scheduled-medicine',
-            name: '합성 일정약',
-            strength: '',
-            dose: '1정',
-            timing: null,
-          },
-        ],
-      },
-    ],
-    records: [],
-  };
-  const writes = await prepare(page, 'none', state);
+  await prepare(page);
   await page.goto('/schedule/report');
-  const list = page.getByRole('region', { name: '복용 기록 선택' });
-  await expect(list.getByRole('checkbox')).toHaveCount(5);
-  await expect(list.getByText('일정 기반 추정', { exact: true })).toHaveCount(
-    3,
-  );
-  const excluded = list.getByRole('checkbox', {
-    name: /2026-11-11.*합성 일정약/,
+  const cabinet = page.getByRole('checkbox', {
+    name: '합성 일반약',
+    exact: true,
   });
-  await excluded.uncheck();
+  await expect(cabinet).toBeChecked();
+  await cabinet.uncheck();
   await page.getByRole('button', { name: '선택 완료 · 보고서 보기' }).click();
-  const group = page.getByRole('article', { name: '합성 일정약', exact: true });
-  await expect(group.getByText('기록 2회', { exact: true })).toBeVisible();
-  await expect(
-    group.getByText('사용자 확인 0회 / 일정 기반 추정 2회', { exact: true }),
-  ).toBeVisible();
-  await group.getByText('날짜별 내역', { exact: true }).click();
-  await expect(group).toContainText('09:00 예정');
-  await page.getByRole('button', { name: '기록 선택으로 돌아가기' }).click();
-  await expect(excluded).not.toBeChecked();
-  await page.getByRole('button', { name: '직접 설정', exact: true }).click();
-  await page.getByLabel('시작일', { exact: true }).fill('2026-11-12');
-  await page.getByLabel('종료일', { exact: true }).fill('2026-11-12');
-  await expect(list.getByRole('checkbox')).toHaveCount(1);
-  await expect(list.getByRole('checkbox').first()).toBeChecked();
-  expect(writes).toEqual([]);
-  expect(state.records).toEqual([]);
-});
-
-// 열어 둔 선택 화면도 예정 시각을 지나면 새 회차를 표시해야 한다.
-test('오전 9시가 되면 서버 기록 없이 오늘의 추정 회차가 나타난다', async function clockBoundary({
-  page,
-}) {
-  const state: MedicationState = {
-    version: 1,
-    plans: [
-      {
-        id: 'clock-plan',
-        title: '감기약',
-        notes: '',
-        endedOn: null,
-        timing: {
-          mode: 'regular',
-          schedule: {
-            startDate: '2026-11-10',
-            endDate: '',
-            weekdays: [0, 1, 2, 3, 4, 5, 6],
-            times: ['09:00', '18:00'],
-          },
-        },
-        medicines: [],
-      },
-    ],
-    records: [],
-  };
-  const writes = await prepare(page, 'none', state);
-  await page.clock.setSystemTime(new Date('2026-11-11T23:59:45Z'));
-  await page.goto('/schedule/report');
-  const list = page.getByRole('region', { name: '복용 기록 선택' });
-  await expect(list.getByRole('checkbox')).toHaveCount(6);
-  await page.clock.runFor(30000);
-  await expect(list.getByRole('checkbox')).toHaveCount(7);
-  await expect(
-    list.getByRole('checkbox', {
-      name: /2026-11-12.*감기약.*09:00 예정.*일정 기반 추정/,
-    }),
-  ).toBeChecked();
-  await expect(
-    list.getByRole('checkbox', {
-      name: /2026-11-11.*감기약.*18:00 예정.*일정 기반 추정/,
-    }),
-  ).toHaveCount(1);
-  expect(writes).toEqual([]);
+  let inventoryAvailable = false;
+  await page.route('**/api/**', async function inventoryResponse(route) {
+    if (inventoryAvailable) await route.fallback();
+    else await route.fulfill({ status: 503, json: {} });
+  });
+  const back = page.getByRole('button', { name: '기록 선택으로 돌아가기' });
+  await page.clock.fastForward(31000);
+  await expect(back).toBeVisible();
+  await back.click();
+  await expect(cabinet).not.toBeChecked();
+  await cabinet.check();
+  await page.getByRole('button', { name: '선택 완료 · 보고서 보기' }).click();
+  inventoryAvailable = true;
+  await page.clock.fastForward(31000);
+  await expect(back).toBeVisible();
+  await back.click();
+  await expect(cabinet).toBeChecked();
 });

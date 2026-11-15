@@ -23,16 +23,6 @@ a.report-navigation {
   font-size: 17px;
   font-weight: 600;
 }
-.report-estimate {
-  display: inline-block;
-  margin-top: 6px;
-  padding: 3px 8px;
-  border-radius: 8px;
-  color: #8b4b29;
-  background: #fff4e8;
-  font-size: 12px;
-  line-height: 1.5;
-}
 .report-page h2 {
   font-size: 18px;
 }
@@ -94,9 +84,7 @@ a.report-navigation {
   line-height: 1.7;
   font-size: 13px;
 }
-.report-list-heading,
-.report-document-heading,
-.report-drug-heading {
+.report-list-heading {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -106,15 +94,6 @@ a.report-navigation {
   font-size: 13px;
   color: #206d5c;
   white-space: nowrap;
-}
-.report-selection-day {
-  margin-top: 28px;
-}
-.report-selection-date {
-  padding-bottom: 12px;
-  border-bottom: 2px solid #dfe6e0;
-  font-size: 18px;
-  font-weight: 700;
 }
 .report-category {
   margin-top: 24px;
@@ -129,51 +108,41 @@ a.report-navigation {
   font-weight: 700;
   overflow-wrap: anywhere;
 }
-.report-selection-drug {
-  margin-top: 26px;
+.report-card {
+  display: block;
+  margin-top: 14px;
+  padding: 18px;
+  border: 1px solid #dfe6e0;
+  border-radius: 14px;
+  background: #fff;
 }
-.report-selection-drug :is(h4, h5) {
-  padding-bottom: 10px;
-  color: #163c34;
-  border-bottom: 1px solid #e5ebe7;
-  font-size: 15px;
-  font-weight: 600;
+.report-card-content {
+  min-width: 0;
   overflow-wrap: anywhere;
 }
-.report-selection-drug ul,
-.report-detail-list {
-  list-style: none;
-  padding: 0;
-  margin: 0;
+.report-card-content strong {
+  font-size: 15px;
+  font-weight: 600;
+}
+.report-card-content small {
+  display: block;
+  margin-top: 8px;
+  color: #63736c;
+  font-size: 13px;
+  line-height: 1.8;
 }
 .report-record {
   display: flex;
   align-items: center;
   gap: 14px;
   min-height: 76px;
-  padding: 16px 0;
   cursor: pointer;
-  border-bottom: 1px solid #f0f3f1;
 }
 .report-record input {
   flex-shrink: 0;
   width: 22px;
   height: 22px;
   accent-color: #206d5c;
-}
-.report-record > span {
-  min-width: 0;
-  overflow-wrap: anywhere;
-}
-.report-record strong {
-  font-size: 15px;
-  font-weight: 600;
-}
-.report-record small {
-  display: block;
-  margin-top: 6px;
-  color: #63736c;
-  font-size: 12px;
 }
 .report-record:has(input:not(:checked)) strong {
   color: #63736c;
@@ -211,76 +180,7 @@ a.report-navigation {
   color: #8b4b29;
   background: #fff4e8;
 }
-.report-document {
-  padding: 32px;
-}
-.report-document-heading {
-  align-items: flex-start;
-}
-.report-document-heading p {
-  color: #63736c;
-  font-size: 13px;
-  margin-top: 10px;
-}
-.report-totals {
-  margin-top: 24px;
-  font-size: 15px;
-  font-weight: 600;
-  color: #206d5c;
-}
-.report-groups {
-  margin-top: 24px;
-}
-.report-drug {
-  padding: 24px 0;
-  border-top: 1px solid #dfe6e0;
-  overflow-wrap: anywhere;
-}
-.report-drug-heading {
-  align-items: flex-start;
-}
-.report-drug :is(h3, h4) {
-  font-size: 18px;
-  line-height: 1.5;
-}
-.report-drug :is(h3, h4) span {
-  color: #63736c;
-  font-size: 14px;
-  font-weight: 400;
-}
-.report-drug-heading > strong {
-  flex-shrink: 0;
-  color: #206d5c;
-  font-size: 14px;
-  padding-top: 5px;
-}
-.report-ingredients {
-  margin-top: 8px;
-  font-size: 13px;
-  color: #63736c;
-}
-.report-drug-period {
-  margin-top: 12px;
-  font-size: 13px;
-  color: #426e60;
-}
-.report-drug summary {
-  padding: 16px 0 4px;
-  color: #206d5c;
-  font-size: 13px;
-  cursor: pointer;
-}
-.report-detail-list li {
-  display: flex;
-  justify-content: space-between;
-  flex-wrap: wrap;
-  gap: 8px;
-  padding: 12px 0;
-  color: #63736c;
-  font-size: 12px;
-  border-bottom: 1px solid #f0f3f1;
-}
-.report-page :is(button, input, summary, a):focus-visible {
+.report-page :is(button, input, a):focus-visible {
   outline: 2px solid #206d5c;
   outline-offset: 4px;
 }
@@ -309,8 +209,5 @@ a.report-navigation {
     min-height: 44px;
     padding-inline: 14px;
     font-size: 13px;
-  }
-  .report-document-heading {
-    flex-wrap: wrap;
   }
 }

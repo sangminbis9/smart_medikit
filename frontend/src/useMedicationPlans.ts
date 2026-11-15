@@ -294,7 +294,7 @@ export function useMedicationPlans(demo: boolean) {
     current.current = next;
     setSnapshot(next);
   }, []);
-  // 화면 복귀나 새로고침 버튼으로 최신 공유 목록을 읽는다.
+  // 화면 복귀나 오류 재시도로 최신 공유 목록을 읽는다.
   const reload = useCallback(
     async function reload() {
       if (

@@ -101,6 +101,7 @@ describe('진료용 카드 목록', function cards() {
         name: '감기 처방약',
         duration: '5일분',
         medicines: ['A정 250mg', 'B캡슐'],
+        dates: [],
       },
     ]);
     expect(original).toEqual(copy);
@@ -243,7 +244,30 @@ describe('진료용 카드 목록', function cards() {
         },
       ),
     ).toBe(true);
+    expect(rows[0].dates).toEqual(['2026-11-12']);
     expect(activity).toEqual(copy);
+  });
+  // 같은 약의 복용 날짜는 반출 기준 KST 날짜를 중복 없이 최신순으로 보존한다.
+  it('반복 반출의 날짜를 최신순으로 합치고 확인 날짜를 쓰지 않는다', function consumptionDates() {
+    const activity: Activity = {
+      reviews: [],
+      pending: [],
+      history: [
+        outbound({ eventId: 'a', occurredAt: '2026-11-11T15:00:00Z' }),
+        outbound({ eventId: 'b', occurredAt: '2026-11-12T00:00:00Z' }),
+        outbound({
+          eventId: 'c',
+          occurredAt: '2026-11-12T15:00:00Z',
+          recordedAt: '2026-11-15T00:00:00Z',
+        }),
+      ],
+    };
+    const rows = buildReportItems(activity, state([]), [], {
+      start: '2026-11-12',
+      end: '2026-11-13',
+    });
+    expect(rows).toHaveLength(1);
+    expect(rows[0].dates).toEqual(['2026-11-13', '2026-11-12']);
   });
   // 포장이 달라도 확정된 단일 제품 코드가 같을 때에만 합친다.
   it('같은 이름의 다른 제품은 분리하고 같은 제품의 반복 포장은 합친다', function products() {

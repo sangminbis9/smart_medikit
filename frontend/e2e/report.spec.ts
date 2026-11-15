@@ -1,3 +1,4 @@
+import { readFile } from 'node:fs/promises';
 import { expect, test, type Page } from '@playwright/test';
 import type { MedicationState } from '../src/medicationPlans';
 
@@ -170,14 +171,20 @@ test('처방 카드와 반출 약품을 기본 선택하고 제외·복귀·간�
 }) {
   const writes = await prepare(page);
   await page.goto('/schedule');
+  await expect(
+    page.getByRole('button', { name: '복용약 새로고침', exact: true }),
+  ).toHaveCount(0);
   await page.getByRole('link', { name: '진료용 보고서' }).click();
+  await expect(
+    page.getByRole('button', { name: '새로고침', exact: true }),
+  ).toHaveCount(0);
   const selection = page.getByRole('region', { name: '보고서 항목 선택' });
   const prescriptions = selection.getByRole('region', {
     name: '복용 중인 처방약',
     exact: true,
   });
   const cabinet = selection.getByRole('region', {
-    name: '약통에서 반출된 약품',
+    name: '일반 의약품 복용 기록',
     exact: true,
   });
   await expect(selection.getByRole('checkbox')).toHaveCount(2);
@@ -203,7 +210,7 @@ test('처방 카드와 반출 약품을 기본 선택하고 제외·복귀·간�
   await prescription.uncheck();
   await page.getByRole('button', { name: '선택 완료 · 보고서 보기' }).click();
   const report = page.getByRole('region', {
-    name: '진료용 약품 보고서',
+    name: '진료용 약 복용 보고서',
     exact: true,
   });
   await expect(
@@ -211,6 +218,11 @@ test('처방 카드와 반출 약품을 기본 선택하고 제외·복귀·간�
   ).toBeVisible();
   await expect(report.getByText('합성 처방', { exact: true })).toHaveCount(0);
   await expect(report.locator('details')).toHaveCount(0);
+  await expect(report).toContainText('복용 날짜(반출 기준)');
+  await expect(report).toContainText('2026-11-12, 2026-11-11, 2026-11-10');
+  await expect(
+    page.getByRole('button', { name: '새로고침', exact: true }),
+  ).toHaveCount(0);
   await expect(report).not.toContainText('일정 기반');
   await expect(report).not.toContainText('날짜별');
   await expect(report).not.toContainText('09:00');
@@ -314,7 +326,7 @@ test('5일분·상시 복용 중과 전체 포함 약을 한 카드에 표시한
   await expect(selection).toContainText('A정, B캡슐');
   await page.getByRole('button', { name: '선택 완료 · 보고서 보기' }).click();
   const report = page.getByRole('region', {
-    name: '진료용 약품 보고서',
+    name: '진료용 약 복용 보고서',
     exact: true,
   });
   await expect(
@@ -372,7 +384,37 @@ for (const failed of ['activity', 'medications'] as const) {
       page.getByRole('button', { name: '선택 완료 · 보고서 보기' }),
     ).toBeDisabled();
     await expect(
-      page.getByRole('region', { name: '진료용 약품 보고서', exact: true }),
+      page.getByRole('region', { name: '진료용 약 복용 보고서', exact: true }),
+    ).toHaveCount(0);
+    if (failed === 'activity') {
+      await page.route(
+        'https://activity.test/**',
+        async function recovered(route) {
+          await route.fulfill({
+            json: { history: [], pending: [], reviews: [] },
+          });
+        },
+      );
+    } else {
+      await page.route(
+        '**/medication-api/medications',
+        async function recovered(route) {
+          await route.fulfill({
+            json: {
+              revision: 2,
+              state: { version: 1, plans: [], records: [] },
+            },
+          });
+        },
+      );
+    }
+    await page.getByRole('button', { name: '다시 시도', exact: true }).click();
+    await expect(page.getByRole('checkbox')).toHaveCount(1);
+    await expect(
+      page.getByRole('button', { name: '선택 완료 · 보고서 보기' }),
+    ).toBeEnabled();
+    await expect(
+      page.getByRole('button', { name: '새로고침', exact: true }),
     ).toHaveCount(0);
   });
 }
@@ -386,7 +428,7 @@ test('보고서는 선택 시점에 고정되고 화살표 복귀에서 두 출�
   await expect(page.getByRole('checkbox')).toHaveCount(2);
   await page.getByRole('button', { name: '선택 완료 · 보고서 보기' }).click();
   const report = page.getByRole('region', {
-    name: '진료용 약품 보고서',
+    name: '진료용 약 복용 보고서',
     exact: true,
   });
   await page.route(
@@ -414,14 +456,15 @@ test('보고서는 선택 시점에 고정되고 화살표 복귀에서 두 출�
   expect(writes).toEqual([]);
 });
 
-// 새로고침의 두 응답이 모두 오기 전에는 이전 자료로 생성을 허용하지 않는다.
-test('새로고침은 양쪽 응답을 기다리고 선택을 초기화한다', async function refresh({
+// 선택 복귀의 두 응답이 모두 오기 전에는 이전 자료로 생성을 허용하지 않는다.
+test('선택 복귀는 양쪽 응답을 기다리고 제외 선택을 유지한다', async function refresh({
   page,
 }) {
   await prepare(page);
   await page.goto('/schedule/report');
   await expect(page.getByRole('checkbox')).toHaveCount(2);
   await page.getByRole('checkbox').first().uncheck();
+  await page.getByRole('button', { name: '선택 완료 · 보고서 보기' }).click();
   let releaseActivity!: () => void;
   let releaseManual!: () => void;
   const activityWait = new Promise<void>(
@@ -450,14 +493,14 @@ test('새로고침은 양쪽 응답을 기다리고 선택을 초기화한다', 
       await route.fallback();
     },
   );
-  await page.getByRole('button', { name: '새로고침', exact: true }).click();
+  await page.getByRole('button', { name: '기록 선택으로 돌아가기' }).click();
   const show = page.getByRole('button', { name: '선택 완료 · 보고서 보기' });
   await expect(show).toBeDisabled();
   releaseManual();
   await expect(show).toBeDisabled();
   releaseActivity();
   await expect(page.getByRole('checkbox')).toHaveCount(2);
-  await expect(page.getByRole('checkbox').first()).toBeChecked();
+  await expect(page.getByRole('checkbox').first()).not.toBeChecked();
   await expect(show).toBeEnabled();
 });
 
@@ -478,7 +521,7 @@ test('오프라인에서는 생성을 막고 복약 화면으로 돌아갈 수 �
     page.getByRole('button', { name: '선택 완료 · 보고서 보기' }),
   ).toBeDisabled();
   await expect(
-    page.getByRole('region', { name: '진료용 약품 보고서', exact: true }),
+    page.getByRole('region', { name: '진료용 약 복용 보고서', exact: true }),
   ).toHaveCount(0);
 });
 
@@ -512,4 +555,124 @@ test('재고 조회 실패와 복구에도 반출 약품 제외를 유지한다'
   await expect(back).toBeVisible();
   await back.click();
   await expect(cabinet).toBeChecked();
+});
+
+// 선택한 보고서를 파일로 직접 내려받고 제목 오른쪽 버튼과 한글 파일명을 확인한다.
+test('선택한 보고서를 한국어 PDF 파일로 다운로드한다', async function pdfDownload({
+  page,
+}, testInfo) {
+  const writes = await prepare(page);
+  await page.goto('/schedule/report');
+  await expect(page.getByRole('checkbox')).toHaveCount(2);
+  await page
+    .getByRole('checkbox', { name: '합성 처방', exact: true })
+    .uncheck();
+  await page.getByRole('button', { name: '선택 완료 · 보고서 보기' }).click();
+  const report = page.getByRole('region', {
+    name: '진료용 약 복용 보고서',
+    exact: true,
+  });
+  const button = report.getByRole('button', {
+    name: 'PDF 다운로드',
+    exact: true,
+  });
+  const heading = await report
+    .getByRole('heading', { name: '진료용 약 복용 보고서', exact: true })
+    .boundingBox();
+  const bounds = await button.boundingBox();
+  expect(bounds!.x).toBeGreaterThan(heading!.x);
+  const waiting = page.waitForEvent('download');
+  await button.click();
+  const download = await waiting;
+  expect(download.suggestedFilename()).toBe('진료용 약 복용 보고서.pdf');
+  const path = `/private/tmp/medkit-report-pdf-${testInfo.project.name}.pdf`;
+  await download.saveAs(path);
+  const data = await readFile(path);
+  expect(data.subarray(0, 5).toString()).toBe('%PDF-');
+  expect(data.byteLength).toBeGreaterThan(5000);
+  expect(writes).toEqual([]);
+});
+
+// 긴 처방 이름과 많은 항목이 한 페이지에서 잘리거나 사라지지 않아야 한다.
+test('긴 보고서를 여러 페이지 PDF로 다운로드한다', async function longPdf({
+  page,
+}, testInfo) {
+  const plans: MedicationState['plans'] = [];
+  for (let index = 0; index < 24; index++)
+    plans.push({
+      id: `long-${index}`,
+      title: `합성 장기 처방 ${index + 1} - 매우 긴 이름으로 등록한 처방 묶음을 구분하기 위한 추가 설명이 들어간 제목`,
+      notes: '',
+      endedOn: null,
+      timing: { mode: 'regular', schedule: null },
+      medicines: [
+        {
+          id: 'a',
+          name: '매우 긴 이름의 합성 처방 약품과 추가 설명을 포함한 시험 알약',
+          strength: '250mg',
+          dose: '1정',
+          timing: null,
+        },
+      ],
+    });
+  await prepare(page, 'none', { version: 1, records: [], plans });
+  await page.goto('/schedule/report');
+  await expect(page.getByRole('checkbox')).toHaveCount(25);
+  await page.evaluate(
+    // 실제 PDF 캔버스의 글꼴·페이지를 관찰해 제목과 본문이 분리되는지 검사한다.
+    function observePdfLayout() {
+      const draws: { page: number; font: string; text: string }[] = [];
+      let page = 0;
+      const originalRect = CanvasRenderingContext2D.prototype.fillRect;
+      const originalText = CanvasRenderingContext2D.prototype.fillText;
+      // 전체 캔버스 배경 초기화를 새 PDF 페이지의 시작으로 구분한다.
+      CanvasRenderingContext2D.prototype.fillRect = function rect(...args) {
+        if (args[2] === 1240 && args[3] === 1754) page++;
+        return originalRect.apply(this, args);
+      };
+      // 글자 내용은 합성 테스트 메모리에만 보존하며 실제 서버에 보내지 않는다.
+      CanvasRenderingContext2D.prototype.fillText = function text(...args) {
+        draws.push({ page, font: this.font, text: args[0] });
+        return originalText.apply(this, args);
+      };
+      (window as unknown as { pdfDraws: typeof draws }).pdfDraws = draws;
+    },
+  );
+  await page.getByRole('button', { name: '선택 완료 · 보고서 보기' }).click();
+  const waiting = page.waitForEvent('download');
+  await page.getByRole('button', { name: 'PDF 다운로드', exact: true }).click();
+  const download = await waiting;
+  const path = `/private/tmp/medkit-report-pdf-long-${testInfo.project.name}.pdf`;
+  await download.saveAs(path);
+  const data = await readFile(path);
+  expect(
+    data.toString('latin1').match(/\/Type \/Page\b/g)!.length,
+  ).toBeGreaterThan(1);
+  const draws = await page.evaluate(
+    // 페이지 번호·메타 설명을 제외한 분류/약품 제목과 본문만 비교한다.
+    function pdfLayout() {
+      return (
+        window as unknown as {
+          pdfDraws: { page: number; font: string; text: string }[];
+        }
+      ).pdfDraws.filter(
+        // 문서의 실제 스타일로 각 줄의 역할을 판별한다.
+        function relevant(row) {
+          return /(?:600 (?:28|32)px|26px)/.test(row.font);
+        },
+      );
+    },
+  );
+  for (let index = 0; index < draws.length - 1; index++) {
+    const current = draws[index];
+    const next = draws[index + 1];
+    if (
+      (current.font.includes('600 32px') && next.font.includes('600 28px')) ||
+      (current.font.includes('600 28px') && !next.font.includes('600 28px'))
+    ) {
+      expect(next.page, `${current.text} 다음 줄이 같은 페이지여야 함`).toBe(
+        current.page,
+      );
+    }
+  }
 });

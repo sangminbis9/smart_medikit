@@ -9,7 +9,17 @@ export type ReportItem = {
   name: string;
   duration: string;
   medicines: string[];
+  dates: string[];
 };
+
+export const reportTitle = '진료용 약 복용 보고서';
+export const reportCategoryLabels = {
+  prescription: '복용 중인 처방약',
+  cabinet: '일반 의약품 복용 기록',
+};
+export const reportDateLabel = '복용 날짜(반출 기준)';
+export const reportNotice =
+  '사용자 등록 처방과 반출 이력 참고자료입니다. 일반약의 복용 날짜는 반출 날짜 기준이며 실제 섭취를 확인한 날짜가 아닙니다. 일수는 등록한 처방 기간 기준입니다.';
 
 // 직접 입력한 날짜가 실제 달력 날짜인지 검증한다.
 function validDay(value: string): boolean {
@@ -89,6 +99,7 @@ export function buildReportItems(
       selectionIds: [`plan:${plan.id}`],
       kind: 'prescription',
       name: plan.title,
+      dates: [],
       // 일수는 등록 기간 그대로 유지하되 명시적 종료는 상시 표시보다 우선한다.
       duration: plan.endedOn
         ? schedule?.endDate
@@ -112,7 +123,7 @@ export function buildReportItems(
   const events = [...activity.history, ...activity.pending].sort(
     // 같은 약품의 이름은 가장 최근 반출 기록의 표기를 사용한다.
     function latest(left, right) {
-      return right.occurredAt.localeCompare(left.occurredAt);
+      return Date.parse(right.occurredAt) - Date.parse(left.occurredAt);
     },
   );
   for (const event of events) {
@@ -130,6 +141,7 @@ export function buildReportItems(
     if (existing) {
       if (!existing.selectionIds.includes(selectionId))
         existing.selectionIds.push(selectionId);
+      if (!existing.dates.includes(date)) existing.dates.push(date);
       continue;
     }
     // 제품 매핑이 없어져도 포함된 포장 ID로 제외 선택을 유지한다.
@@ -137,6 +149,7 @@ export function buildReportItems(
       id,
       selectionIds: [selectionId],
       kind: 'cabinet',
+      dates: [date],
       name: event.medicineName,
       duration: '',
       medicines: [],

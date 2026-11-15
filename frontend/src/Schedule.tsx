@@ -150,29 +150,18 @@ export default function Schedule({
       </div>
       {medications.status === 'ready' ? (
         <>
-          {!kit.demo && (
+          {!kit.demo && !medications.publicAccess && (
             <div className="medication-server-actions">
-              {!medications.publicAccess && (
-                <p className="caption">
-                  새로고침하면 다시 잠겨요. 저장한 목록은 AWS에 유지돼요.
-                </p>
-              )}
+              <p className="caption">
+                새로고침하면 다시 잠겨요. 저장한 목록은 AWS에 유지돼요.
+              </p>
               <button
-                className="text-button"
-                onClick={medications.reload}
+                className="soft-button"
+                onClick={medications.lock}
                 disabled={medications.busy}
               >
-                복용약 새로고침
+                복용약 잠그기
               </button>
-              {!medications.publicAccess && (
-                <button
-                  className="soft-button"
-                  onClick={medications.lock}
-                  disabled={medications.busy}
-                >
-                  복용약 잠그기
-                </button>
-              )}
             </div>
           )}
           <MedicationPlans

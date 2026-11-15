@@ -407,9 +407,12 @@ test.describe('공통 비밀번호 모드', function privateModeTests() {
       '다른 기기의 최신 입력',
     );
     await dialog.getByRole('button', { name: '닫기', exact: true }).click();
-    await page
-      .getByRole('button', { name: '복용약 새로고침', exact: true })
-      .click();
+    await page.evaluate(
+      // 기존 화면 복귀 자동 조회로 최신 공유 상태를 읽는다.
+      function refocus() {
+        window.dispatchEvent(new Event('focus'));
+      },
+    );
     await expect(page.locator('.manual-dose-row')).toContainText(
       '다른 기기의 최신 입력',
     );
@@ -679,9 +682,12 @@ test.describe('완전 공개 시연 모드', function publicModeTests() {
       .getByRole('button', { name: '삭제하기', exact: true })
       .click();
     await expect(other.getByRole('dialog')).toHaveCount(0);
-    await page
-      .getByRole('button', { name: '복용약 새로고침', exact: true })
-      .click();
+    await page.evaluate(
+      // 기존 화면 복귀 자동 조회로 최신 공유 상태를 읽는다.
+      function refocus() {
+        window.dispatchEvent(new Event('focus'));
+      },
+    );
     await expect(card).toHaveCount(0);
     await expect(page.locator('.manual-dose-row')).toHaveCount(0);
     expect(server.state.plans).toHaveLength(0);
@@ -1074,7 +1080,12 @@ test.describe('완전 공개 시연 모드', function publicModeTests() {
         return products.attempts;
       })
       .toBe(1);
-    await page.getByRole('button', { name: '복용약 새로고침' }).click();
+    await page.evaluate(
+      // 기존 화면 복귀 자동 조회로 최신 공유 상태를 읽는다.
+      function refocus() {
+        window.dispatchEvent(new Event('focus'));
+      },
+    );
     await expect(
       page.getByRole('button', { name: '복용약 등록' }),
     ).toBeEnabled();

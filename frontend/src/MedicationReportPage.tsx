@@ -11,6 +11,10 @@ import { dayKey, type Package } from './data';
 import type { MedicationState } from './medicationPlans';
 import {
   buildReportItems,
+  reportTitle,
+  reportNotice,
+  reportDateLabel,
+  reportCategoryLabels,
   reportRange,
   validReportRange,
   type ReportItem,
@@ -35,7 +39,6 @@ export default function MedicationReport({
   medications: MedicationPlansStore;
 }) {
   const [attempt, setAttempt] = useState(0);
-  const [selectionVersion, setSelectionVersion] = useState(0);
   const [source, setSource] = useState<ReportSource | null>(null);
   const [status, setStatus] = useState<'loading' | 'ready' | 'error'>(
     'loading',
@@ -84,7 +87,7 @@ export default function MedicationReport({
           if (!active) return;
           setStatus('error');
           setError(
-            '약품 목록을 모두 불러오지 못했어요. 복약 화면에서 연결과 잠금을 확인하거나 새로고침해주세요.',
+            '약품 목록을 모두 불러오지 못했어요. 연결과 잠금을 확인한 뒤 다시 시도해주세요.',
           );
         } finally {
           window.clearTimeout(timeout);
@@ -122,18 +125,10 @@ export default function MedicationReport({
       return previous + 1;
     });
   }
-  // 명시적 새로고침에서는 기간과 체크도 초기화한다.
-  function retry() {
-    setSelectionVersion(function next(previous) {
-      return previous + 1;
-    });
-    refreshSources();
-    void kit.refresh();
-  }
   return (
     <div className="standard-page report-page">
       <ReportSelection
-        key={`${kit.demo}:${selectionVersion}`}
+        key={String(kit.demo)}
         source={source}
         ready={ready}
         onRefresh={refreshSources}
@@ -143,9 +138,6 @@ export default function MedicationReport({
             <h1>진료용 보고서</h1>
             <p>처방과 반출 약품을 골라 진료 시 보여주세요.</p>
           </div>
-          <button type="button" className="soft-button" onClick={retry}>
-            새로고침
-          </button>
         </div>
         {kit.demo && (
           <p className="report-notice" role="status">
@@ -169,9 +161,16 @@ export default function MedicationReport({
           />
         )}
         {status === 'error' && !kit.demo && kit.online && (
-          <p className="report-notice" role="alert">
-            {error}
-          </p>
+          <div className="report-notice">
+            <p role="alert">{error}</p>
+            <button
+              type="button"
+              className="soft-button"
+              onClick={refreshSources}
+            >
+              다시 시도
+            </button>
+          </div>
         )}
         {!ready && (
           <p className="caption" role="status">
@@ -206,6 +205,8 @@ function ReportSelection({
   const [preview, setPreview] = useState(false);
   const [previewRange, setPreviewRange] = useState(range);
   const [previewItems, setPreviewItems] = useState<ReportItem[]>([]);
+  const [pdfBusy, setPdfBusy] = useState(false);
+  const [pdfError, setPdfError] = useState('');
   const valid = validReportRange(range.start, range.end);
   const items = useMemo(
     // 날짜별 복용 회차를 만들지 않고 등록 처방과 반출 약품만 계산한다.
@@ -260,8 +261,25 @@ function ReportSelection({
   // 기간과 제외한 카드를 유지하고 양쪽 출처를 다시 읽는다.
   function editSelection() {
     setPreview(false);
+    setPdfError('');
     onRefresh();
     window.scrollTo(0, 0);
+  }
+
+  // 보고서 스냅샷만 다운로드하며 생성 중 중복 클릭과 민감 오류 출력을 막는다.
+  async function downloadPdf() {
+    if (pdfBusy || !showingReport) return;
+    setPdfBusy(true);
+    setPdfError('');
+    try {
+      const { downloadMedicationReport } =
+        await import('./medicationReportPdf');
+      await downloadMedicationReport(previewItems, previewRange);
+    } catch {
+      setPdfError('PDF를 만들지 못했어요. 잠시 후 다시 눌러주세요.');
+    } finally {
+      setPdfBusy(false);
+    }
   }
 
   const content = (['prescription', 'cabinet'] as const).map(
@@ -274,8 +292,7 @@ function ReportSelection({
         },
       );
       if (showingReport && !entries.length) return null;
-      const title =
-        kind === 'prescription' ? '복용 중인 처방약' : '약통에서 반출된 약품';
+      const title = reportCategoryLabels[kind];
       return (
         <section className="report-category" key={kind} aria-label={title}>
           <h3 className="report-category-title">{title}</h3>
@@ -352,15 +369,27 @@ function ReportSelection({
       )}
       {children}
       {showingReport ? (
-        <section className="report-document" aria-label="진료용 약품 보고서">
-          <h2>진료용 약품 보고서</h2>
+        <section className="report-document" aria-label={reportTitle}>
+          <div className="report-document-heading">
+            <h2>{reportTitle}</h2>
+            <button
+              type="button"
+              className="primary-button report-pdf-button"
+              disabled={pdfBusy}
+              onClick={downloadPdf}
+            >
+              {pdfBusy ? 'PDF 만드는 중…' : 'PDF 다운로드'}
+            </button>
+          </div>
+          {pdfError && (
+            <p className="form-error" role="alert">
+              {pdfError}
+            </p>
+          )}
           <p className="report-caption">
             조회 기간 {previewRange.start} ~ {previewRange.end}
           </p>
-          <p className="report-caption">
-            사용자 등록 처방과 보관함 반출 이력 참고자료이며 실제 복용을 확인한
-            자료는 아닙니다. 일수는 등록한 처방 기간 기준입니다.
-          </p>
+          <p className="report-caption">{reportNotice}</p>
           {content}
         </section>
       ) : (
@@ -461,6 +490,11 @@ function ReportItemContent({ item }: { item: ReportItem }) {
         {item.name}
         {item.duration && <span> · {item.duration}</span>}
       </strong>
+      {item.kind === 'cabinet' && (
+        <small>
+          {reportDateLabel}: {item.dates.join(', ')}
+        </small>
+      )}
       {item.kind === 'prescription' && (
         <small>
           포함 약:{' '}

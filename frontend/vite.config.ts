@@ -4,6 +4,8 @@ import tailwindcss from '@tailwindcss/vite';
 import { VitePWA } from 'vite-plugin-pwa';
 
 export default defineConfig({
+  // 개발 중 첫 PDF 클릭의 의존성 재최적화로 보고서 선택이 초기화되지 않게 한다.
+  optimizeDeps: { include: ['jspdf'] },
   plugins: [
     react(),
     tailwindcss(),

@@ -211,3 +211,23 @@ a.report-navigation {
     font-size: 13px;
   }
 }
+
+.report-document-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.report-document-heading h2 {
+  min-width: 0;
+}
+.report-pdf-button {
+  flex-shrink: 0;
+  min-height: 44px;
+  padding: 10px 12px;
+  font-size: 13px;
+}
+
+.report-notice .soft-button {
+  margin-top: 12px;
+}

@@ -14,6 +14,13 @@ from .config import load_config
 LOGGER = logging.getLogger(__name__)
 
 
+class DemoLogFormatter(logging.Formatter):
+    # 새 작업 묶음이 시작될 때만 앞에 빈 줄을 넣는다.
+    def format(self, record):
+        message = super().format(record)
+        return f"\n{message}" if getattr(record, "section_start", False) else message
+
+
 # 카메라 상세 진단은 숨기되 경고와 오류 및 사용자의 진단 설정은 보존한다.
 def configure_camera_logging():
     os.environ.setdefault("LIBCAMERA_LOG_LEVELS", "*:WARN")
@@ -111,7 +118,10 @@ def sync_loop(worker, stop, results):
                 }
                 message = messages.get(status)
                 if message and (message != previous_message or status in {"UPLOADED", "COMPLETED", "REVIEW_REQUIRED"}):
-                    (LOGGER.warning if status in {"FAILED", "ERROR"} else LOGGER.info)(message)
+                    (LOGGER.warning if status in {"FAILED", "ERROR"} else LOGGER.info)(
+                        message,
+                        extra={"section_start": status in {"UPLOADED", "COMPLETED", "REVIEW_REQUIRED", "FAILED", "ERROR"}},
+                    )
                 previous_message = message
         except Exception as error:
             LOGGER.warning("전송 작업 오류: %s", type(error).__name__)
@@ -348,7 +358,9 @@ def main(argv=None):
     logging.addLevelName(logging.INFO, "안내")
     logging.addLevelName(logging.WARNING, "확인 필요")
     logging.addLevelName(logging.ERROR, "오류")
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
+    handler = logging.StreamHandler()
+    handler.setFormatter(DemoLogFormatter("%(asctime)s [%(levelname)s] %(message)s"))
+    logging.basicConfig(level=logging.INFO, handlers=[handler])
     try:
         config = load_config(args.config.resolve())
         if args.command == "check-config":

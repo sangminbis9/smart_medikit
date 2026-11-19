@@ -10,6 +10,7 @@ from unittest.mock import Mock
 import cv2
 import numpy as np
 from medikit_pi.__main__ import (
+    DemoLogFormatter,
     configure_camera_logging,
     run_video,
     safely_close,
@@ -103,6 +104,15 @@ def test_server_status_logs_are_clear_and_do_not_repeat(caplog):
     assert "웹에서 확인해 주세요" in caplog.text
     assert "보관된 작업을 다시 시도합니다" in caplog.text
     assert [results.get() for _ in range(5)] == ["UPLOADED", "PENDING", "PROCESSING", "REVIEW_REQUIRED", "ERROR"]
+
+
+# 새 묶음 앞에만 빈 줄을 넣고 일반 기록은 연속으로 보여 준다.
+def test_demo_formatter_separates_marked_groups():
+    formatter = DemoLogFormatter("%(message)s")
+    record = logging.LogRecord("test", logging.INFO, "", 0, "기록", (), None)
+    assert formatter.format(record) == "기록"
+    record.section_start = True
+    assert formatter.format(record) == "\n기록"
 
 
 # 외부 카메라의 평상시 정보만 줄이고 경고와 오류는 남긴다.

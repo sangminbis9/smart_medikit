@@ -46,9 +46,9 @@ class StageWorker:
         self.transport.upload_stage(event, directory)
         self.outbox.complete_stage(event["session_id"], self.stage)
         if self.stage == "OCR_REQUESTED":
-            LOGGER.info("약품 포장 사진을 서버에 전송했습니다. 제품 정보 인식을 요청했습니다.")
+            LOGGER.info("약품 포장 사진을 서버에 전송했습니다. 제품 정보 인식을 요청했습니다.", extra={"section_start": True})
         else:
-            LOGGER.info("보관함 내부 사진과 분석 결과를 서버에 전송했습니다.")
+            LOGGER.info("보관함 내부 사진과 분석 결과를 서버에 전송했습니다.", extra={"section_start": True})
 
     # 직전 내부 영상과 비교한 결과·새 기준 영상을 하나의 트랜잭션으로 보존한다.
     def movement(self, event, directory):

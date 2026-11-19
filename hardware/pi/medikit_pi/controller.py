@@ -76,7 +76,7 @@ class CaptureController:
             return
         self.was_open = opened
         if opened:
-            LOGGER.info("뚜껑이 열렸습니다. 카메라 촬영을 준비합니다.")
+            LOGGER.info("뚜껑이 열렸습니다. 카메라 촬영을 준비합니다.", extra={"section_start": True})
             if self.session_id is not None:
                 self.finish()
             self.session_id = self.outbox.begin_session(self.config["box_id"])
@@ -89,7 +89,7 @@ class CaptureController:
             self.board.status(None)
             self.board.lamp(True)
         elif self.session_id is not None:
-            LOGGER.info("뚜껑이 닫혔습니다. 보관함 내부를 촬영합니다.")
+            LOGGER.info("뚜껑이 닫혔습니다. 보관함 내부를 촬영합니다.", extra={"section_start": True})
             self.state = "CLOSING"
             self.close_started = now
             self.close_attempts = 0

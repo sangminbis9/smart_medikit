@@ -77,5 +77,27 @@ def test_stage_failure_log_is_safe_and_not_repeated(caplog):
     stop.is_set.side_effect = [False, False, True]
     with caplog.at_level(logging.WARNING):
         stage_loop(worker, stop)
-    assert caplog.text.count("저장된 작업을 자동으로 다시 시도합니다") == 1
+    assert caplog.text.count("AWS 전송 또는 내부 분석 실패. 자동 재시도합니다") == 1
     assert "synthetic-secret" not in caplog.text
+
+
+# AWS 전송이 성공한 뒤에만 포장 단계 성공 메시지를 남긴다.
+def test_upload_success_log_requires_success(tmp_path, caplog):
+    box = Outbox(tmp_path, staged=True)
+    transport = Mock()
+    try:
+        session = box.begin_session("test-box")
+        box.save_capture(session, "package", photo())
+        worker = StageWorker(box, "OCR_REQUESTED", transport=transport)
+        transport.upload_stage.side_effect = ConnectionError()
+        with caplog.at_level(logging.INFO):
+            try:
+                worker.step()
+            except ConnectionError:
+                pass
+            assert "AWS 전송 성공" not in caplog.text
+            transport.upload_stage.side_effect = None
+            worker.step()
+        assert "AWS 전송 성공: 약품 포장" in caplog.text
+    finally:
+        box.close()

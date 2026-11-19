@@ -119,6 +119,13 @@ class CandidateTracker:
         self.max_gap_seconds = max_gap_seconds
         self.reset()
 
+    # 현재 후보가 연속으로 유지된 관측 시간을 반환한다.
+    @property
+    def stable_duration(self) -> float:
+        if self._candidate is None or self._last_at is None:
+            return 0.0
+        return max(0.0, self._last_at - self._started_at)
+
     # 새 검출과 연속 영상 안정성이 모두 유지될 때만 촬영 조건을 만족시킨다.
     def update(self, candidate: Detection | None, detected_at: float, frame_stable: bool) -> bool:
         if candidate is None or not frame_stable:

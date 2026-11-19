@@ -111,9 +111,10 @@ def test_capture_messages(rig, caplog):
             feed(rig, index / 10, rig[5], opened=False)
     assert "뚜껑이 열렸습니다" in caplog.text
     assert "촬영 준비 완료" in caplog.text
-    assert "약품 포장 사진을 저장했습니다" in caplog.text
+    assert "포장 감지: 신뢰도 90% · 안정 " in caplog.text
+    assert "약품 포장 감지 및 촬영 성공" in caplog.text
     assert "뚜껑이 닫혔습니다" in caplog.text
-    assert "보관함 내부 사진을 저장했습니다" in caplog.text
+    assert "보관함 내부 촬영 성공" in caplog.text
 
 
 # 파일 저장보다 먼저 수신한 고해상도 프레임 시각을 키에 사용한다.

@@ -108,13 +108,10 @@ def sync_loop(worker, stop, results):
             if status:
                 results.put(status)
                 messages = {
-                    "UPLOADED": "촬영 세션 정보를 서버에 전송했습니다. 처리 결과를 기다립니다.",
-                    "PENDING": "서버가 촬영 정보를 처리하고 있습니다.",
-                    "PROCESSING": "서버가 촬영 정보를 처리하고 있습니다.",
-                    "COMPLETED": "서버의 촬영 처리가 완료되었습니다. 웹에서 결과를 확인해 주세요.",
-                    "REVIEW_REQUIRED": "서버 처리가 끝났지만 확인이 필요합니다. 웹에서 확인해 주세요.",
-                    "FAILED": "서버 처리에 실패했습니다. 보관된 작업을 다시 전송합니다.",
-                    "ERROR": "서버 전송 또는 상태 확인에 문제가 생겼습니다. 보관된 작업을 다시 시도합니다.",
+                    "COMPLETED": "서버 처리 완료.",
+                    "REVIEW_REQUIRED": "서버 처리 확인 필요. 웹에서 확인하세요.",
+                    "FAILED": "서버 처리 실패. 자동 재시도합니다.",
+                    "ERROR": "AWS 전송 또는 상태 확인 실패. 자동 재시도합니다.",
                 }
                 message = messages.get(status)
                 if message and (message != previous_message or status in {"UPLOADED", "COMPLETED", "REVIEW_REQUIRED"}):
@@ -292,7 +289,6 @@ def run_hardware(config):
             sender.start()
         else:
             LOGGER.info("AWS 미연결: 촬영을 로컬 큐에 보관합니다.")
-        LOGGER.info("스마트 약품보관함을 실행했습니다. 뚜껑을 열어 촬영을 시작하세요.")
         running, retry_at, last_detector_error = False, 0.0, None
         while True:
             now = time.monotonic()

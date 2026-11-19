@@ -99,10 +99,9 @@ def test_server_status_logs_are_clear_and_do_not_repeat(caplog):
     results = queue.SimpleQueue()
     with caplog.at_level(logging.INFO):
         sync_loop(worker, stop, results)
-    assert "촬영 세션 정보를 서버에 전송했습니다" in caplog.text
-    assert caplog.text.count("서버가 촬영 정보를 처리하고 있습니다") == 1
-    assert "웹에서 확인해 주세요" in caplog.text
-    assert "보관된 작업을 다시 시도합니다" in caplog.text
+    assert "서버가 촬영 정보를 처리하고 있습니다" not in caplog.text
+    assert "서버 처리 확인 필요. 웹에서 확인하세요" in caplog.text
+    assert "AWS 전송 또는 상태 확인 실패. 자동 재시도합니다" in caplog.text
     assert [results.get() for _ in range(5)] == ["UPLOADED", "PENDING", "PROCESSING", "REVIEW_REQUIRED", "ERROR"]
 
 

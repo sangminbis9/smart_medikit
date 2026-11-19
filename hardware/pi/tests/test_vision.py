@@ -74,6 +74,9 @@ class VisionTests(unittest.TestCase):
         self.assertFalse(tracker.update(candidate, 0, True))
         self.assertFalse(tracker.update(candidate, 0.5, True))
         self.assertTrue(tracker.update(candidate, 1, True))
+        self.assertEqual(tracker.stable_duration, 1.0)
+        tracker.update(None, 1.1, False)
+        self.assertEqual(tracker.stable_duration, 0.0)
 
     # 흔들림·검출 공백·다른 후보로 바뀌면 안정화 시간을 다시 시작하는지 확인한다.
     def test_motion_missing_and_replacement_reset_stability(self):

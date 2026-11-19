@@ -3,6 +3,8 @@
 from unittest.mock import Mock
 
 import pytest
+from boto3.dynamodb.types import TypeDeserializer
+
 from backend.pi_contract import (
     bind_pi_event,
     official_form,
@@ -10,7 +12,6 @@ from backend.pi_contract import (
     save_pi_result,
     save_result,
 )
-from boto3.dynamodb.types import TypeDeserializer
 
 
 # 합성 DynamoDB 응답으로 저장한 인식 결과를 다음 조회에서 재사용한다.
@@ -40,6 +41,22 @@ def test_source_binding():
     assert event == "event-1" and source["session_id"] == "session-1"
     with pytest.raises(ValueError):
         bind_pi_event(metadata, "bucket", "ocr-input/other/package.jpg", "legacy")
+
+
+# 새 파일명도 세션 메타데이터와 정확히 일치해야 한다.
+def test_timestamped_source_binding():
+    session = "75bc9bc6-c7d5-4c39-9f56-da649308bc25"
+    metadata = {"Metadata": {"event-id": "event-1", "session-id": session}, "ETag": "digest"}
+    key = f"ocr-input/20261119_230741_{session}_package.jpg"
+    event, source = bind_pi_event(metadata, "bucket", key, "legacy")
+    assert event == "event-1" and source["session_id"] == session and source["key"] == key
+    for invalid in (
+        "ocr-input/20261119_230741_other_package.jpg",
+        f"ocr-input/not-a-date_{session}_package.jpg",
+        f"ocr-input/20261119_230741_{session}_package.jpg.extra",
+    ):
+        with pytest.raises(ValueError):
+            bind_pi_event(metadata, "bucket", invalid, "legacy")
 
 
 # 완료를 남겨 Pi 결합을 가능하게 하고 중복 전송에서 제품·이력을 다시 쓰지 않는다.

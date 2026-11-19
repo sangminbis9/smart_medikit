@@ -1,6 +1,8 @@
 """센서와 영상 증거로 개폐 세션당 촬영을 제한한다."""
 
 import logging
+import time
+from datetime import datetime, timedelta, timezone
 
 import cv2
 
@@ -199,6 +201,11 @@ class CaptureController:
             if self.board.is_open() != expected_open:
                 return False
             photo = self.camera.capture()
+            captured_at = None
+            if kind == "package" and self.outbox.staged:
+                # 프레임을 받은 단조 시각을 실제 시각으로 환산해 저장 시각과 구분한다.
+                age = time.monotonic() - photo.timestamp
+                captured_at = datetime.now(timezone.utc) - timedelta(seconds=age)
             if self.board.is_open() != expected_open or not photo.autofocus_ok:
                 return False
             if sharpness(photo.image, box) < self.rules["still_sharpness_threshold"]:
@@ -223,7 +230,7 @@ class CaptureController:
             )
             if not ok:
                 raise OSError("JPEG 변환 실패")
-            self.outbox.save_capture(self.session_id, kind, encoded.tobytes())
+            self.outbox.save_capture(self.session_id, kind, encoded.tobytes(), captured_at=captured_at)
             LOGGER.info("로컬 %s 촬영 저장 완료", kind)
             return True
         except Exception as error:

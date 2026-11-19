@@ -58,7 +58,8 @@
 2026-11-11 설치 준비: `hardware/pi/config.example.toml`에 실제 배포의 보관함·버킷·리전·상태 URL을 채우고 전송은 기본 비활성화한다. `check-aws`는 단기 인증·계정 일치·S3 HeadBucket·임의의 미등록 `pi-check-*` 상태 조회만 수행하며 촬영 객체나 재고를 생성하지 않는다. 기존 이벤트/API 필드는 변경하지 않는다. 현재 `reconcile`은 포장 미촬영 세션에서 재고를 변경하지 않으므로 반출·재반입도 포장 촬영이 필요하다. 내부 사진만으로 기존 약품 ID를 대응시키는 기능은 이 설치 준비에 포함하지 않는다.
 
 - 공통 식별자: `box_id`, `event_id`, `session_id`, `sequence`. 단계 시각 `captured_at`은 관측 시각이며 실제 손으로 꺼낸 정확한 시각은 아니다. 기존 `occurred_at`은 세션 시작 시각이다.
-- 포장 사진은 기존 `ocr-input/<session_id>/package.jpg`, 내부·단계 객체는 `medkit-sessions/<session_id>/`에 저장한다. 사진 메타데이터 `event-id`로 기존 `RECOGNITION` 결과와 연결하며 재전송은 조건부 쓰기로 같은 이미지 버전을 유지한다.
+- 새 단계별 세션의 포장 사진은 `ocr-input/YYYYMMDD_HHMMSS_<session_id>_package.jpg`에 저장한다. 시각은 프레임 수신 단조 시각을 Pi 시스템 시계로 환산한 KST이며 시계 동기화와 프레임 복사 지연의 영향을 받는다. 키는 사진 저장 전 큐에 영속화하고 모든 단계에서 재사용한다. 이전 미완료 세션은 기존 `ocr-input/<session_id>/package.jpg` 경로를 유지하며 비단계 전송도 종전 경로를 유지한다. 내부·단계 객체는 `medkit-sessions/<session_id>/`에 저장한다. 사진 메타데이터 `event-id`, `session-id`, `sha256`을 유지하며 재전송은 조건부 쓰기로 같은 이미지 버전을 유지한다.
+- **배포 순서:** 운영 OCR의 `backend/pi_contract.py`가 새 파일명과 기존 파일명 모두를 허용하도록 먼저 배포하고 확인해야 한다. 현재 저장소 수정만으로 운영 Lambda는 갱신되지 않는다. S3 이벤트 알림의 접두사·접미사와 Pi 권한도 새 경로를 허용하는지 실제 AWS에서 별도 확인해야 하며, 이 변경은 AWS에 배포하지 않았다.
 - 단계 객체 `ocr-ready.json`, `movement-ready.json` 전송 후 `SESSION_CLOSED`의 `closed-ready.json`을 발행한다. OCR 완료 전에도 내부 판단은 계속한다. 재고 반영은 기존 순차 완료 조회로 순서를 보존한다.
 - 최상단 새 후보 하나는 아래 포장 가림을 허용해 `IN/ESTIMATED`로 사용자 방향 확인 없이 자동 처리한다. 기준 영상 없음·촬영 실패·전역 장면 변화는 반입으로 만들지 않는다. 로컬 `COMPLETED`는 판단 처리 완료이며 실물 이동 입증은 아니다.
 - `capture_events.py`는 단일 식약처 품목기준코드와 동일 세션을 결합한다. 포장 `last_sequence` 조건과 이력·알림 트랜잭션으로 중복을 막는다. 신규 포장에 `first_registration_pending=true`, 알 수 없는 수량·기한은 null이다. 재반입은 `active_out_event_id`를 해제한다.

@@ -136,8 +136,15 @@ class S3Transport:
         for kind in ("package", "interior"):
             prefix = self.ocr_prefix if kind == "package" and event.get("stage") else self.prefix
             key = f"{prefix}/{session_id}/{kind}.jpg"
+            if kind == "package" and event.get("stage") and event.get("package_image_key"):
+                candidate = event["package_image_key"]
+                # 기존 placeholder와 구분해 영속화된 새 키만 사용한다.
+                if re.fullmatch(r"[A-Za-z0-9_./-]+/\d{8}_\d{6}_" + re.escape(session_id) + r"_package\.jpg", candidate) and ".." not in candidate.split("/"):
+                    key = candidate
+                elif candidate != f"sessions/{session_id}/package.jpg":
+                    raise ValueError("저장된 포장 이미지 키가 세션과 일치하지 않습니다.")
             captured = event[f"{kind}_capture_ok"]
-            metadata[f"{kind}_image_key"] = key if captured else None
+            metadata[f"{kind}_image_key"] = key if captured or (kind == "package" and event.get("package_image_key") == key) else None
             if captured and event.get("stage") != "SESSION_CLOSED":
                 with (Path(directory) / f"{kind}.jpg").open("rb") as image_file:
                     content = image_file.read()

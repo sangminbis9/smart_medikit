@@ -7,7 +7,7 @@ import os
 import sqlite3
 import threading
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 
@@ -23,8 +23,9 @@ def _sync_directory(path: Path) -> None:
 
 class Outbox:
     # 동일 데이터 폴더의 중복 실행을 차단하고 중단된 세션을 복구한다.
-    def __init__(self, root: Path, *, staged=False):
+    def __init__(self, root: Path, *, staged=False, ocr_prefix="ocr-input"):
         self.staged = staged
+        self.ocr_prefix = ocr_prefix.strip("/")
         self.root = Path(root).resolve()
         self.root.mkdir(parents=True, exist_ok=True, mode=0o700)
         self._mutex = threading.RLock()
@@ -61,6 +62,15 @@ class Outbox:
                 "uploaded INTEGER NOT NULL DEFAULT 0, payload TEXT)"
             )
             self._db.commit()
+            columns = {row["name"] for row in self._db.execute("PRAGMA table_info(sessions)")}
+            # 이전 큐의 모든 세션은 기존 경로를 사용하도록 기본값을 남긴다.
+            if "key_scheme" not in columns:
+                self._db.execute("ALTER TABLE sessions ADD COLUMN key_scheme INTEGER NOT NULL DEFAULT 0")
+            if "package_s3_key" not in columns:
+                self._db.execute("ALTER TABLE sessions ADD COLUMN package_s3_key TEXT")
+            if "package_captured_at" not in columns:
+                self._db.execute("ALTER TABLE sessions ADD COLUMN package_captured_at TEXT")
+            self._db.commit()
             self._db.execute("CREATE TABLE IF NOT EXISTS capture_stages (session_id TEXT, stage TEXT, payload TEXT NOT NULL, done INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(session_id,stage))")
             self._db.commit()
             if self.staged:
@@ -86,13 +96,13 @@ class Outbox:
         session_id = str(uuid.uuid4())
         with self._mutex, self._db:
             self._db.execute(
-                "INSERT INTO sessions(session_id,event_id,box_id,occurred_at) VALUES(?,?,?,?)",
-                (session_id, str(uuid.uuid4()), box_id, datetime.now(timezone.utc).isoformat()),
+                "INSERT INTO sessions(session_id,event_id,box_id,occurred_at,key_scheme) VALUES(?,?,?,?,?)",
+                (session_id, str(uuid.uuid4()), box_id, datetime.now(timezone.utc).isoformat(), int(self.staged)),
             )
         return session_id
 
     # 성공한 사진만 원자적으로 저장하며 같은 종류의 성공 사진은 덮어쓰지 않는다.
-    def save_capture(self, session_id: str, kind: str, jpeg: bytes) -> None:
+    def save_capture(self, session_id: str, kind: str, jpeg: bytes, *, captured_at=None) -> None:
         if kind not in {"package", "interior"} or not jpeg:
             raise ValueError("촬영 종류와 비어 있지 않은 JPEG가 필요합니다.")
         with self._mutex:
@@ -104,6 +114,16 @@ class Outbox:
             target = directory / f"{kind}.jpg"
             if target.exists():
                 raise ValueError("이 세션에는 해당 사진이 이미 저장되었습니다.")
+            if kind == "package" and row["key_scheme"]:
+                captured_at = captured_at or datetime.now(timezone.utc)
+                if captured_at.tzinfo is None or captured_at.utcoffset() is None:
+                    raise ValueError("촬영 시각에는 시간대가 필요합니다.")
+                stamp = captured_at.astimezone(timezone(timedelta(hours=9))).strftime("%Y%m%d_%H%M%S")
+                key = f"{self.ocr_prefix}/{stamp}_{session_id}_package.jpg"
+                # 사진 저장 전에 키를 확정해 저장 직후 전원이 꺼져도 같은 키로 복구한다.
+                with self._db:
+                    self._db.execute("UPDATE sessions SET package_s3_key=?, package_captured_at=? WHERE session_id=?", (key, captured_at.isoformat(), session_id))
+                row = self._session(session_id)
             temporary = directory / f"{kind}.tmp"
             with temporary.open("wb") as image_file:
                 image_file.write(jpeg)
@@ -116,7 +136,9 @@ class Outbox:
                 return
             stage = "OCR_REQUESTED" if kind == "package" else "MOVEMENT_REQUESTED"
             event = {key: row[key] for key in ("box_id", "session_id", "event_id", "sequence")}
-            event.update(stage=stage, captured_at=datetime.now(timezone.utc).isoformat())
+            event.update(stage=stage, captured_at=(row["package_captured_at"] if kind == "package" and row["package_captured_at"] else datetime.now(timezone.utc).isoformat()))
+            if row["package_s3_key"]:
+                event["package_image_key"] = row["package_s3_key"]
             with self._db:
                 self._db.execute("INSERT OR IGNORE INTO capture_stages(session_id,stage,payload) VALUES(?,?,?)",
                                  (session_id, stage, json.dumps(event)))
@@ -137,6 +159,10 @@ class Outbox:
                         continue
                     event = {key: row[key] for key in ("box_id", "session_id", "event_id", "sequence")}
                     event.update(stage=stage, captured_at=datetime.fromtimestamp(photo.stat().st_mtime, timezone.utc).isoformat())
+                    if row["package_s3_key"]:
+                        event["package_image_key"] = row["package_s3_key"]
+                        if kind == "package":
+                            event["captured_at"] = row["package_captured_at"]
                     self._db.execute("INSERT OR IGNORE INTO capture_stages(session_id,stage,payload) VALUES(?,?,?)", (row["session_id"], stage, json.dumps(event)))
 
     # 같은 단계의 재전송을 동일 세션 식별자로 멱등 처리한다.
@@ -165,6 +191,8 @@ class Outbox:
                 event[f"{kind}_image_key"] = (
                     f"sessions/{session_id}/{kind}.jpg" if captured else None
                 )
+            if event["package_capture_ok"] and row["package_s3_key"]:
+                event["package_image_key"] = row["package_s3_key"]
             self._db.execute(
                 "UPDATE sessions SET state='READY',payload=? WHERE session_id=?",
                 (json.dumps(event), session_id),

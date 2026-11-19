@@ -76,6 +76,18 @@ def test_single_pipeline_ignores_document_metadata(metadata):
     deps["store"].fail.assert_not_called()
 
 
+# 최상위 새 파일명도 S3 이벤트와 명시된 Pi 이벤트 ID로 처리한다.
+def test_timestamped_pi_image_is_processed():
+    session = "75bc9bc6-c7d5-4c39-9f56-da649308bc25"
+    key = f"ocr-input/20261119_230741_{session}_package.jpg"
+    incoming = event()
+    incoming["Records"][0]["s3"]["object"]["key"] = key
+    deps = dependencies({"event-id": "event-1", "session-id": session})
+    assert process_records(incoming, **deps) == {"processed": 1, "skipped": 0}
+    assert deps["s3"].get_object.call_args.kwargs["Key"] == key
+    assert deps["store"].finish.call_args.args[0] == "event-1"
+
+
 # 실패는 이벤트 이력에만 기록하고 성공 약품 저장 함수는 호출하지 않는다.
 @pytest.mark.parametrize(
     "failure,expected_stage,expected_code",

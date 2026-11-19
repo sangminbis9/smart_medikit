@@ -18,7 +18,10 @@ def bind_pi_event(response, bucket, key, legacy_id):
         or not re.fullmatch(r"[A-Za-z0-9_-]{1,100}", event_id)
         or not isinstance(session, str)
         or not re.fullmatch(r"[A-Za-z0-9_-]{1,100}", session)
-        or not key.endswith(f"/{session}/package.jpg")
+        or not (
+            key.endswith(f"/{session}/package.jpg")
+            or re.search(r"(?:^|/)\d{8}_\d{6}_" + re.escape(session) + r"_package\.jpg$", key)
+        )
     ):
         raise ValueError("PI_SOURCE_MISMATCH")
     return event_id, {

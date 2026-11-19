@@ -212,7 +212,11 @@ def run_hardware(config):
     try:
         board = Board(config["gpio"])
         staged = config["aws"].get("staged_capture", False)
-        outbox = Outbox(config["data_dir"], staged=staged)
+        outbox = Outbox(
+            config["data_dir"],
+            staged=staged,
+            ocr_prefix=config["aws"].get("ocr_input_prefix", config["aws"].get("prefix", "ocr-input")),
+        )
         camera = PiCamera(config["camera"])
         detector = AsyncDetector(
             YOLOEDetector(

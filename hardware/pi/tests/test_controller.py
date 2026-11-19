@@ -1,6 +1,8 @@
 """합성 영상으로 개폐 상태와 촬영 성공 제한을 검증한다."""
 
+from datetime import datetime, timezone
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import Mock
 
 import numpy as np
@@ -96,6 +98,27 @@ def test_one_package_and_same_session_interior(rig):
     assert event["package_capture_ok"] and event["interior_capture_ok"]
     assert rig[1].capture.call_count == 2
     assert rig[0].state == "CLOSED"
+
+
+# 파일 저장보다 먼저 수신한 고해상도 프레임 시각을 키에 사용한다.
+def test_package_key_uses_frame_time(rig, monkeypatch):
+    import medikit_pi.controller as module
+
+    # 저장 시계가 프레임 수신보다 2초 늦은 상황을 고정한다.
+    class FixedDatetime(datetime):
+        # 시험에 사용할 고정된 UTC 시각을 반환한다.
+        @classmethod
+        def now(cls, tz=None):
+            return datetime(2026, 11, 19, 14, 7, 43, tzinfo=timezone.utc)
+
+    rig[3].staged = True
+    monkeypatch.setattr(module, "time", SimpleNamespace(monotonic=lambda: 12.0))
+    monkeypatch.setattr(module, "datetime", FixedDatetime)
+    warmup(rig)
+    rig[1].capture.side_effect = lambda: Frame(rig[5], True, 10.0)
+    present(rig)
+    event = rig[3].stage_head("OCR_REQUESTED")
+    assert event["package_image_key"] == f"ocr-input/20261119_230741_{event['session_id']}_package.jpg"
 
 
 # 준비 전에 존재한 포장은 새 제시로 촬영하지 않는다.

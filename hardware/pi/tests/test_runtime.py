@@ -9,7 +9,13 @@ from unittest.mock import Mock
 
 import cv2
 import numpy as np
-from medikit_pi.__main__ import run_video, safely_close, safely_finish, sync_loop
+from medikit_pi.__main__ import (
+    configure_camera_logging,
+    run_video,
+    safely_close,
+    safely_finish,
+    sync_loop,
+)
 from medikit_pi.config import load_config
 from medikit_pi.detection import Detection
 from medikit_pi.outbox import Outbox
@@ -97,3 +103,30 @@ def test_server_status_logs_are_clear_and_do_not_repeat(caplog):
     assert "웹에서 확인해 주세요" in caplog.text
     assert "보관된 작업을 다시 시도합니다" in caplog.text
     assert [results.get() for _ in range(5)] == ["UPLOADED", "PENDING", "PROCESSING", "REVIEW_REQUIRED", "ERROR"]
+
+
+# 외부 카메라의 평상시 정보만 줄이고 경고와 오류는 남긴다.
+def test_camera_logging_keeps_warnings_and_custom_levels(monkeypatch, caplog):
+    logger = logging.getLogger("picamera2")
+    original_level = logger.level
+    try:
+        monkeypatch.delenv("LIBCAMERA_LOG_LEVELS", raising=False)
+        monkeypatch.delenv("MEDIKIT_CAMERA_LOG_LEVEL", raising=False)
+        configure_camera_logging()
+        import os
+
+        assert os.environ["LIBCAMERA_LOG_LEVELS"] == "*:WARN"
+        with caplog.at_level(logging.INFO):
+            logging.getLogger("picamera2.picamera2").info("synthetic-camera-info")
+            logging.getLogger("picamera2.picamera2").warning("synthetic-camera-warning")
+            logging.getLogger("picamera2.picamera2").error("synthetic-camera-error")
+        assert "synthetic-camera-info" not in caplog.text
+        assert "synthetic-camera-warning" in caplog.text
+        assert "synthetic-camera-error" in caplog.text
+        monkeypatch.setenv("LIBCAMERA_LOG_LEVELS", "*:DEBUG")
+        monkeypatch.setenv("MEDIKIT_CAMERA_LOG_LEVEL", "INFO")
+        configure_camera_logging()
+        assert os.environ["LIBCAMERA_LOG_LEVELS"] == "*:DEBUG"
+        assert logger.level == logging.INFO
+    finally:
+        logger.setLevel(original_level)

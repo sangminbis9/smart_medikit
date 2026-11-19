@@ -14,6 +14,16 @@ from .config import load_config
 LOGGER = logging.getLogger(__name__)
 
 
+# 카메라 상세 진단은 숨기되 경고와 오류 및 사용자의 진단 설정은 보존한다.
+def configure_camera_logging():
+    os.environ.setdefault("LIBCAMERA_LOG_LEVELS", "*:WARN")
+    level = os.environ.get("MEDIKIT_CAMERA_LOG_LEVEL", "WARNING").upper()
+    logging.getLogger("picamera2").setLevel(
+        {"DEBUG": logging.DEBUG, "INFO": logging.INFO, "WARNING": logging.WARNING,
+         "ERROR": logging.ERROR}.get(level, logging.WARNING)
+    )
+
+
 # 한 자원의 종료 실패가 조명과 카메라 등 나머지 자원 정리를 막지 않게 한다.
 def safely_close(resource):
     if resource is not None:
@@ -209,6 +219,8 @@ def run_video(config, args):
 
 # 실기기 오류를 제한 시간마다 복구하며 센서와 로컬 큐를 계속 유지한다.
 def run_hardware(config):
+    # libcamera가 처음 로드되기 전에 로그 기준을 적용한다.
+    configure_camera_logging()
     from .camera import PiCamera
     from .controller import CaptureController
     from .detection import AsyncDetector, YOLOEDetector

@@ -8,7 +8,7 @@
 
 실제 연결에는 `prefix=medkit-sessions`, `ocr_input_prefix=ocr-input`, `manifest_name=closed-ready.json`, 배포된 상태 URL과 단기 SigV4 인증이 필요하다. AWS는 예제에서 기본 비활성화다. 마지막 내부 기준 JPEG 한 장은 로컬 SQLite에 보관하며 완료된 세션 사진은 기존 정리 정책을 따른다. AWS S3부터의 합성 이미지 통합 검증은 완료했지만 실제 Pi 촬영·배선·로그인은 검증하지 않았다. [종단 점검](../../docs/PIPELINE_AUDIT.md)
 
-단계별 촬영의 새 포장 사진은 `ocr-input/YYYYMMDD_HHMMSS_<session_id>_package.jpg`에 저장하며, 시각은 Pi 시스템 시계로 환산한 KST 프레임 수신 시각이다. 재시도·재시작은 큐에 저장된 같은 키를 사용하고 이전 미완료 세션은 기존 키를 유지한다. Pi 시계가 동기화되어야 파일 시각이 정확하다. **이 코드를 Pi에 적용하기 전에 운영 OCR의 `backend/pi_contract.py`를 새 파일명 호환 버전으로 배포하고 S3 알림·권한을 확인해야 한다.** 이 문서 변경만으로 AWS는 갱신되지 않는다.
+단계별 촬영의 새 포장 사진은 `ocr-input/YYYYMMDD_HHMMSS_<session_id>_package.jpg`에 저장하며, 시각은 Pi 시스템 시계로 환산한 KST 프레임 수신 시각이다. 재시도·재시작은 큐에 저장된 같은 키를 사용하고 이전 미완료 세션은 기존 키를 유지한다. Pi 시계가 동기화되어야 파일 시각이 정확하다. 운영 OCR의 `backend/pi_contract.py`에 새 파일명과 기존 경로 지원을 2026-11-20 배포했으며, 배포 후 실물 OCR과 이동 판단을 결합하는 전체 흐름은 별도 검증이 필요하다. 배포 전에 실패한 사진은 자동 재처리되지 않는다.
 
 실기기 실행은 시연 가독성을 위해 libcamera와 Picamera2의 일반 정보 로그를 줄이되 경고·오류를 유지한다. 자세한 카메라 진단이 필요할 때는 `LIBCAMERA_LOG_LEVELS='*:DEBUG' MEDIKIT_CAMERA_LOG_LEVEL=DEBUG python -m medikit_pi --config config.toml run`으로 실행한다. 이미 설정한 libcamera 로그 환경변수는 덮어쓰지 않는다.
 

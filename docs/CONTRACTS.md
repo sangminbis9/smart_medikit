@@ -59,7 +59,7 @@
 
 - 공통 식별자: `box_id`, `event_id`, `session_id`, `sequence`. 단계 시각 `captured_at`은 관측 시각이며 실제 손으로 꺼낸 정확한 시각은 아니다. 기존 `occurred_at`은 세션 시작 시각이다.
 - 새 단계별 세션의 포장 사진은 `ocr-input/YYYYMMDD_HHMMSS_<session_id>_package.jpg`에 저장한다. 시각은 프레임 수신 단조 시각을 Pi 시스템 시계로 환산한 KST이며 시계 동기화와 프레임 복사 지연의 영향을 받는다. 키는 사진 저장 전 큐에 영속화하고 모든 단계에서 재사용한다. 이전 미완료 세션은 기존 `ocr-input/<session_id>/package.jpg` 경로를 유지하며 비단계 전송도 종전 경로를 유지한다. 내부·단계 객체는 `medkit-sessions/<session_id>/`에 저장한다. 사진 메타데이터 `event-id`, `session-id`, `sha256`을 유지하며 재전송은 조건부 쓰기로 같은 이미지 버전을 유지한다.
-- **배포 순서:** 운영 OCR의 `backend/pi_contract.py`가 새 파일명과 기존 파일명 모두를 허용하도록 먼저 배포하고 확인해야 한다. 현재 저장소 수정만으로 운영 Lambda는 갱신되지 않는다. S3 이벤트 알림의 접두사·접미사와 Pi 권한도 새 경로를 허용하는지 실제 AWS에서 별도 확인해야 하며, 이 변경은 AWS에 배포하지 않았다.
+- **2026-11-20 운영 반영:** `inha-capstone-02-ocr`의 `backend/pi_contract.py` 경로 검사에 새 파일명과 기존 파일명 지원을 배포했다. S3 알림은 `ocr-input/` 아래 객체 생성에 연결되어 있고 새 경로 사진의 Lambda 호출을 확인했다. 변경 후 신규 사진의 실물 OCR 성공은 아직 검증하지 않았다. 배포 전에 실패한 요청이 자동으로 재처리된다는 뜻은 아니며, 같은 세션의 `MOVEMENT_UNCERTAIN`은 OCR 경로 수정과 별도로 확인해야 한다.
 - 단계 객체 `ocr-ready.json`, `movement-ready.json` 전송 후 `SESSION_CLOSED`의 `closed-ready.json`을 발행한다. OCR 완료 전에도 내부 판단은 계속한다. 재고 반영은 기존 순차 완료 조회로 순서를 보존한다.
 - 최상단 새 후보 하나는 아래 포장 가림을 허용해 `IN/ESTIMATED`로 사용자 방향 확인 없이 자동 처리한다. 기준 영상 없음·촬영 실패·전역 장면 변화는 반입으로 만들지 않는다. 로컬 `COMPLETED`는 판단 처리 완료이며 실물 이동 입증은 아니다.
 - `capture_events.py`는 단일 식약처 품목기준코드와 동일 세션을 결합한다. 포장 `last_sequence` 조건과 이력·알림 트랜잭션으로 중복을 막는다. 신규 포장에 `first_registration_pending=true`, 알 수 없는 수량·기한은 null이다. 재반입은 `active_out_event_id`를 해제한다.

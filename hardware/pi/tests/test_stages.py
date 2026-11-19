@@ -1,11 +1,13 @@
 """OCR 지연·오프라인과 관계없는 내부 판단과 영속 단계 복구를 검사한다."""
 
+import logging
 from unittest.mock import Mock
+
 import cv2
 import numpy as np
-from medikit_pi.outbox import Outbox
-from medikit_pi.stages import StageWorker
 from medikit_pi.detection import Detection
+from medikit_pi.outbox import Outbox
+from medikit_pi.stages import StageWorker, stage_loop
 
 
 # 합성 사진을 실제 저장 경로에 전달한다.
@@ -65,3 +67,15 @@ def test_recover_missing_stage(tmp_path):
         assert restored.stage_head('OCR_REQUESTED')['session_id'] == session
     finally:
         restored.close()
+
+
+# 단계 실패는 재시도 안내를 한 번만 표시하고 예외에 포함된 정보를 노출하지 않는다.
+def test_stage_failure_log_is_safe_and_not_repeated(caplog):
+    worker = Mock()
+    worker.step.side_effect = RuntimeError("synthetic-secret")
+    stop = Mock()
+    stop.is_set.side_effect = [False, False, True]
+    with caplog.at_level(logging.WARNING):
+        stage_loop(worker, stop)
+    assert caplog.text.count("저장된 작업을 자동으로 다시 시도합니다") == 1
+    assert "synthetic-secret" not in caplog.text

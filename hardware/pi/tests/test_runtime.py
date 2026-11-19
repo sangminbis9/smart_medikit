@@ -1,13 +1,15 @@
 """명령행 영상 모드의 실제 파일 처리와 종료 정리를 검증한다."""
 
 import json
+import logging
+import queue
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock
 
 import cv2
 import numpy as np
-from medikit_pi.__main__ import run_video, safely_close, safely_finish
+from medikit_pi.__main__ import run_video, safely_close, safely_finish, sync_loop
 from medikit_pi.config import load_config
 from medikit_pi.detection import Detection
 from medikit_pi.outbox import Outbox
@@ -79,3 +81,19 @@ def test_cleanup_survives_disk_and_device_errors():
     safely_close(device)
     controller.finish.assert_called_once()
     device.close.assert_called_once()
+
+
+# 서버 상태는 이해하기 쉽게 표시하고 같은 처리 중 메시지는 반복하지 않는다.
+def test_server_status_logs_are_clear_and_do_not_repeat(caplog):
+    worker = Mock()
+    worker.step.side_effect = ["UPLOADED", "PENDING", "PROCESSING", "REVIEW_REQUIRED", "ERROR"]
+    stop = Mock()
+    stop.is_set.side_effect = [False] * 5 + [True]
+    results = queue.SimpleQueue()
+    with caplog.at_level(logging.INFO):
+        sync_loop(worker, stop, results)
+    assert "촬영 세션 정보를 서버에 전송했습니다" in caplog.text
+    assert caplog.text.count("서버가 촬영 정보를 처리하고 있습니다") == 1
+    assert "웹에서 확인해 주세요" in caplog.text
+    assert "보관된 작업을 다시 시도합니다" in caplog.text
+    assert [results.get() for _ in range(5)] == ["UPLOADED", "PENDING", "PROCESSING", "REVIEW_REQUIRED", "ERROR"]

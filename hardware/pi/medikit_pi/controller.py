@@ -63,6 +63,7 @@ class CaptureController:
     def initialize_baseline(self, now):
         if not self.outbox.staged or self.board.is_open():
             return
+        LOGGER.info("보관함 내부의 비교 기준을 촬영합니다. 잠시 기다려 주세요.")
         self.session_id = self.outbox.begin_session(self.config["box_id"])
         self.state = "CLOSING"
         self.close_started = now
@@ -75,6 +76,7 @@ class CaptureController:
             return
         self.was_open = opened
         if opened:
+            LOGGER.info("뚜껑이 열렸습니다. 카메라 촬영을 준비합니다.")
             if self.session_id is not None:
                 self.finish()
             self.session_id = self.outbox.begin_session(self.config["box_id"])
@@ -87,6 +89,7 @@ class CaptureController:
             self.board.status(None)
             self.board.lamp(True)
         elif self.session_id is not None:
+            LOGGER.info("뚜껑이 닫혔습니다. 보관함 내부를 촬영합니다.")
             self.state = "CLOSING"
             self.close_started = now
             self.close_attempts = 0
@@ -121,7 +124,7 @@ class CaptureController:
                 self.ready_at = now
                 self.state = "READY"
                 self.board.status("white")
-                LOGGER.info("촬영 준비: 미리 제시한 포장은 치웠다가 다시 보여주세요.")
+                LOGGER.info("촬영 준비 완료. 약품 포장을 카메라에 보여주세요. 미리 제시했다면 치웠다가 다시 보여주세요.")
         elif self.state == "READY":
             self.detector.submit(frame.image, now)
             result = self.detector.latest(now)
@@ -231,11 +234,14 @@ class CaptureController:
             if not ok:
                 raise OSError("JPEG 변환 실패")
             self.outbox.save_capture(self.session_id, kind, encoded.tobytes(), captured_at=captured_at)
-            LOGGER.info("로컬 %s 촬영 저장 완료", kind)
+            if kind == "package":
+                LOGGER.info("약품 포장 사진을 저장했습니다. 뚜껑을 닫으면 내부를 촬영합니다.")
+            else:
+                LOGGER.info("보관함 내부 사진을 저장했습니다.")
             return True
         except Exception as error:
             # 사진·서버 응답 원문 대신 오류 종류만 기록한다.
-            LOGGER.warning("촬영 실패: %s", type(error).__name__)
+            LOGGER.warning("사진 촬영 또는 저장에 실패했습니다. 카메라와 저장 공간을 확인해 주세요. (오류 종류: %s)", type(error).__name__)
             self.board.status("red")
             return False
 

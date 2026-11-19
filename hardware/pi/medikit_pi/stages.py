@@ -1,11 +1,14 @@
 """포장 OCR 전송과 닫힘 후 이동 판단을 독립 작업자로 실행한다."""
 
 import json
+import logging
 
 import cv2
 import numpy as np
 
 from .movement import compare_interior, locate_candidate
+
+LOGGER = logging.getLogger(__name__)
 
 
 class StageWorker:
@@ -31,6 +34,7 @@ class StageWorker:
         if self.stage == "MOVEMENT_REQUESTED":
             if self.detector is not None:
                 self.movement(event, directory)
+                LOGGER.info("보관함 내부 변화 분석을 마쳤습니다. 서버에서 촬영 정보를 함께 처리합니다.")
                 return
             with self.outbox._mutex:
                 saved = self.outbox._db.execute("SELECT result FROM movement_results WHERE session_id=?", (event["session_id"],)).fetchone()
@@ -41,6 +45,10 @@ class StageWorker:
             return
         self.transport.upload_stage(event, directory)
         self.outbox.complete_stage(event["session_id"], self.stage)
+        if self.stage == "OCR_REQUESTED":
+            LOGGER.info("약품 포장 사진을 서버에 전송했습니다. 제품 정보 인식을 요청했습니다.")
+        else:
+            LOGGER.info("보관함 내부 사진과 분석 결과를 서버에 전송했습니다.")
 
     # 직전 내부 영상과 비교한 결과·새 기준 영상을 하나의 트랜잭션으로 보존한다.
     def movement(self, event, directory):
@@ -77,5 +85,7 @@ def stage_loop(worker, stop):
             worker.step()
             failures = 0
         except Exception:
+            if failures == 0:
+                LOGGER.warning("촬영 단계 처리에 문제가 생겼습니다. 저장된 작업을 자동으로 다시 시도합니다.")
             failures = min(failures + 1, 6)
         stop.wait(min(60, 2 ** failures) if failures else 0.1)

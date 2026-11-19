@@ -100,6 +100,22 @@ def test_one_package_and_same_session_interior(rig):
     assert rig[0].state == "CLOSED"
 
 
+# 뚜껑과 사진 저장 상태를 실제로 일어난 순서에 맞게 알린다.
+def test_capture_messages(rig, caplog):
+    import logging
+
+    with caplog.at_level(logging.INFO):
+        warmup(rig)
+        present(rig)
+        for index in range(32, 48):
+            feed(rig, index / 10, rig[5], opened=False)
+    assert "뚜껑이 열렸습니다" in caplog.text
+    assert "촬영 준비 완료" in caplog.text
+    assert "약품 포장 사진을 저장했습니다" in caplog.text
+    assert "뚜껑이 닫혔습니다" in caplog.text
+    assert "보관함 내부 사진을 저장했습니다" in caplog.text
+
+
 # 파일 저장보다 먼저 수신한 고해상도 프레임 시각을 키에 사용한다.
 def test_package_key_uses_frame_time(rig, monkeypatch):
     import medikit_pi.controller as module

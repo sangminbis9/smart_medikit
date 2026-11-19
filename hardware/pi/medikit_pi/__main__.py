@@ -84,11 +84,25 @@ def parse_args(argv=None):
 
 # 비동기 전송 결과를 메인 루프에 전달하고 네트워크 대기를 촬영과 분리한다.
 def sync_loop(worker, stop, results):
+    previous_message = None
     while not stop.is_set():
         try:
             status = worker.step(time.monotonic())
             if status:
                 results.put(status)
+                messages = {
+                    "UPLOADED": "촬영 세션 정보를 서버에 전송했습니다. 처리 결과를 기다립니다.",
+                    "PENDING": "서버가 촬영 정보를 처리하고 있습니다.",
+                    "PROCESSING": "서버가 촬영 정보를 처리하고 있습니다.",
+                    "COMPLETED": "서버의 촬영 처리가 완료되었습니다. 웹에서 결과를 확인해 주세요.",
+                    "REVIEW_REQUIRED": "서버 처리가 끝났지만 확인이 필요합니다. 웹에서 확인해 주세요.",
+                    "FAILED": "서버 처리에 실패했습니다. 보관된 작업을 다시 전송합니다.",
+                    "ERROR": "서버 전송 또는 상태 확인에 문제가 생겼습니다. 보관된 작업을 다시 시도합니다.",
+                }
+                message = messages.get(status)
+                if message and (message != previous_message or status in {"UPLOADED", "COMPLETED", "REVIEW_REQUIRED"}):
+                    (LOGGER.warning if status in {"FAILED", "ERROR"} else LOGGER.info)(message)
+                previous_message = message
         except Exception as error:
             LOGGER.warning("전송 작업 오류: %s", type(error).__name__)
         stop.wait(0.1)
@@ -256,7 +270,8 @@ def run_hardware(config):
             sender.start()
         else:
             LOGGER.info("AWS 미연결: 촬영을 로컬 큐에 보관합니다.")
-        running, retry_at = False, 0.0
+        LOGGER.info("스마트 약품보관함을 실행했습니다. 뚜껑을 열어 촬영을 시작하세요.")
+        running, retry_at, last_detector_error = False, 0.0, None
         while True:
             now = time.monotonic()
             controller.sensor(board.is_open(), now)
@@ -290,7 +305,11 @@ def run_hardware(config):
             controller.frame(frame, now)
             if detector.error:
                 board.status("red")
-                LOGGER.warning("후보 검출 오류: %s", detector.error)
+                if detector.error != last_detector_error:
+                    LOGGER.warning("약품 포장을 감지하지 못했습니다. 모델과 실행 환경을 확인해 주세요. (오류 종류: %s)", detector.error)
+                last_detector_error = detector.error
+            else:
+                last_detector_error = None
     except KeyboardInterrupt:
         LOGGER.info("촬영을 중지하고 로컬 큐를 보존합니다.")
     finally:
@@ -314,7 +333,10 @@ def run_hardware(config):
 # 실행 모드를 선택하고 민감 응답을 노출하지 않는 오류 요약을 출력한다.
 def main(argv=None):
     args = parse_args(argv)
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+    logging.addLevelName(logging.INFO, "안내")
+    logging.addLevelName(logging.WARNING, "확인 필요")
+    logging.addLevelName(logging.ERROR, "오류")
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
     try:
         config = load_config(args.config.resolve())
         if args.command == "check-config":

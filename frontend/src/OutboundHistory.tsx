@@ -9,7 +9,6 @@ import { useLocation } from 'react-router-dom';
 import { z } from 'zod';
 import { Badge, Dialog } from './ui';
 import './outboundHistory.css';
-import CaptureReviews from './CaptureReviews';
 import {
   activitySchema,
   eventSchema,
@@ -18,7 +17,6 @@ import {
   type Activity,
   type OutboundEvent,
 } from './activity';
-import type { Medicine } from './data';
 
 // 반출 시각과 확인 시각은 한국 시간으로 구분해 표시한다.
 function formatTime(value: string): string {
@@ -43,11 +41,9 @@ function movementLabel(item: OutboundEvent): string {
 export default function OutboundHistory({
   enabled,
   onInventoryChange,
-  medicines,
 }: {
   enabled: boolean;
   onInventoryChange: () => void | Promise<void>;
-  medicines: Medicine[];
 }) {
   const [data, setData] = useState<Activity | null>(null);
   const [status, setStatus] = useState<'loading' | 'ready' | 'unavailable'>(
@@ -281,18 +277,6 @@ export default function OutboundHistory({
       )}
       {status === 'ready' && data && (
         <>
-          <CaptureReviews
-            reviews={data.reviews}
-            medicines={medicines}
-            baseUrl={baseUrl}
-            onSaved={
-              // 정정 후 확인 목록과 홈 재고를 최신 서버 상태로 갱신한다.
-              async function refreshAfterReview() {
-                await reload();
-                await onInventoryChange();
-              }
-            }
-          />
           {selectedId &&
             ![...data.pending, ...data.history].some(function same(item) {
               return item.eventId === selectedId;

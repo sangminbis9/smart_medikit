@@ -373,11 +373,7 @@ export default function Schedule({
           )}
         </section>
       </div>
-      <OutboundHistory
-        enabled={!kit.demo}
-        onInventoryChange={kit.refresh}
-        medicines={kit.data.catalog_medicines}
-      />
+      <OutboundHistory enabled={!kit.demo} onInventoryChange={kit.refresh} />
       {editing && (
         <Dialog title="복용 여부 확인" onClose={close}>
           <form onSubmit={save}>

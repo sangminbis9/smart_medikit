@@ -1,5 +1,4 @@
 import { z } from 'zod';
-import { captureReviewSchema } from './CaptureReviews';
 
 export const eventId = z.string().regex(/^[A-Za-z0-9_-]{1,128}$/);
 export const eventSchema = z.object({
@@ -18,7 +17,6 @@ export const activitySchema = z
   .object({
     pending: z.array(eventSchema).max(1000),
     history: z.array(eventSchema).max(1000),
-    reviews: z.array(captureReviewSchema).default([]),
   })
   .superRefine(function validateActivity(data, context) {
     const ids = new Set<string>();

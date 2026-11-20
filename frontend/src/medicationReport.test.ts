@@ -88,7 +88,7 @@ describe('진료용 카드 목록', function cards() {
     const original = state([plan()]);
     const copy = structuredClone(original);
     const rows = buildReportItems(
-      { history: [], pending: [], reviews: [] },
+      { history: [], pending: [] },
       original,
       [],
       period,
@@ -110,7 +110,7 @@ describe('진료용 카드 목록', function cards() {
   // 같은 이름·품목이어도 서로 다른 등록 처방은 별도 선택 단위다.
   it('동명 처방을 ID로 분리하고 약 없는 처방도 표시한다', function identity() {
     const rows = buildReportItems(
-      { history: [], pending: [], reviews: [] },
+      { history: [], pending: [] },
       state([plan(), plan({ id: 'cold2', medicines: [] })]),
       [],
       period,
@@ -133,7 +133,7 @@ describe('진료용 카드 목록', function cards() {
     const ongoing = plan({ id: 'ongoing' });
     if (ongoing.timing.schedule) ongoing.timing.schedule.endDate = '';
     const rows = buildReportItems(
-      { history: [], pending: [], reviews: [] },
+      { history: [], pending: [] },
       state([
         plan(),
         future,
@@ -163,7 +163,7 @@ describe('진료용 카드 목록', function cards() {
     const ongoing = plan({ id: 'ended-ongoing', endedOn: '2026-11-14' });
     if (ongoing.timing.schedule) ongoing.timing.schedule.endDate = '';
     const rows = buildReportItems(
-      { history: [], pending: [], reviews: [] },
+      { history: [], pending: [] },
       state([ongoing, plan({ id: 'ended-course', endedOn: '2026-11-14' })]),
       [],
       { start: '2026-11-01', end: '2026-11-15' },
@@ -185,7 +185,7 @@ describe('진료용 카드 목록', function cards() {
     };
     expect(
       buildReportItems(
-        { history: [], pending: [], reviews: [] },
+        { history: [], pending: [] },
         state([input]),
         [],
         {
@@ -198,7 +198,6 @@ describe('진료용 카드 목록', function cards() {
   // 반출 확인 시각 대신 KST 반출 날짜로 필터하고 미확인도 복용으로 단정하지 않는다.
   it('반출 이력만 약품별로 합치고 조회 기간 밖 기록을 제외한다', function cabinet() {
     const activity: Activity = {
-      reviews: [],
       history: [
         outbound(),
         outbound({ eventId: 'e2', occurredAt: '2026-11-11T15:00:00Z' }),
@@ -250,7 +249,6 @@ describe('진료용 카드 목록', function cards() {
   // 같은 약의 복용 날짜는 반출 기준 KST 날짜를 중복 없이 최신순으로 보존한다.
   it('반복 반출의 날짜를 최신순으로 합치고 확인 날짜를 쓰지 않는다', function consumptionDates() {
     const activity: Activity = {
-      reviews: [],
       pending: [],
       history: [
         outbound({ eventId: 'a', occurredAt: '2026-11-11T15:00:00Z' }),
@@ -288,7 +286,6 @@ describe('진료용 카드 목록', function cards() {
     });
     const other = { ...pack, package_id: 'p2' };
     const activity: Activity = {
-      reviews: [],
       pending: [],
       history: [
         outbound(),

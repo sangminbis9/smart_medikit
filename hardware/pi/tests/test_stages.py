@@ -6,7 +6,7 @@ from unittest.mock import Mock
 import cv2
 import numpy as np
 from medikit_pi.detection import Detection
-from medikit_pi.outbox import Outbox
+from medikit_pi.outbox import Outbox, SyncWorker
 from medikit_pi.stages import StageWorker, stage_loop
 
 
@@ -26,6 +26,33 @@ def test_ocr_queued_before_close(tmp_path):
         assert with_box.stage_head('MOVEMENT_REQUESTED') is None
     finally:
         with_box.close()
+
+
+# 닫힘이 확인되면 OCR 전송 뒤 내부 분석보다 먼저 서버 처리를 시작한다.
+def test_inventory_state_close_does_not_wait_for_movement(tmp_path):
+    box = Outbox(tmp_path, staged=True)
+    try:
+        session = box.begin_session("test-box")
+        box.save_capture(session, "package", photo())
+        box.save_capture(session, "interior", photo())
+        closed_at = "2026-11-20T01:00:00+00:00"
+        box.finish_session(session, closed_at=closed_at)
+        transport = Mock()
+        transport.status.return_value = "COMPLETED"
+        worker = SyncWorker(box, transport)
+        assert worker.step(1) is None
+        box.complete_stage(session, "OCR_REQUESTED")
+        assert worker.step(2) == "UPLOADED"
+        payload, directory = transport.upload.call_args.args
+        assert payload["movement_policy"] == "INVENTORY_STATE"
+        assert payload["closed_at"] == closed_at
+        assert payload["stage"] == "SESSION_CLOSED"
+        assert worker.step(5) == "COMPLETED"
+        assert (directory / "interior.jpg").exists()
+        box.complete_stage(session, "MOVEMENT_REQUESTED")
+        assert not directory.exists()
+    finally:
+        box.close()
 
 
 # OCR 전송이 끝나지 않아도 두 번째 내부 영상의 자동 반입 판단을 저장한다.
@@ -65,6 +92,7 @@ def test_recover_missing_stage(tmp_path):
     restored = Outbox(tmp_path, staged=True)
     try:
         assert restored.stage_head('OCR_REQUESTED')['session_id'] == session
+        assert "movement_policy" not in restored.head()
     finally:
         restored.close()
 

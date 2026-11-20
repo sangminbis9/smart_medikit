@@ -103,6 +103,105 @@ def test_occlusion_resolves_to_existing_package_out():
     assert writes[1]["Put"]["Item"]["status"] == "PENDING"
 
 
+# 확인된 닫힘과 일치하는 포장 OCR을 가진 새 촬영으로 바꾼다.
+def inventory_state_fixture():
+    store, record, medicine = store_fixture()
+    record["SESSION_CLOSED"].update(
+        movement_policy="INVENTORY_STATE",
+        closed_at="2026-11-11T00:00:05Z",
+        package_image_key="ocr-input/s2/package.jpg",
+    )
+    raw = store.inventory.get_item.return_value["Item"]
+    raw["source"] = {"key": "ocr-input/s2/package.jpg", "session_id": "s2"}
+    return store, record, medicine, raw
+
+
+# 같은 이름의 다른 품목이나 폐기 이력은 신규 반입을 막지 않는다.
+def test_inventory_state_adds_new_product_without_movement():
+    store, record, medicine, _ = inventory_state_fixture()
+    record.pop("MOVEMENT_REQUESTED")
+    store.inventory.scan.return_value = {"Items": [
+        {"name": medicine["name"], "product_codes": ["000000002"], "state": "STORED"},
+        {"product_codes": [medicine["product_code"]], "state": "DISPOSED",
+         "package_id": "retired", "last_sequence": 1, "inventory": {"estimated_qty": 0}},
+    ]}
+    assert reconcile(store, "test", "e2") == "COMPLETED"
+    writes = store.client.transact_write_items.call_args.kwargs["TransactItems"]
+    package = writes[0]["Put"]["Item"]
+    assert package["state"] == "STORED" and package["package_id"] != "retired"
+    assert package["inventory"]["estimated_qty"] is None
+    assert writes[1]["Put"]["Item"]["kind"] == "INITIAL_REGISTRATION"
+
+
+# 내부 후보가 반입이어도 보관 중인 품목은 반출하고 중복 응답은 전환하지 않는다.
+def test_inventory_state_out_and_redelivery():
+    store, record, medicine, _ = inventory_state_fixture()
+    first = {**record["MOVEMENT_REQUESTED"], "sequence": 1, "event_id": "e1"}
+    package = transition(None, dict(medicine, session_id="s2"), first)[0]
+    package["inventory"]["estimated_qty"] = 8
+    store.inventory.scan.return_value = {"Items": [package]}
+    assert reconcile(store, "test", "e2") == "COMPLETED"
+    writes = store.client.transact_write_items.call_args.kwargs["TransactItems"]
+    assert writes[0]["Put"]["Item"]["state"] == "OUT"
+    assert writes[0]["Put"]["Item"]["inventory"]["estimated_qty"] == 8
+    assert writes[1]["Put"]["Item"]["status"] == "PENDING"
+    assert writes[1]["Put"]["Item"]["occurredAt"] == record["SESSION_CLOSED"]["closed_at"]
+    assert writes[2]["Put"]["Item"]["kind"] == "OUT_CONFIRMATION"
+    assert writes[-1]["Update"]["ExpressionAttributeValues"][":review"] == "REVIEW_REQUIRED"
+    record.update(processing_status="COMPLETED")
+    assert reconcile(store, "test", "e2") == "COMPLETED"
+    assert store.client.transact_write_items.call_count == 1
+
+
+# 반출 중인 포장은 기존 수량과 만료일을 보존하고 같은 포장으로 되돌린다.
+def test_inventory_state_return_preserves_stock():
+    store, record, medicine, _ = inventory_state_fixture()
+    record["MOVEMENT_REQUESTED"]["movement"] = {"candidate": None, "reason": "NO_SINGLE_CHANGE"}
+    package = {
+        "pk": "PACKAGE#p1", "sk": "META", "package_id": "p1", "name": medicine["name"],
+        "product_codes": [medicine["product_code"]], "state": "OUT", "box_id": "test",
+        "last_sequence": 1, "active_out_event_id": "e1", "inventory": {"estimated_qty": 8},
+        "expiry": {"actual_expiry": "2027-01-01", "verified": True},
+    }
+    store.inventory.scan.return_value = {"Items": [package]}
+    assert reconcile(store, "test", "e2") == "COMPLETED"
+    writes = store.client.transact_write_items.call_args.kwargs["TransactItems"]
+    updated = writes[0]["Put"]["Item"]
+    assert updated["state"] == "STORED" and updated["package_id"] == "p1"
+    assert updated["inventory"] == package["inventory"] and updated["expiry"] == package["expiry"]
+    assert "active_out_event_id" not in updated and len(writes) == 2
+    assert "state" in writes[0]["Put"]["ExpressionAttributeNames"].values()
+
+
+# OCR 지연과 사진 불일치를 구분하고 확인 대기를 뒤늦게 자동 전환하지 않는다.
+def test_inventory_state_waits_for_ocr_and_keeps_review():
+    store, record, _, raw = inventory_state_fixture()
+    closed = record.pop("SESSION_CLOSED")
+    assert reconcile(store, "test", "e2") == "PROCESSING"
+    record["SESSION_CLOSED"] = closed
+    result = store.inventory.get_item.return_value
+    store.inventory.get_item.return_value = {}
+    assert reconcile(store, "test", "e2") == "PROCESSING"
+    store.inventory.get_item.return_value = result
+    raw["source"]["session_id"] = "other-session"
+    assert reconcile(store, "test", "e2") == "REVIEW_REQUIRED"
+    assert store.activity.update_item.call_args.kwargs["ExpressionAttributeValues"][":reason"] == "RECOGNITION_UNCERTAIN"
+    raw["source"]["session_id"] = "s2"
+    record["processing_status"] = "REVIEW_REQUIRED"
+    assert reconcile(store, "test", "e2") == "REVIEW_REQUIRED"
+    store.client.transact_write_items.assert_not_called()
+
+
+# 같은 품목의 활성 포장이 둘이면 어느 포장도 자동 반출하지 않는다.
+def test_inventory_state_multiple_active_packages_require_review():
+    store, _, medicine, _ = inventory_state_fixture()
+    stored = {"name": medicine["name"], "product_codes": [medicine["product_code"]], "state": "STORED"}
+    store.inventory.scan.return_value = {"Items": [dict(stored, package_id="a"), dict(stored, package_id="b")]}
+    assert reconcile(store, "test", "e2") == "REVIEW_REQUIRED"
+    assert store.activity.update_item.call_args.kwargs["ExpressionAttributeValues"][":reason"] == "MULTIPLE_PACKAGES"
+    store.client.transact_write_items.assert_not_called()
+
+
 # 종료 사진이 없는 실패도 변경 없음으로 닫고 동일 응답을 재요청할 수 있다.
 def test_review_none_is_idempotent():
     store, record, _ = store_fixture()

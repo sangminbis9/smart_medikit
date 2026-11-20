@@ -61,7 +61,7 @@ def replace_files(original, replacements):
 
 
 # 계정과 변경 전 리비전을 확인하고 비밀 설정·IAM·공개 범위를 그대로 유지한다.
-def deploy(apply=False):
+def deploy(apply=False, activity_only=False):
     import boto3
 
     session = boto3.Session(region_name=REGION)
@@ -69,12 +69,12 @@ def deploy(apply=False):
         raise ValueError("WRONG_ACCOUNT")
     client = session.client("lambda")
     names = [
-        "inha-capstone-02-ocr",
         "smart-medikit-capture-events",
         "smart-medikit-activity-api",
         "smart-medikit-notifications",
-        "smart-medikit-read-api",
     ]
+    if not activity_only:
+        names = ["inha-capstone-02-ocr", *names, "smart-medikit-read-api"]
     prepared = []
     for name in names:
         function = client.get_function(FunctionName=name)
@@ -134,7 +134,9 @@ def deploy(apply=False):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--apply", action="store_true")
-    deploy(parser.parse_args().apply)
+    parser.add_argument("--activity-only", action="store_true", help="촬영·복약·알림 함수만 준비한다.")
+    args = parser.parse_args()
+    deploy(args.apply, args.activity_only)
 
 
 if __name__ == "__main__":

@@ -13,6 +13,7 @@ const reasons: Record<string, string> = {
   OCR_TIMEOUT: '약품 인식이 지연되거나 완료되지 않았어요.',
   RECOGNITION_UNCERTAIN: '약품을 정확히 구분하지 못했어요.',
   PRODUCT_UNRESOLVED: '연결할 제품을 확인해 주세요.',
+  MULTIPLE_PACKAGES: '같은 품목의 포장이 여러 개예요. 보관함 재고를 확인해 주세요.',
   MOVEMENT_UNCERTAIN: '사진만으로 반입·반출을 구분하지 못했어요.',
   PACKAGE_IMAGE_MISSING: '약품 포장 사진이 없어요.',
   STALE_OR_CONFLICTING_MOVEMENT: '이후 촬영 기록과 상태가 달라요.',

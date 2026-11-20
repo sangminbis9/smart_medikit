@@ -86,17 +86,22 @@ def product_packages(store, box, code=None):
 
 
 # 재고·이력과 촬영 종료를 같은 트랜잭션에 넣어 지연 재시도도 중복 처리하지 않는다.
-def completion_write(store, box, event_id, decision=None):
+def completion_write(store, box, event_id, decision=None, *, require_unreviewed=False):
     values = {":done": "COMPLETED", ":at": datetime.now(timezone.utc).isoformat()}
     update = "SET processing_status=:done, completed_at=:at"
     if decision:
         values[":decision"] = decision
         update += ", user_decision=:decision"
+    condition = "attribute_not_exists(completed_at)"
+    if require_unreviewed:
+        # OCR 완료와 확인 대기가 겹쳐도 사용자의 확인 대상으로 남긴다.
+        values[":review"] = "REVIEW_REQUIRED"
+        condition += " AND (attribute_not_exists(processing_status) OR processing_status<>:review)"
     return {
         "TableName": ACTIVITY_TABLE,
         "Key": store.encode({"pk": f"BOX#{box}", "sk": f"CAPTURE#{event_id}"}),
         "UpdateExpression": update,
-        "ConditionExpression": "attribute_not_exists(completed_at)",
+        "ConditionExpression": condition,
         "ExpressionAttributeValues": store.encode(values),
     }
 
@@ -128,15 +133,21 @@ def reconcile(store, box, event_id, decision=None):
         )
         return "COMPLETED"
     closed, movement = item.get("SESSION_CLOSED"), item.get("MOVEMENT_REQUESTED")
+    by_inventory = (closed or {}).get("movement_policy") == "INVENTORY_STATE"
+    # 확인 대기를 지난 촬영을 새 재고 상태로 다시 판단하면 방향이 바뀔 수 있다.
+    if by_inventory and not decision and item.get("processing_status") == "REVIEW_REQUIRED":
+        return "REVIEW_REQUIRED"
     if not closed or (
-        (closed.get("package_capture_ok") or closed.get("interior_capture_ok")) and not movement
+        not by_inventory
+        and (closed.get("package_capture_ok") or closed.get("interior_capture_ok"))
+        and not movement
     ):
         return review(store, box, event_id, "STAGE_TIMEOUT") if expired(item) else "PROCESSING"
     if not closed.get("package_capture_ok") and not decision:
         if (
             closed.get("interior_capture_ok")
-            and not movement.get("movement", {}).get("candidate")
-            and movement.get("movement", {}).get("reason")
+            and not (movement or {}).get("movement", {}).get("candidate")
+            and (movement or {}).get("movement", {}).get("reason")
             in ("IMAGE_UNAVAILABLE_OR_MISMATCH", "NO_SINGLE_CHANGE")
         ):
             # 포장 촬영 없는 빈 기준 사진은 기존 계약대로 재고를 바꾸지 않는다.
@@ -145,7 +156,7 @@ def reconcile(store, box, event_id, decision=None):
             )
             return "COMPLETED"
         return review(store, box, event_id, "PACKAGE_IMAGE_MISSING")
-    if not decision and not (movement or {}).get("movement", {}).get("candidate"):
+    if not by_inventory and not decision and not (movement or {}).get("movement", {}).get("candidate"):
         return review(store, box, event_id, "MOVEMENT_UNCERTAIN")
     raw = store.inventory.get_item(
         Key={"pk": f"RECOGNITION#{event_id}", "sk": "META"}, ConsistentRead=True
@@ -160,14 +171,35 @@ def reconcile(store, box, event_id, decision=None):
             if raw.get("processing_status") == "REVIEW_REQUIRED":
                 return review(store, box, event_id, "RECOGNITION_UNCERTAIN")
             return review(store, box, event_id, "OCR_TIMEOUT") if expired(item) else "PROCESSING"
+        if by_inventory:
+            # 수동 업로드나 다른 사진의 인식 결과를 실제 개폐 세션에 적용하지 않는다.
+            source = raw.get("source") or {}
+            if (
+                not closed.get("package_image_key")
+                or source.get("key") != closed["package_image_key"]
+                or source.get("session_id") != closed["session_id"]
+            ):
+                return review(store, box, event_id, "RECOGNITION_UNCERTAIN")
         medicines = recognized_medicines(store, raw)
     if len(medicines) != 1:
         return review(store, box, event_id, "PRODUCT_UNRESOLVED")
     recognition = dict(medicines[0], session_id=closed["session_id"])
+    seq = sequence_of(item)
+    for earlier in store.records(box, "CAPTURE#"):
+        if 0 < sequence_of(earlier) < seq and earlier.get("processing_status") not in TERMINAL:
+            return "PROCESSING"
     all_packages = product_packages(store, box)
     packages = [
         p for p in all_packages if recognition["product_code"] in p.get("product_codes", [])
     ]
+    if by_inventory:
+        # 이전 포장의 만료일과 수량이 새 포장으로 옮겨 가지 않도록 폐기 이력은 따로 보존한다.
+        retired = [p for p in packages if p.get("state") in ("DISPOSED", "DEPLETED")]
+        if any(p.get("last_sequence", 0) >= seq for p in retired):
+            return review(store, box, event_id, "STALE_OR_CONFLICTING_MOVEMENT")
+        packages = [p for p in packages if p not in retired]
+        if any(p.get("product_codes") != [recognition["product_code"]] for p in packages):
+            return review(store, box, event_id, "PRODUCT_UNRESOLVED")
     if len(packages) > 1:
         return review(store, box, event_id, "MULTIPLE_PACKAGES")
     previous = packages[0] if packages else None
@@ -176,18 +208,31 @@ def reconcile(store, box, event_id, decision=None):
             TransactItems=[{"Update": completion_write(store, box, event_id)}]
         )
         return "COMPLETED"
-    seq = sequence_of(item)
-    for earlier in store.records(box, "CAPTURE#"):
-        if 0 < sequence_of(earlier) < seq and earlier.get("processing_status") not in TERMINAL:
-            return "PROCESSING"
+    observed = (movement or {}).get("movement", {})
     movement = dict(movement or closed)
     if decision:
         movement.update(
             captured_at=movement.get("captured_at", closed["occurred_at"]),
             movement={"candidate": {"direction": decision["direction"]}},
         )
+    elif by_inventory:
+        direction = "OUT" if previous and previous.get("state") == "STORED" else "IN"
+        candidate = observed.get("candidate") or {}
+        # 내부 비교는 일치하는 반입의 위치만 보완하며 방향과 처리 시점을 정하지 않는다.
+        placement = observed if direction == "IN" and candidate.get("direction") == "IN" else {}
+        movement = {
+            **closed,
+            "captured_at": closed["closed_at"],
+            "movement": {
+                **placement,
+                "candidate": {
+                    "direction": direction,
+                    "box": candidate.get("box", []) if placement else [],
+                },
+            },
+        }
     candidate = dict(movement["movement"]["candidate"])
-    # 가림 변화는 인식한 제품의 현재 상태와 결합하며 새 반입은 확인 없이 유지한다.
+    # 기존 세션의 가림 변화는 기존 보관 상태와 결합한다.
     if candidate["direction"] == "STATE":
         candidate["direction"] = "OUT" if previous and previous.get("state") == "STORED" else "IN"
     movement["movement"] = {**movement["movement"], "candidate": candidate}
@@ -200,7 +245,12 @@ def reconcile(store, box, event_id, decision=None):
         return review(store, box, event_id, "STALE_OR_CONFLICTING_MOVEMENT")
     try:
         persist_transition(
-            store, previous, result, completion_write(store, box, event_id, decision)
+            store,
+            previous,
+            result,
+            completion_write(
+                store, box, event_id, decision, require_unreviewed=by_inventory and decision is None
+            ),
         )
     except Exception as error:
         if (
@@ -210,6 +260,8 @@ def reconcile(store, box, event_id, decision=None):
             current = store.activity.get_item(Key=key, ConsistentRead=True).get("Item", {})
             if current.get("processing_status") == "COMPLETED":
                 return "COMPLETED"
+            if by_inventory and not decision and current.get("processing_status") == "REVIEW_REQUIRED":
+                return "REVIEW_REQUIRED"
         raise
     wake_notifications()
     return "COMPLETED"

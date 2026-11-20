@@ -169,14 +169,21 @@ class Outbox:
     def complete_stage(self, session_id, stage):
         with self._mutex, self._db:
             self._db.execute("UPDATE capture_stages SET done=1 WHERE session_id=? AND stage=?", (session_id, stage))
-
-    # 단계 전송이 끝나야 종료 객체를 발행하되 OCR 완료는 기다리지 않는다.
-    def stages_uploaded(self, session_id):
         with self._mutex:
-            return self._db.execute("SELECT 1 FROM capture_stages WHERE session_id=? AND done=0", (session_id,)).fetchone() is None
+            if self._session(session_id)["state"] in {"COMPLETED", "REVIEW_REQUIRED"}:
+                self._cleanup(session_id)
+
+    # 재고 상태로 판단하는 세션은 내부 분석과 별도로 종료 객체를 보낸다.
+    def stages_uploaded(self, session_id, *, wait_for_movement=True):
+        with self._mutex:
+            return self._db.execute(
+                "SELECT 1 FROM capture_stages WHERE session_id=? AND done=0 "
+                "AND (? OR stage='OCR_REQUESTED')",
+                (session_id, wait_for_movement),
+            ).fetchone() is None
 
     # 촬영 실패도 사진 존재 여부로 기록하고 전송 가능한 세션으로 확정한다.
-    def finish_session(self, session_id: str) -> dict:
+    def finish_session(self, session_id: str, *, closed_at: str | None = None) -> dict:
         with self._mutex, self._db:
             row = self._session(session_id)
             if row["payload"]:
@@ -193,6 +200,9 @@ class Outbox:
                 )
             if event["package_capture_ok"] and row["package_s3_key"]:
                 event["package_image_key"] = row["package_s3_key"]
+            # 시작 기준 촬영과 종료 센서를 보지 못한 복구 세션에는 새 규칙을 적용하지 않는다.
+            if self.staged and closed_at and event["package_capture_ok"]:
+                event.update(movement_policy="INVENTORY_STATE", closed_at=closed_at)
             self._db.execute(
                 "UPDATE sessions SET state='READY',payload=? WHERE session_id=?",
                 (json.dumps(event), session_id),
@@ -287,7 +297,10 @@ class SyncWorker:
             if event is None:
                 return None
             if self.outbox.staged:
-                if not self.outbox.stages_uploaded(event["session_id"]):
+                if not self.outbox.stages_uploaded(
+                    event["session_id"],
+                    wait_for_movement=event.get("movement_policy") != "INVENTORY_STATE",
+                ):
                     return None
                 event["stage"] = "SESSION_CLOSED"
             uploaded = event.pop("_uploaded")

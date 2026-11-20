@@ -1,5 +1,7 @@
 # DynamoDB 제품·보유 포장 조회와 수동 복용약 API
 
+단일 품목 재고 기반 입출고는 새 Pi 종료 이벤트의 `movement_policy=INVENTORY_STATE`를 사용한다. 운영에 적용하려면 먼저 `python backend/deploy_pipeline_fixes.py --activity-only`로 기존 촬영·복약·알림 Lambda의 변경 패키지를 준비한 뒤, 배포 시 같은 명령에 `--apply`를 추가한다. 세 함수가 공유하는 처리 코드를 함께 갱신한 뒤 Pi를 업데이트한다. OCR Lambda 배포·메모리 변경이나 이전 사진 재처리는 이 변경과 별개다. [이벤트 계약](../docs/CONTRACTS.md#22-촬영-단계-분리-2026-11-10-aws웹-배포-실기기-검증-전)
+
 ## 종단 결함 수정 배포 (2026-11-11)
 
 2026-11-12 기준 수정된 OCR·capture·activity·notifications·read Lambda와 웹이 배포되었다. 실제 S3 시작 합성 이미지로 OCR·포장 생성·홈/3D·반출 Y/N·재반입·폐기 조건·정정과 푸시 서비스 발송 수락을 확인했다. 실제 Pi 카메라·GPIO·인식 정확도와 24시간 실시간 경과는 확인하지 않았다. 상세 결과와 시험 데이터 정리는 [종단 점검](../docs/PIPELINE_AUDIT.md)을 따른다. 아래 날짜가 명시된 이전 검증은 해당 시점의 기록이다.

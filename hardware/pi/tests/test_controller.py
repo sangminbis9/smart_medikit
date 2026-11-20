@@ -88,6 +88,7 @@ def test_debounce_rejects_bounce():
 
 # 한 세션의 포장 성공은 한 번이며 내부 사진과 같은 식별자로 저장된다.
 def test_one_package_and_same_session_interior(rig):
+    rig[3].staged = True
     warmup(rig)
     present(rig)
     assert rig[0].state == "CAPTURED"
@@ -96,6 +97,8 @@ def test_one_package_and_same_session_interior(rig):
         feed(rig, index / 10, rig[5], opened=False)
     event = rig[3].head()
     assert event["package_capture_ok"] and event["interior_capture_ok"]
+    assert event["movement_policy"] == "INVENTORY_STATE"
+    assert datetime.fromisoformat(event["closed_at"]) >= datetime.fromisoformat(event["occurred_at"])
     assert rig[1].capture.call_count == 2
     assert rig[0].state == "CLOSED"
 

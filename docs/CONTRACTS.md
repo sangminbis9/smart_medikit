@@ -60,8 +60,10 @@
 - 공통 식별자: `box_id`, `event_id`, `session_id`, `sequence`. 단계 시각 `captured_at`은 관측 시각이며 실제 손으로 꺼낸 정확한 시각은 아니다. 기존 `occurred_at`은 세션 시작 시각이다.
 - 새 단계별 세션의 포장 사진은 `ocr-input/YYYYMMDD_HHMMSS_<session_id>_package.jpg`에 저장한다. 시각은 프레임 수신 단조 시각을 Pi 시스템 시계로 환산한 KST이며 시계 동기화와 프레임 복사 지연의 영향을 받는다. 키는 사진 저장 전 큐에 영속화하고 모든 단계에서 재사용한다. 이전 미완료 세션은 기존 `ocr-input/<session_id>/package.jpg` 경로를 유지하며 비단계 전송도 종전 경로를 유지한다. 내부·단계 객체는 `medkit-sessions/<session_id>/`에 저장한다. 사진 메타데이터 `event-id`, `session-id`, `sha256`을 유지하며 재전송은 조건부 쓰기로 같은 이미지 버전을 유지한다.
 - **2026-11-20 운영 반영:** `inha-capstone-02-ocr`의 `backend/pi_contract.py` 경로 검사에 새 파일명과 기존 파일명 지원을 배포했다. S3 알림은 `ocr-input/` 아래 객체 생성에 연결되어 있고 새 경로 사진의 Lambda 호출을 확인했다. 변경 후 신규 사진의 실물 OCR 성공은 아직 검증하지 않았다. 배포 전에 실패한 요청이 자동으로 재처리된다는 뜻은 아니며, 같은 세션의 `MOVEMENT_UNCERTAIN`은 OCR 경로 수정과 별도로 확인해야 한다.
-- 단계 객체 `ocr-ready.json`, `movement-ready.json` 전송 후 `SESSION_CLOSED`의 `closed-ready.json`을 발행한다. OCR 완료 전에도 내부 판단은 계속한다. 재고 반영은 기존 순차 완료 조회로 순서를 보존한다.
-- 최상단 새 후보 하나는 아래 포장 가림을 허용해 `IN/ESTIMATED`로 사용자 방향 확인 없이 자동 처리한다. 기준 영상 없음·촬영 실패·전역 장면 변화는 반입으로 만들지 않는다. 로컬 `COMPLETED`는 판단 처리 완료이며 실물 이동 입증은 아니다.
+- 기존 세션은 단계 객체 `ocr-ready.json`, `movement-ready.json` 전송 후 `closed-ready.json`을 발행한다. 최상단 새 후보와 가림에 대한 기존 방향 판정을 유지한다.
+- **단일 품목 운영 방식:** 단계별 Pi는 한 개폐에 실제로 이동한 포장 하나만 촬영한다. GPIO에서 닫힘을 확인하고 포장 사진이 있는 세션의 `SESSION_CLOSED`에만 `movement_policy=INVENTORY_STATE`, `closed_at`(센서 닫힘 관측 시각, 시간대 포함 ISO 8601)을 보낸다. 새 종료 객체는 포장 전송 후 내부 분석·전송 완료를 기다리지 않는다. 기존 큐, 센서 닫힘을 확인하기 전에 중단된 세션, 기준 촬영은 이 판정에 참여하지 않는다.
+- 서버는 닫힘과 같은 이벤트의 완료 OCR 결과를 결합한다. OCR의 사진 키·세션 ID가 종료 객체와 같아야 하며, 식약처 품목기준코드 하나로 대상 포장을 찾는다. `STORED`이면 `OUT`, 등록 대기·반출 중이면 같은 포장을 `STORED`로, 활성 포장이 없으면 새 포장을 `STORED`로 처리한다. 폐기·소진 포장은 이력으로 보존하며 새 포장에 옛 수량·기한을 복사하지 않는다. 중복 활성 포장·불명확한 OCR은 사용자가 확인한다. 새 규칙으로 이미 확인 대기가 된 이벤트는 자동 재판정하지 않는다.
+- 내부 사진 비교는 계속 병행한다. 재고 반영 시점까지 도착한 명확한 반입 후보의 좌표만 3D 배치에 사용한다. 좌표가 없어도 등록하며 반출 기록의 시각은 센서가 관측한 `closed_at`을 사용한다. 제품 이름을 읽거나 촬영 상태가 `COMPLETED`라고 해서 실물 이동이나 복용이 증명되지는 않는다.
 - `capture_events.py`는 단일 식약처 품목기준코드와 동일 세션을 결합한다. 포장 `last_sequence` 조건과 이력·알림 트랜잭션으로 중복을 막는다. 신규 포장에 `first_registration_pending=true`, 알 수 없는 수량·기한은 null이다. 재반입은 `active_out_event_id`를 해제한다.
 - `GET /activity` → `{pending,history}`. `POST /activity/{eventId}/confirm` → `{result:TAKEN|NOT_TAKEN,quantity:number|null}`. N은 미복용 이력을 남기고 대기 목록에서만 제거한다. Y는 정제·캡슐만 수량 입력·최초 확인 트랜잭션 차감을 허용한다.
 - `POST /packages/{packageId}/initial` → `{condition:NEW|USED,actualExpiry:YYYY-MM-DD|null,remainingQty:number|null}`. NEW는 기존 값을 유지하고 USED는 입력한 실제 값만 저장한다.

@@ -119,8 +119,8 @@ def persist_transition(store, previous, result, capture=None):
         if "last_sequence" not in previous:
             put["ConditionExpression"] = "#box = :box AND attribute_not_exists(#seq)"
             del put["ExpressionAttributeValues"][":seq"]
-        # 촬영 처리 도중 사용자가 입력한 재고·기한·최초 확인을 덮어쓰지 않는다.
-        for index, field in enumerate(('inventory', 'expiry', 'first_registration_pending')):
+        # 복용 확인·정보 수정·폐기가 동시에 일어나면 이전 상태로 덮어쓰지 않는다.
+        for index, field in enumerate(('inventory', 'expiry', 'first_registration_pending', 'state')):
             name, value = f'#guard{index}', f':guard{index}'
             put['ExpressionAttributeNames'][name] = field
             if field in previous:

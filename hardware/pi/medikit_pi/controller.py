@@ -52,6 +52,7 @@ class CaptureController:
         self.retry_at = 0.0
         self.close_started = 0.0
         self.close_attempts = 0
+        self.closed_at = None
         self.was_open = False
         self.tracker = CandidateTracker(
             self.rules["stable_seconds"],
@@ -90,6 +91,7 @@ class CaptureController:
             self.board.lamp(True)
         elif self.session_id is not None:
             LOGGER.info("뚜껑이 닫혔습니다. 보관함 내부 촬영을 시작합니다.", extra={"section_start": True})
+            self.closed_at = datetime.now(timezone.utc).isoformat()
             self.state = "CLOSING"
             self.close_started = now
             self.close_attempts = 0
@@ -277,8 +279,9 @@ class CaptureController:
     # 성공한 포장 사진을 보존하고 내부 실패 사실과 함께 큐를 완결한다.
     def finish(self):
         if self.session_id is not None:
-            self.outbox.finish_session(self.session_id)
+            self.outbox.finish_session(self.session_id, closed_at=self.closed_at)
             self.session_id = None
+        self.closed_at = None
         self.state = "CLOSED"
         self.board.lamp(False)
         self.detector.reset()

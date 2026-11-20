@@ -22,7 +22,7 @@ from backend.image_ocr import (
 )
 from backend.lambda_function import process_records
 from backend.pi_package import PackageReader
-from backend.recognition import RecognitionError, identify
+from backend.recognition import RecognitionError, identify, match_products
 
 
 # 배경색과 무관하게 떨어진 전경 둘을 모두 포함하고 원본 좌표를 유지한다.
@@ -91,6 +91,26 @@ def test_package_reader_does_not_recheck_ambiguous_products():
     with pytest.raises(RecognitionError, match="AMBIGUOUS_PRODUCT"):
         reader.match_package(photo.tobytes(), api, 0.9, Diagnostics("test", enabled=False))
     reader._predict.assert_called_once()
+
+
+# 확정된 제목 바로 옆의 작은 저신뢰 획만 단일 포장 문맥으로 제외한다.
+@pytest.mark.parametrize(
+    ("box", "score", "accept"),
+    [
+        ((1483, 870, 1896, 1060), 0.32, True),
+        ((1700, 870, 2113, 1060), 0.32, False),
+        ((1483, 870, 1896, 1060), 0.76, False),
+    ],
+)
+def test_weak_title_context_requires_a_verified_adjacent_package(box, score, accept):
+    cells = group_lines([line("확펜", (837, 937, 1402, 1242)), line("손글씨", box, score)])
+    api = api_for(product("확펜연질캡슐"))
+    if accept:
+        medicines, _, _ = match_products(cells, api, single_package=True)
+        assert [m["name"] for m in medicines] == ["확펜연질캡슐"]
+    else:
+        with pytest.raises(RecognitionError, match="LOW_OCR_CONFIDENCE"):
+            match_products(cells, api, single_package=True)
 
 
 # 제품명과 겹친 작은 제형의 실제 위치를 경계로 사용하고 임의 비율로 자르지 않는다.

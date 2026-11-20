@@ -318,7 +318,7 @@ def candidate_observations(cells, index, min_score):
 
 
 # 유일하게 식별된 큰 제목에 밀착한 작은 부가 문구만 같은 포장의 문맥으로 분류한다.
-def nearby_context(cell, owner):
+def nearby_context(cell, owner, *, weak_package_title=False):
     fields = name_fields("".join(part["text"] for part in cell["lines"]))
     if cell.get("evidence") == "row" or fields["form"] or fields["strengths"]:
         return False
@@ -326,10 +326,13 @@ def nearby_context(cell, owner):
     a1, b1, a2, b2 = owner["box"]
     height = max(min(p["box"][3] - p["box"][1], p["box"][2] - p["box"][0]) for p in cell["lines"])
     other = max(min(p["box"][3] - p["box"][1], p["box"][2] - p["box"][0]) for p in owner["lines"])
-    if height >= other * 0.85:
+    if height >= other * (0.7 if weak_package_title else 0.85):
         return False
     horizontal = min(x2, a2) - max(x1, a1)
     vertical = min(y2, b2) - max(y1, b1)
+    if weak_package_title:
+        # 한 포장 사진의 제목 옆에서 크기와 신뢰도가 낮은 주변 획만 제외한다.
+        return vertical >= height * 0.5 and max(a1 - x2, x1 - a2, 0) <= other * 0.35
     return (
         horizontal >= min(x2 - x1, a2 - a1) * 0.5 and max(b1 - y2, y1 - b2, 0) <= other * 0.75
     ) or (vertical >= min(y2 - y1, b2 - b1) * 0.7 and max(a1 - x2, x1 - a2, 0) <= other * 0.5)
@@ -398,7 +401,7 @@ def lookup_candidate(observed, api, ingredient_cache, search_cache, index, diagn
 
 
 # 문자 가설을 공식 품목으로 검증하고 성분 보완과 별개로 검증된 근거를 반환한다.
-def match_products(cells, api, min_score=0.9, diagnostics=None):
+def match_products(cells, api, min_score=0.9, diagnostics=None, *, single_package=False):
     if not math.isfinite(min_score) or not 0 < min_score <= 1:
         raise ValueError("OCR_SCORE_CONFIGURATION_INVALID")
     if diagnostics is not None:
@@ -416,6 +419,20 @@ def match_products(cells, api, min_score=0.9, diagnostics=None):
         try:
             observations = candidate_observations(cells, index, min_score)
         except RecognitionError as exc:
+            if (
+                single_package
+                and exc.stage == "extraction"
+                and exc.code == "LOW_OCR_CONFIDENCE"
+                and cell.get("evidence") == "title"
+                and all(
+                    part["score"] < 0.5
+                    for parts in reading_combinations(cell["lines"])
+                    for part in parts
+                )
+            ):
+                # 인접한 공식 품목이 확인된 뒤에만 저신뢰 제목을 주변 문구로 볼 수 있다.
+                deferred.append((index, cell, exc.code))
+                continue
             # 제목·제형·약품 행 근거 없는 저신뢰 문구는 등록 후보로 승격하지 않는다.
             if not required and exc.code == "LOW_OCR_CONFIDENCE":
                 ignored.append({"candidate_index": index, "reason": "LOW_LEXICAL_CONFIDENCE"})
@@ -456,7 +473,7 @@ def match_products(cells, api, min_score=0.9, diagnostics=None):
             continue
         if len(candidates) != 1:
             if not candidates and not plausible and cell.get("evidence") == "title":
-                deferred.append((index, cell))
+                deferred.append((index, cell, "PRODUCT_NOT_FOUND"))
                 continue
             raise RecognitionError(
                 "matching", "AMBIGUOUS_PRODUCT" if candidates else "PRODUCT_NOT_FOUND"
@@ -519,11 +536,12 @@ def match_products(cells, api, min_score=0.9, diagnostics=None):
                 "package_size": observed["package_size"],
             }
         )
-    for index, cell in deferred:
+    for index, cell, code in deferred:
         if index in consumed:
             continue
-        if sum(nearby_context(cell, owner) for owner in owners) != 1:
-            raise RecognitionError("matching", "PRODUCT_NOT_FOUND")
+        weak_title = code == "LOW_OCR_CONFIDENCE"
+        if sum(nearby_context(cell, owner, weak_package_title=weak_title) for owner in owners) != 1:
+            raise RecognitionError("extraction" if weak_title else "matching", code)
         ignored.append({"candidate_index": index, "reason": "VERIFIED_PRODUCT_CONTEXT"})
     if diagnostics is not None:
         diagnostics.selection([item["cell_index"] for item in items], ignored)

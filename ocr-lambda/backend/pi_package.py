@@ -32,14 +32,16 @@ class PackageReader(PaddleReader):
         lines = self._predict(image, [0, 0, width, height], package=True)
         diagnostics.regions(lines, image.shape)
         try:
-            matches, _, _ = match_products(group_lines(lines), api, min_score, diagnostics)
+            matches, _, _ = match_products(
+                group_lines(lines), api, min_score, diagnostics, single_package=True
+            )
         except RecognitionError as error:
             if error.code not in RECHECK_ERRORS or (
                 context is not None and context.get_remaining_time_in_millis() < 45000
             ):
                 raise
             cells = self.refine_package_cells(image, lines, diagnostics)
-            matches, _, _ = match_products(cells, api, min_score, diagnostics)
+            matches, _, _ = match_products(cells, api, min_score, diagnostics, single_package=True)
         if len(matches) != 1:
             raise RecognitionError("matching", "AMBIGUOUS_PRODUCT")
         return matches[0]

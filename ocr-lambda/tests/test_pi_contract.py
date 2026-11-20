@@ -90,6 +90,25 @@ def test_legacy_save_unchanged():
     store.save_result.assert_called_once_with("legacy", result, "time", {"prior": True})
 
 
+# 실패 진단은 코드만 보존하며 OCR 원문과 미확인 후보를 버린다.
+def test_failure_persists_only_safe_ocr_diagnostics():
+    store, saved = bridge_store()
+    source = {"bucket": "bucket", "key": "ocr-input/session-1/package.jpg"}
+    result = {
+        "processing_status": "REVIEW_REQUIRED",
+        "failure_stage": "matching",
+        "failure_code": "AMBIGUOUS_PRODUCT",
+        "raw_text": "테스트 원문",
+        "items": [{"product_candidates": ["테스트 후보"]}],
+    }
+    save_pi_result(store, "event-1", source, result)
+    event = saved["event"]
+    assert event["failure_stage"] == {"S": "matching"}
+    assert event["failure_code"] == {"S": "AMBIGUOUS_PRODUCT"}
+    assert "raw_text" not in event and "items" not in event
+    store._save_medicine.assert_not_called()
+
+
 # 공식 제품명에 명시되지 않은 제형을 숫자나 성분명으로 추정하지 않는다.
 @pytest.mark.parametrize(
     ("name", "form"),

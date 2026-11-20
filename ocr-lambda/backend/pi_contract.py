@@ -94,6 +94,15 @@ def save_pi_result(store, event_id, source, result, checked_at=None):
         "processed_at": checked_at or datetime.now(timezone.utc).isoformat(),
         "retryable": bool(result.get("retryable")),
     }
+    # 원문과 후보 목록 없이 고정된 진단 코드만 Pi OCR 이벤트에 기록한다.
+    if values["processing_status"] != "COMPLETED":
+        stage, code = result.get("failure_stage"), result.get("failure_code")
+        if (
+            stage in {"ocr", "extraction", "matching", "validation"}
+            and isinstance(code, str)
+            and re.fullmatch(r"[A-Z0-9_]{1,64}", code)
+        ):
+            values.update(failure_stage=stage, failure_code=code)
     try:
         store.client.put_item(
             TableName=store.table_name,

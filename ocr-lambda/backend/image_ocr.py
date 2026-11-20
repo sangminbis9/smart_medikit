@@ -5,7 +5,7 @@ import os
 import re
 from operator import itemgetter
 
-from backend.recognition import (
+from .recognition import (
     candidate_name,
     fragment_kind,
     name_fields,
@@ -132,6 +132,18 @@ def fragment_adjacent(left, right, *, below=False):
     tail = left.get("parts", [left])[-1]
     if can_join(left, right) and adjacent(tail, right, below=below):
         return True
+    if not below and fragment_kind(right["text"]) == "form":
+        # 작은 제형은 큰 제목의 오른쪽 하단에 붙는 포장 표기도 허용한다.
+        x1, y1, x2, y2 = tail["box"]
+        a1, b1, a2, b2 = right["box"]
+        height, other = y2 - y1, b2 - b1
+        return (
+            height * 0.2 <= other <= height * 0.65
+            and a1 >= x1
+            and a2 > x2
+            and -other * 0.25 <= a1 - x2 <= height * 0.35
+            and y2 - height * 0.5 <= (b1 + b2) / 2 <= y2 + other * 0.4
+        )
     if not below or fragment_kind(right["text"]) != "name" or not can_join(left, right):
         return False
     x1, y1, x2, y2 = tail["box"]
@@ -481,13 +493,19 @@ class PaddleReader:
         return self.engine
 
     # 모델 출력을 검증하고 확대·잘라내기 전 원본 좌표로 돌려놓는다.
-    def _predict(self, image, source_box, *, refined=False):
+    def _predict(self, image, source_box, *, refined=False, package=False):
         import cv2
         import numpy as np
 
         x1, y1, x2, y2 = source_box
         crop = image[y1:y2, x1:x2]
         options = {"text_rec_score_thresh": 0.0}
+        if package and not refined and max(crop.shape[:2]) > 1280:
+            # 고해상도 Pi 사진의 첫 검출 해상도를 제한해 Lambda 메모리 여유를 확보한다.
+            scale = 1280 / max(crop.shape[:2])
+            crop = cv2.resize(crop, None, fx=scale, fy=scale, interpolation=cv2.INTER_AREA)
+        if package and not refined:
+            options.update(text_det_limit_side_len=1280, text_det_limit_type="max")
         if refined:
             # 검출 상자 확장을 줄이고 최대 960픽셀에서 순차 추론하여 메모리를 제한한다.
             scale = min(3.0, 960 / max(crop.shape[:2]))
@@ -543,6 +561,31 @@ class PaddleReader:
         except (KeyError, TypeError, ValueError, IndexError):
             raise ImageError("OCR_OUTPUT_INVALID") from None
         return lines
+
+    # 포장 전체 판독이 약하면 큰 제목과 오른쪽 제형을 포함해 한 번만 확대한다.
+    def refine_package_cells(self, image, lines, diagnostics=None):
+        height, width = image.shape[:2]
+        ranked = [line for line in lines if candidate_name(line["text"])]
+        if ranked:
+            x1, y1, x2, y2 = max(ranked, key=region_area)["box"]
+            pad = max(12, y2 - y1)
+            box = [
+                max(0, x1 - pad),
+                max(0, y1 - pad),
+                min(width, x2 + pad),
+                min(height, y2 + pad),
+            ]
+        else:
+            box = foreground_region(image) or [
+                width // 8,
+                height // 8,
+                width - width // 8,
+                height - height // 8,
+            ]
+        refined = self._predict(image, box, refined=True)
+        if diagnostics is not None:
+            diagnostics.regions(refined, image.shape, pass_index=1, source_box=box)
+        return group_lines(reconcile_regions(lines, refined))
 
     # 세로로 긴 저신뢰 제목 조각은 자동 90도 회전을 거치지 않고 기존 인식기로 다시 읽는다.
     def _retry_upright(self, image, cells, diagnostics):

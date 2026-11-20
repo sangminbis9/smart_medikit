@@ -6,7 +6,7 @@ import unicodedata
 from decimal import Decimal
 from itertools import product as combinations
 
-from backend.mfds import ApiError, MfdsClient, ingredient_gaps, validate_product_info
+from .mfds import ApiError, MfdsClient, ingredient_gaps, validate_product_info
 
 FORMS = (
     "연질캡슐",
@@ -53,7 +53,8 @@ class RecognitionError(Exception):
 
 # 함량과 제형은 유지하면서 공백·표기 단위만 정규화한다.
 def normalize_name(value):
-    value = unicodedata.normalize("NFKC", value).lower()
+    # 상표 기호는 유니코드 정규화가 영문 TM으로 펼치기 전에 제거한다.
+    value = unicodedata.normalize("NFKC", re.sub(r"[®™]", "", value)).lower()
     for old, new in [
         ("마이크로그램", "ug"),
         ("밀리그램", "mg"),
@@ -65,7 +66,7 @@ def normalize_name(value):
         ("μg", "ug"),
     ]:
         value = value.replace(old, new)
-    return re.sub(r"[\sㆍ·®™]", "", value)
+    return re.sub(r"[\sㆍ·]", "", value)
 
 
 # 제형·함량·포장 수량을 구분하여 제품명에서 별도 필드로 추출한다.
@@ -396,8 +397,8 @@ def lookup_candidate(observed, api, ingredient_cache, search_cache, index, diagn
     return candidates, plausible, reasons, detail_checks, len(rows)
 
 
-# 문자 가설을 제품으로 검증하고 모든 필수 제품 후보가 통과한 뒤 성분을 조회한다.
-def identify(cells, api, min_score=0.9, diagnostics=None):
+# 문자 가설을 공식 품목으로 검증하고 성분 보완과 별개로 검증된 근거를 반환한다.
+def match_products(cells, api, min_score=0.9, diagnostics=None):
     if not math.isfinite(min_score) or not 0 < min_score <= 1:
         raise ValueError("OCR_SCORE_CONFIGURATION_INVALID")
     if diagnostics is not None:
@@ -528,7 +529,13 @@ def identify(cells, api, min_score=0.9, diagnostics=None):
         diagnostics.selection([item["cell_index"] for item in items], ignored)
     if not items:
         raise RecognitionError("matching", "PRODUCT_NOT_FOUND")
-    enrich_medicines(list(medicines.values()), api, ingredient_cache, diagnostics)
+    return list(medicines.values()), items, ingredient_cache
+
+
+# 모든 필수 제품이 확정된 뒤 공식 성분과 허가정보를 조회한다.
+def identify(cells, api, min_score=0.9, diagnostics=None):
+    medicines, items, ingredient_cache = match_products(cells, api, min_score, diagnostics)
+    enrich_medicines(medicines, api, ingredient_cache, diagnostics)
     return {
         "processing_status": "COMPLETED",
         "recognition_status": "SUCCEEDED",
@@ -537,7 +544,7 @@ def identify(cells, api, min_score=0.9, diagnostics=None):
         "matching_status": "SUCCEEDED",
         "prescription_status": "NOT_EVALUATED",
         "items": items,
-        "medicines": list(medicines.values()),
+        "medicines": medicines,
         "retryable": False,
     }
 

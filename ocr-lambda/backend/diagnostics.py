@@ -7,7 +7,7 @@ import math
 import re
 import uuid
 
-from backend.recognition import fragment_kind
+from .recognition import fragment_kind
 
 LOGGER = logging.getLogger(__name__)
 REJECTIONS = frozenset(

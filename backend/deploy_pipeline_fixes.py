@@ -10,6 +10,7 @@ from pathlib import Path
 ACCOUNT = "842544789367"
 REGION = "ap-northeast-2"
 OCR_HASH = "84fc7cd0cc7848293a9d7223583bec82b5fda275044b136fb626bd5ff4e0a7db"
+OCR_RECOGNITION_HASH = "bf9e33c045da0afd3e08fbfaeadc66cc2ce8c445a004e7090becfe891ff47aa7"
 ROOT = Path(__file__).resolve().parents[1]
 
 
@@ -45,6 +46,55 @@ def patch_ocr(source):
     return source
 
 
+# Pi 메타데이터가 검증된 포장 사진만 새 판독기로 연결한다.
+def patch_package_entrypoint(source):
+    if "from medikit_package_ocr.pi_package import PackageReader" in source:
+        return source
+    original = "            result = identify(ocr(data), api, min_score)"
+    if source.count(original) != 1 or "pi_source = None" not in source:
+        raise ValueError("UNREVIEWED_OCR_VERSION")
+    source = source.replace(original, """            if pi_source:
+                result = _package_reader.identify(data, api, identify, min_score, event_id, context)
+            else:
+                result = identify(ocr(data), api, min_score)""")
+    source = source.replace(
+        "from backend.pi_contract import bind_pi_event, pi_completed, save_result",
+        "from backend.pi_contract import bind_pi_event, pi_completed, save_result\n"
+        "from medikit_package_ocr.pi_package import PackageReader",
+    )
+    source = source.replace(
+        "_reader = PaddleReader()", "_reader = PaddleReader()\n_package_reader = PackageReader(_reader)"
+    )
+    if source.count("_package_reader = PackageReader(_reader)") != 1 or (
+        "from medikit_package_ocr.pi_package import PackageReader" not in source
+    ):
+        raise ValueError("UNREVIEWED_OCR_VERSION")
+    compile(source, "<deployed-package-entrypoint>", "exec")
+    return source
+
+
+# 확인된 품목코드는 운영 함수에서 다시 검색하지 않고 기존 상세정보 보완만 적용한다.
+def patch_verified_enrichment(source):
+    if "*, verified_product=None):" in source:
+        return source
+    if hashlib.sha256(source.encode()).hexdigest() != OCR_RECOGNITION_HASH:
+        raise ValueError("UNREVIEWED_OCR_RECOGNITION_VERSION")
+    source = source.replace(
+        "def identify(cells, api, min_score=0.9):",
+        "def identify(cells, api, min_score=0.9, *, verified_product=None):",
+    )
+    source = source.replace(
+        "            item, p = resolve_product(cell, api, min_score, search_results)",
+        """            if verified_product is None:
+                item, p = resolve_product(cell, api, min_score, search_results)
+            else:
+                p = verified_product
+                item.update(recognition_status="SUCCEEDED", product_code=str(p["ITEM_SEQ"]))""",
+    )
+    compile(source, "<deployed-verified-enrichment>", "exec")
+    return source
+
+
 # 원래 ZIP의 의존성과 나머지 파일을 보존하고 지정된 소스만 치환한다.
 def replace_files(original, replacements):
     result = io.BytesIO()
@@ -61,7 +111,7 @@ def replace_files(original, replacements):
 
 
 # 계정과 변경 전 리비전을 확인하고 비밀 설정·IAM·공개 범위를 그대로 유지한다.
-def deploy(apply=False, activity_only=False):
+def deploy(apply=False, activity_only=False, ocr_only=False):
     import boto3
 
     session = boto3.Session(region_name=REGION)
@@ -73,7 +123,9 @@ def deploy(apply=False, activity_only=False):
         "smart-medikit-activity-api",
         "smart-medikit-notifications",
     ]
-    if not activity_only:
+    if ocr_only:
+        names = ["inha-capstone-02-ocr"]
+    elif not activity_only:
         names = ["inha-capstone-02-ocr", *names, "smart-medikit-read-api"]
     prepared = []
     for name in names:
@@ -88,10 +140,20 @@ def deploy(apply=False, activity_only=False):
         if name == "inha-capstone-02-ocr":
             with zipfile.ZipFile(io.BytesIO(original)) as archive:
                 source = archive.read("backend/lambda_function.py").decode("utf-8")
+                if ocr_only:
+                    recognition = archive.read("backend/recognition.py").decode("utf-8")
+            source = patch_ocr(source)
             replacements = {
-                "backend/lambda_function.py": patch_ocr(source).encode("utf-8"),
+                "backend/lambda_function.py": source.encode("utf-8"),
                 "backend/pi_contract.py": (ROOT / "ocr-lambda/backend/pi_contract.py").read_bytes(),
             }
+            if ocr_only:
+                replacements["backend/lambda_function.py"] = patch_package_entrypoint(source).encode("utf-8")
+                replacements["backend/recognition.py"] = patch_verified_enrichment(recognition).encode("utf-8")
+                for module in ("diagnostics", "image_ocr", "mfds", "pi_package", "recognition"):
+                    replacements[f"medikit_package_ocr/{module}.py"] = (
+                        ROOT / "ocr-lambda" / "backend" / f"{module}.py"
+                    ).read_bytes()
         elif name == "smart-medikit-read-api":
             replacements = {
                 p: (ROOT / "backend" / p).read_bytes()
@@ -134,9 +196,11 @@ def deploy(apply=False, activity_only=False):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--apply", action="store_true")
-    parser.add_argument("--activity-only", action="store_true", help="촬영·복약·알림 함수만 준비한다.")
+    group = parser.add_mutually_exclusive_group()
+    group.add_argument("--activity-only", action="store_true", help="촬영·복약·알림 함수만 준비한다.")
+    group.add_argument("--ocr-only", action="store_true", help="운영 OCR에 Pi 포장 판독 개선만 준비한다.")
     args = parser.parse_args()
-    deploy(args.apply, args.activity_only)
+    deploy(args.apply, args.activity_only, args.ocr_only)
 
 
 if __name__ == "__main__":

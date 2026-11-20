@@ -21,6 +21,7 @@ from backend.image_ocr import (
     reconcile_regions,
 )
 from backend.lambda_function import process_records
+from backend.pi_package import PackageReader
 from backend.recognition import RecognitionError, identify
 
 
@@ -41,6 +42,55 @@ def test_foreground_roi_rejects_blank_and_complex_border():
     image = np.full((100, 100, 3), 255, np.uint8)
     image[:50] = 0
     assert foreground_region(image) is None
+
+
+# 실물 포장처럼 오른쪽 아래로 떨어진 작은 제형을 제목 근거에 합친다.
+def test_package_title_joins_small_form_and_ignores_count():
+    cells = group_lines(
+        [
+            line("베아제™", (420, 510, 812, 631), 0.98),
+            line("정", (818, 619, 850, 650), 0.96),
+            line("3정", (914, 720, 956, 744), 0.99),
+        ]
+    )
+    selected = product("베아제정")
+    other = product("닥터베아제정", "900000002")
+    api = api_for(selected, other)
+    result = identify(cells, api)
+    assert [medicine["name"] for medicine in result["medicines"]] == ["베아제정"]
+    assert len(cells[0]["lines"]) == 2
+
+
+# 첫 판독에서 놓친 제형은 같은 위치의 추가 판독과 일치하는 공식 품목으로만 복구한다.
+def test_package_reader_rechecks_title_region_once():
+    reader = PackageReader()
+    first = line("베아제", (420, 510, 812, 631), 0.75)
+    improved = line("베아제®", (420, 510, 812, 631), 0.98)
+    form = line("정", (818, 619, 850, 650), 0.96)
+    reader._predict = Mock(side_effect=[[first], [improved, form]])
+    image = np.full((900, 1200, 3), 255, np.uint8)
+    _, photo = cv2.imencode(".jpg", image)
+    api = api_for(product("베아제정"))
+    item = reader.match_package(photo.tobytes(), api, 0.9, Diagnostics("test", enabled=False))
+    assert item["name"] == "베아제정"
+    assert reader._predict.call_count == 2
+    crop = reader._predict.call_args.args[1]
+    assert crop[2] >= form["box"][2] and crop[3] >= form["box"][3]
+
+
+# 두 품목이 뚜렷한 사진은 큰 제목 하나를 골라 재고에 등록하지 않는다.
+def test_package_reader_does_not_recheck_ambiguous_products():
+    reader = PackageReader()
+    reader._predict = Mock(return_value=[
+        line("베아제정", (420, 190, 812, 291)),
+        line("닥터베아제정", (420, 510, 812, 631)),
+    ])
+    image = np.full((900, 1200, 3), 255, np.uint8)
+    _, photo = cv2.imencode(".jpg", image)
+    api = api_for(product("베아제정"), product("닥터베아제정", "900000002"))
+    with pytest.raises(RecognitionError, match="AMBIGUOUS_PRODUCT"):
+        reader.match_package(photo.tobytes(), api, 0.9, Diagnostics("test", enabled=False))
+    reader._predict.assert_called_once()
 
 
 # 제품명과 겹친 작은 제형의 실제 위치를 경계로 사용하고 임의 비율로 자르지 않는다.

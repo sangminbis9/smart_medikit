@@ -354,13 +354,27 @@ def main(argv=None):
     handler.setFormatter(DemoLogFormatter("%(asctime)s [%(levelname)s] %(message)s"))
     logging.basicConfig(level=logging.INFO, handlers=[handler])
     try:
-        config = load_config(args.config.resolve())
+        try:
+            config = load_config(args.config.resolve())
+        except FileNotFoundError:
+            LOGGER.error(
+                "설정 파일을 찾을 수 없습니다: %s. hardware/pi에서 config.example.toml을 "
+                "실행에 사용할 설정 파일로 복사하고 [gpio]의 lid_pin에 센서의 실제 BCM 번호를 입력하세요.",
+                args.config,
+            )
+            return 1
+
+        if args.command == "run" or (args.command == "check-config" and args.hardware):
+            from .gpio import validate_pins
+
+            try:
+                validate_pins(config["gpio"])
+            except ValueError as error:
+                # 핀 검사에서 직접 작성한 안내만 표시해 인증 오류 원문은 노출하지 않는다.
+                LOGGER.error("Pi 설정 파일 %s의 [gpio]를 확인하세요. %s", args.config, error)
+                return 1
         if args.command == "check-config":
             if args.hardware:
-                from .gpio import validate_pins
-
-                LOGGER.info("실기기 설정 점검: GPIO 번호")
-                validate_pins(config["gpio"])
                 LOGGER.info("실기기 설정 점검: Pi 모델명")
                 if not config.get("pi_model") or config["pi_model"] == "unconfirmed":
                     raise ValueError("pi_model에 실제 Pi 모델명을 입력하세요.")

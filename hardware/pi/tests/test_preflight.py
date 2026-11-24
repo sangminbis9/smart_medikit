@@ -111,3 +111,44 @@ def test_hardware_pin_preflight():
     pins["lid_pin"] = pins["ring_data_pin"]
     with pytest.raises(ValueError):
         validate_pins(pins)
+
+
+# 직접 실행과 사전 점검 모두 설정 상태에 맞는 조치만 안내하고 파일을 수정하지 않는다.
+@pytest.mark.parametrize("command", [("run",), ("check-config", "--hardware")])
+@pytest.mark.parametrize("problem", ["missing", "legacy", "sensor"])
+def test_operator_gpio_guidance(tmp_path, caplog, command, problem):
+    path = tmp_path / "config.toml"
+    if problem == "missing":
+        expected = ("config.example.toml", "lid_pin")
+    else:
+        example = Path(__file__).parents[1] / "config.example.toml"
+        contents = example.read_text(encoding="utf-8")
+        if problem == "legacy":
+            contents = contents.replace("ring_data_pin = 18", "lamp_pin = 4")
+            contents = contents.replace("lid_pin = -1", "lid_pin = 23")
+            expected = ("[gpio]", "ring_data_pin", "18", "lid_pin")
+        else:
+            expected = ("lid_pin", "BCM")
+        contents += '\noperator_test_value = "SYNTHETIC_SECRET_MUST_NOT_APPEAR"\n'
+        path.write_text(contents, encoding="utf-8")
+    assert main(["--config", str(path), *command]) == 1
+    for hint in expected:
+        assert hint in caplog.text
+    assert "SYNTHETIC_SECRET_MUST_NOT_APPEAR" not in caplog.text
+    if problem == "missing":
+        assert not path.exists()
+    else:
+        assert path.read_text(encoding="utf-8") == contents
+
+
+# 현재 설정으로 실행하면 이전 배선 안내를 출력하지 않고 정상 촬영 실행기로 넘어간다.
+def test_current_gpio_config_proceeds_to_run(tmp_path, monkeypatch, caplog):
+    example = Path(__file__).parents[1] / "config.example.toml"
+    path = tmp_path / "config.toml"
+    contents = example.read_text(encoding="utf-8").replace("lid_pin = -1", "lid_pin = 23")
+    path.write_text(contents, encoding="utf-8")
+    run = Mock(return_value=0)
+    monkeypatch.setattr("medikit_pi.__main__.run_hardware", run)
+    assert main(["--config", str(path), "run"]) == 0
+    run.assert_called_once()
+    assert "ring_data_pin" not in caplog.text

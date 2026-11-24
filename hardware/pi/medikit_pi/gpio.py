@@ -16,7 +16,10 @@ DEFAULT_RING_BRIGHTNESS = 0.005
 # 실물 센서와 링이 같은 핀을 점유하지 않도록 GPIO를 열기 전에 검사한다.
 def validate_pins(config: dict):
     if "ring_data_pin" not in config:
-        raise ValueError("단일 링 배선에 맞게 [gpio]에 ring_data_pin = 18 (BCM)을 지정하세요.")
+        raise ValueError(
+            "기존 lid_pin과 센서 극성은 유지하고, 아래 링 설정 중 빠진 항목을 추가하세요.\n"
+            "ring_data_pin = 18\nring_brightness = 0.005\nring_pulse_seconds = 0.5"
+        )
     ring_pin = config["ring_data_pin"]
     if type(ring_pin) is not int or ring_pin != 18:
         raise ValueError("이 Pi 5 링은 물리 핀 12번인 BCM GPIO18에 연결합니다.")

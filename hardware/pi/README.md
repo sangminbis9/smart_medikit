@@ -2,6 +2,16 @@
 
 최근 단계별 촬영·입출고 연결의 설치 대상은 **이 폴더(`hardware/pi`)**다. `Raspberry_Pi/`와 패키지명이 같지만 별도 코드이므로 명령은 반드시 이 폴더에서 실행한다. 예제에는 배포된 학교 계정·서울 리전 주소를 채웠으며 `aws.enabled=false`만 유지한다. 실제 설정은 Git에서 제외된 `config.toml`에 저장한다. 아래 절차는 설치 준비용이며 실제 Pi에서 실행 완료한 기록이 아니다.
 
+**기존 Pi에서 `git pull` 후 실행하는 분께:** Pi에 있는 `config.toml`은 자동 갱신되지 않는다. `run`에서 `ring_data_pin` 안내가 나오면 기존 파일의 `[gpio]`에 아래 세 줄을 추가하고 센서 핀·극성과 AWS 설정은 유지한다. 현장에서 쓰는 Pi에 설정 파일이 처음부터 없을 때만 `config.example.toml`을 `config.toml`로 복사하고 실제 센서의 BCM 핀 번호를 `lid_pin`에 입력한다.
+
+```toml
+ring_data_pin = 18
+ring_brightness = 0.005
+ring_pulse_seconds = 0.5
+```
+
+설정 후 Pi의 `hardware/pi`에서 `python -m medikit_pi --config config.toml check-config --hardware`로 확인할 수 있다.
+
 ## 내부 사진 전후 비교 실험
 
 실기기 `aws.staged_capture=true` 모드는 포장 저장 직후 OCR 전송을 시작하고 닫힌 뒤 내부 사진을 별도로 분석한다. 시작할 때 뚜껑이 닫혀 있으면 기준 사진을 먼저 확보한다.
@@ -79,7 +89,7 @@ python -m medikit_pi --config config.toml check-config
 
 Picamera2/libcamera는 OS 패키지를 사용한다. Pi에서 venv를 `--system-site-packages`로 만들어야 해당 패키지를 읽을 수 있다. Bookworm에서는 apt의 simplejpeg와 NumPy 2.x ABI가 충돌할 수 있어 제공한 제약 파일로 NumPy 1.x·OpenCV 4.11을 함께 고정한다. Pi에서 이후 의존성을 설치할 때도 같은 `-c constraints-pi-bookworm.txt`를 적용한다. 다른 OS 버전에서는 apt 패키지 ABI에 맞춰 검증한 뒤 제약을 조정한다. `rpicam-hello --timeout 3000`으로 카메라가 연결되는지 먼저 확인한다. Pi 모델에 맞는 Camera Module 3 연결 케이블·전원·냉각을 사용한다.
 
-기존 `config.toml`을 사용하면 `[gpio]`의 `lamp_pin`·색상별 핀과 `output_active_high`를 지우고 예제의 `ring_data_pin`, `ring_brightness`, `ring_pulse_seconds`를 옮긴다. 센서의 실제 BCM 번호와 극성은 유지한다. Pi 5용 링 드라이버에는 실행 사용자의 `/dev/pio0` 접근 권한이 필요하다. 단독 점등에 사용한 계정과 환경을 사용할 수 있다. [Adafruit Pi 5 드라이버 안내](https://learn.adafruit.com/circuitpython-on-raspberrypi-linux/using-neopixels-on-the-pi-5)
+Pi 5용 링 드라이버에는 실행 사용자의 `/dev/pio0` 접근 권한이 필요하다. 단독 점등에 사용한 계정과 환경을 사용할 수 있다. [Adafruit Pi 5 드라이버 안내](https://learn.adafruit.com/circuitpython-on-raspberrypi-linux/using-neopixels-on-the-pi-5)
 
 ### 2. 사용자가 채울 값과 실물 확인
 

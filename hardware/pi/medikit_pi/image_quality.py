@@ -53,7 +53,7 @@ WARNING_MESSAGES = {
     "dark": "어두움 의심",
     "bright": "과노출·반사 의심",
     "small": "촬영 영역이 작음",
-    "edge": "화면 경계로 여백 부족",
+    "edge": "가장자리 여백 부족(참고)",
 }
 
 
@@ -69,10 +69,10 @@ class PhotoQuality:
     bright_ratio: float
     warnings: tuple[str, ...]
 
-    # 작은 포장은 안내만 제공하고, 다른 경고가 남으면 자동 촬영을 보류한다.
+    # 크기와 여백은 안내만 제공하며 흐림·노출 문제는 촬영을 보류한다.
     @property
     def blocking_warnings(self) -> tuple[str, ...]:
-        return tuple(warning for warning in self.warnings if warning != "small")
+        return tuple(warning for warning in self.warnings if warning not in ("small", "edge"))
 
 
 # 픽셀 좌표의 각 변에 10% 여백을 더하고 화면 밖에서 잘린 여백을 표시한다.

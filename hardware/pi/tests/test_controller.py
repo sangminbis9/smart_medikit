@@ -262,12 +262,31 @@ def test_poor_package_exposure_blocks_preview(rig, low, high):
     camera.capture.assert_not_called()
 
 
-# 물체 자체는 화면 안이어도 10% 바깥 여백이 잘리면 영속 저장하지 않는다.
-def test_package_requires_border_margin(rig):
-    controller, camera, _, _, _, _ = rig
-    controller.detector.box = Detection((0.03, 0.1, 0.65, 0.85), 0.9, "box")
+# 손을 포함한 검출 박스가 화면 끝에 닿아도 포장이 선명하면 사진을 저장한다.
+def test_package_margin_is_advisory(rig, caplog):
+    controller, camera, _, outbox, _, package = rig
+    controller.detector.box = Detection((0.0, 0.1, 0.65, 0.85), 0.9, "box")
+    package[53:120, :32] = 135
     warmup(rig)
-    present(rig)
+    with caplog.at_level(logging.INFO):
+        present(rig)
+    assert controller.state == "CAPTURED"
+    camera.capture.assert_called_once()
+    controller.finish()
+    assert outbox.head()["package_capture_ok"]
+    for stage in ("미리보기", "촬영본"):
+        assert f"포장 {stage} 품질: 가장자리 여백 부족(참고)" in caplog.text
+
+
+# 빈 배경에 초점이 안 맞거나 준비 중 움직여도 제한 시간 안에 탐색으로 진입한다.
+@pytest.mark.parametrize("moving", [False, True], ids=["stable", "moving"])
+def test_package_search_starts_without_background_focus(rig, moving):
+    controller, camera, _, _, background, _ = rig
+    for index in range(18):
+        image = background + 25 if moving and index % 2 else background
+        feed(rig, index / 10, image, focused=False)
+        if controller.state == "READY":
+            break
     assert controller.state == "READY"
     camera.capture.assert_not_called()
 

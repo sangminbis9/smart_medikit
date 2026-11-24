@@ -44,9 +44,9 @@ def test_quality_limits_are_inclusive_and_do_not_affect_measurements():
     assert assess_photo(frame, thresholds=upper_limit).warnings == ()
 
     strict = replace(limits, min_sharpness=measured.sharpness + 1, min_short_side=201)
-    report = assess_photo(frame, thresholds=strict)
+    report = assess_photo(frame, thresholds=strict, padding_clipped=True)
     assert report.sharpness == measured.sharpness
-    assert report.warnings == ("blur", "small")
+    assert report.warnings == ("blur", "small", "edge")
     assert report.blocking_warnings == ("blur",)
 
 

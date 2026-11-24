@@ -59,6 +59,7 @@ class CaptureController:
         self.previous = None
         self.background = None
         self.stable_since = None
+        self.warmup_started = 0.0
         self.ready_at = 0.0
         self.background_at = float("-inf")
         self.retry_at = 0.0
@@ -174,6 +175,7 @@ class CaptureController:
                 return
             self.state = "WARMUP"
             self.pulse_green(now)
+            self.warmup_started = self.green_until
             return
         if self.state in {"CLOSED", "CAPTURED"} or self.green_until is not None:
             return
@@ -189,11 +191,13 @@ class CaptureController:
         else:
             self.stable_since = None
         if self.state == "WARMUP":
+            warmup_seconds = self.rules["warmup_seconds"]
+            # 배경에서 초점을 잡지 못하거나 영상이 계속 움직여도 탐색을 시작한다.
+            # 포장 초점과 화질은 촬영할 때 확인한다.
             if (
                 self.stable_since is not None
-                and now - self.stable_since >= self.rules["warmup_seconds"]
-                and frame.autofocus_ok
-            ):
+                and now - self.stable_since >= warmup_seconds
+            ) or now - self.warmup_started >= 2 * warmup_seconds:
                 self.background = gray.copy()
                 self.ready_at = now
                 self.state = "READY"

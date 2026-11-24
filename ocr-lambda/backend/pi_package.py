@@ -2,6 +2,7 @@
 
 import logging
 import math
+import re
 
 from .diagnostics import Diagnostics
 from .image_ocr import (
@@ -42,9 +43,12 @@ class PackageReader(PaddleReader):
         lines, search_cache, ingredient_cache = [], {}, {}
         error = RecognitionError("extraction", "NO_PRODUCT_NAME")
         for pass_index, scale in enumerate((1, 2, 4, 2)):
-            if pass_index and context is not None and context.get_remaining_time_in_millis() <= 30000:
+            if context is not None and context.get_remaining_time_in_millis() <= 30000:
                 raise error
             box = full_box if pass_index == 0 else crop_box
+            if pass_index == 2 and max(box[2] - box[0], box[3] - box[1]) * 2 >= 2048:
+                # 두 배에서 이미 상한에 도달했다면 동일 입력의 네 배 추론은 건너뛴다.
+                continue
             options = {"package": True}
             if pass_index:
                 options["scale_factor"] = scale
@@ -57,7 +61,7 @@ class PackageReader(PaddleReader):
             diagnostics.regions(fresh, image.shape, pass_index=pass_index, source_box=box)
             for part in fresh:
                 # 의약외품을 같은 상표의 의약품으로 잘못 등록하는 것보다 확인 대기를 우선한다.
-                if part["score"] >= 0.6 and normalize_name(part["text"]) in {"의약외품", "의익외품"}:
+                if part["score"] >= 0.6 and re.search(r"의[약익]외품", normalize_name(part["text"])):
                     raise RecognitionError("validation", "UNSUPPORTED_PRODUCT_TYPE")
             lines = reconcile_regions(lines, fresh)
             try:

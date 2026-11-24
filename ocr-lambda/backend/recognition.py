@@ -166,6 +166,18 @@ def canonical_brand(name):
     return BRAND_ALIASES.get(name, name)
 
 
+# 제형·함량 없는 단독 수식어만 검색에서 제외하고 제품명 일부로는 보존한다.
+def standalone_modifier(fields):
+    return (fields["name"] in NAME_MODIFIERS and not fields["form"]
+            and not fields["strengths"] and not fields["quantities"])
+
+
+# 같은 품목이면 기준 점수 이상의 구체적인 제형·함량 근거를 우선한다.
+def witness_quality(observed):
+    return (bool(observed["form"]) + len(observed["strengths"])
+            + bool(observed["manufacturer"]), observed["score"])
+
+
 # 공식 성분 필드와 일치한 괄호만 이름에서 분리한다.
 def official_fields(product, details=()):
     name = product["ITEM_NAME"].strip()
@@ -334,7 +346,7 @@ def candidate_observations(cells, index, min_score):
             # 기호가 섞인 대체 판독은 유효한 이름 가설이 아니므로 공식 API에 보내지 않는다.
             if candidate_name("".join(part["text"] for part in parts)) is None:
                 continue
-            if name_fields("".join(part["text"] for part in parts))["name"] in NAME_MODIFIERS:
+            if standalone_modifier(name_fields("".join(part["text"] for part in parts))):
                 continue
             observed = extract_candidate({**option, "lines": list(parts)}, min_score)
             observed["_indices"], observed["_box"] = indices, option["box"]
@@ -455,7 +467,7 @@ def match_products(cells, api, min_score=0.9, diagnostics=None, *, single_packag
         if index in consumed:
             continue
         required = cell.get("required", True)
-        if all(name_fields("".join(p["text"] for p in parts))["name"] in NAME_MODIFIERS
+        if all(standalone_modifier(name_fields("".join(p["text"] for p in parts)))
                for parts in reading_combinations(cell["lines"])):
             required = False
         try:
@@ -482,7 +494,7 @@ def match_products(cells, api, min_score=0.9, diagnostics=None, *, single_packag
             raise
         candidates, witnesses, reasons = {}, {}, {}
         plausible, unresolved, detail_checks, row_count = False, False, 0, 0
-        result_limit = None
+        limited_observations = []
         for observed in observations:
             try:
                 matched, possible, counts, checks, returned = lookup_candidate(
@@ -491,7 +503,7 @@ def match_products(cells, api, min_score=0.9, diagnostics=None, *, single_packag
             except RecognitionError as error:
                 if error.code != "API_RESULT_LIMIT":
                     raise
-                result_limit = error
+                limited_observations.append((observed, error))
                 continue
             plausible = plausible or possible
             unresolved = unresolved or (possible and not matched)
@@ -503,7 +515,7 @@ def match_products(cells, api, min_score=0.9, diagnostics=None, *, single_packag
                 if code in candidates and candidates[code] != product:
                     raise RecognitionError("matching", "API_CONFLICTING_PRODUCT")
                 candidates[code] = product
-                if code not in witnesses or observed["score"] > witnesses[code]["score"]:
+                if code not in witnesses or witness_quality(observed) > witness_quality(witnesses[code]):
                     witnesses[code] = observed
         if diagnostics is not None:
             diagnostics.matching(
@@ -514,8 +526,16 @@ def match_products(cells, api, min_score=0.9, diagnostics=None, *, single_packag
                 detail_checks,
                 variant_count=len(observations),
             )
-        if result_limit and not candidates:
-            raise result_limit
+        for limited, result_limit in limited_observations:
+            if not candidates:
+                raise result_limit
+            # 결과를 다 읽지 못한 다른 이름은 무시하지 않고 같은 상표의 구체화만 허용한다.
+            for code, product in candidates.items():
+                witness = witnesses[code]
+                if (not canonical_brand(witness["name"]).startswith(canonical_brand(limited["name"]))
+                    or product_match_reason({**limited, "name": witness["name"]}, product,
+                                            ingredient_cache.get(code, ())) != "MATCH"):
+                    raise result_limit
         if unresolved:
             raise RecognitionError("matching", "PRODUCT_NOT_FOUND")
         # 무결과인 주변 문구와 식약처에서 실제로 충돌하는 제품 후보를 구분한다.
@@ -541,6 +561,8 @@ def match_products(cells, api, min_score=0.9, diagnostics=None, *, single_packag
                 independent = extract_candidate(
                     {**cells[used_index], "lines": list(parts)}, min_score
                 )
+                if standalone_modifier(independent):
+                    continue
                 separate, possible, _, _, _ = lookup_candidate(
                     independent, api, ingredient_cache, search_cache, used_index, diagnostics
                 )
@@ -600,7 +622,7 @@ def match_products(cells, api, min_score=0.9, diagnostics=None, *, single_packag
     if diagnostics is not None:
         diagnostics.selection([item["cell_index"] for item in items], ignored)
     if not items:
-        if all(name_fields("".join(p["text"] for p in cell["lines"]))["name"] in NAME_MODIFIERS for cell in cells):
+        if all(standalone_modifier(name_fields("".join(p["text"] for p in cell["lines"]))) for cell in cells):
             raise RecognitionError("extraction", "NO_PRODUCT_NAME")
         raise RecognitionError("matching", "PRODUCT_NOT_FOUND")
     return list(medicines.values()), items, ingredient_cache

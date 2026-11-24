@@ -83,6 +83,9 @@ def adjacent(left, right, *, below=False):
 
 # 검증된 상표 조각 또는 명시적 제형·함량만 결합 대상으로 삼는다.
 def can_join(left, right):
+    tail = left.get("parts", [left])[-1]
+    if abs((tail.get("angle", 0) - right.get("angle", 0) + 90) % 180 - 90) > 15:
+        return False
     # 수량·함량의 숫자와 단위가 분리된 경우 먼저 한 부가정보로 묶는다.
     if re.fullmatch(r"\d+(?:\.\d+)?", normalize_name(left["text"])):
         return fragment_kind(left["text"] + right["text"]) in {"quantity", "strength"}
@@ -289,15 +292,20 @@ def group_lines(lines):
         for line in rows
         if any(
             candidate_name("".join(part["text"] for part in parts))
+            or (fragment_kind(line["text"]) == "name"
+                and re.fullmatch(r"[가-힣]", normalize_name(line["text"])))
             for parts in reading_combinations(line.get("parts", [line]))
         )
     ]
     # 문자처럼 보인다는 이유만으로 주변 문구까지 필수 약품으로 간주하지 않는다.
-    tallest = max((name_height(cell) for cell in candidates), default=0)
+    tallest = max((name_height(cell) for cell in candidates
+                   if candidate_name("".join(p["text"] for p in cell["lines"]))), default=0)
     for cell in candidates:
         fields = name_fields("".join(part["text"] for part in cell["lines"]))
         evidence = (
-            "row"
+            "fragment"
+            if len(fields["name"]) == 1
+            else "row"
             if product_rows is not None
             else "form"
             if fields["form"] or fields["strengths"]
@@ -306,7 +314,7 @@ def group_lines(lines):
             else "lexical"
         )
         cell["evidence"] = evidence
-        cell["required"] = evidence != "lexical"
+        cell["required"] = evidence not in {"lexical", "fragment"}
         text = normalize_name("".join(part["text"] for part in cell["lines"]))
         if product_rows is None and re.fullmatch(r"[a-z]+", text):
             # 영문 로고와 영문 상표는 공식 품목에 일치할 때만 제품으로 승격한다.
@@ -508,7 +516,12 @@ class PaddleReader:
             rotated_w, rotated_h = math.ceil(h * s + w * c), math.ceil(h * c + w * s)
             matrix[0, 2] += rotated_w / 2 - w / 2
             matrix[1, 2] += rotated_h / 2 - h / 2
-            crop = cv2.warpAffine(crop, matrix, (rotated_w, rotated_h), borderValue=(255, 255, 255))
+            # 원본 해상도의 큰 회전 버퍼를 만들지 않고 제한 크기로 직접 변환한다.
+            rotation_scale = min(1, 2048 / max(rotated_w, rotated_h))
+            matrix *= rotation_scale
+            size = (min(2048, math.ceil(rotated_w * rotation_scale)),
+                    min(2048, math.ceil(rotated_h * rotation_scale)))
+            crop = cv2.warpAffine(crop, matrix, size, borderValue=(255, 255, 255))
             inverse = cv2.invertAffineTransform(matrix)
         crop_h, crop_w = crop.shape[:2]
         options = {"text_rec_score_thresh": 0.0}

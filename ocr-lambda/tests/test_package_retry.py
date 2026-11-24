@@ -314,3 +314,115 @@ def test_conflicting_form_remains_unresolved():
     with pytest.raises(ImageError, match='OCR_TEXT_CONFLICT'):
         match_readings([[line('새빛정', score=0.85), line('캡슐', (160, 10, 200, 40))],
                         [line('새빛정'), line('정', (160, 10, 200, 40))]], api_for(product('새빛정')))
+
+# 결과 상한으로 검증하지 못한 다른 이름 가설을 무시하고 새 이름을 확정하지 않는다.
+def test_result_limit_does_not_hide_unrelated_reading():
+    from test_recognition import api_for, product
+
+    from backend.mfds import ApiError
+    from backend.recognition import RecognitionError
+    api = api_for()
+    api.search.side_effect = [ApiError('API_RESULT_LIMIT'), [product('새빛정')]]
+    with pytest.raises(RecognitionError, match='API_RESULT_LIMIT'):
+        match_readings([[line('가람')], [line('새빛정')], [], []], api)
+
+
+# 괄호·라벨·띄어쓰기가 포함된 의약외품 표시도 다른 약품으로 확정하지 않는다.
+@pytest.mark.parametrize('marker', ['[의약외품]', '제품구분: 의약외품', '의 약 외 품'])
+def test_embedded_quasi_drug_label_blocks_registration(marker):
+    from test_recognition import api_for, product
+
+    from backend.recognition import RecognitionError
+    api = api_for(product('마데카솔겔'))
+    with pytest.raises(RecognitionError, match='UNSUPPORTED_PRODUCT_TYPE'):
+        match_readings([[line('마데카솔겔'), line(marker, (10, 80, 190, 105))]], api)
+    api.search.assert_not_called()
+
+
+# 기존 제형 조각 결합도 다른 각도의 문구를 같은 제품명으로 만들지 않는다.
+def test_form_fragment_with_different_angle_is_not_joined():
+    cells = group_lines([sloped_line('새빛', (30, 30), 0),
+                         sloped_line('정', (115, 30), 40, width=20)])
+    assert all('새빛정' != ''.join(p['text'] for p in cell['lines']) for cell in cells)
+
+
+# 조금 낮은 점수라도 기준을 통과하고 제형까지 검증한 대안을 근거로 사용한다.
+def test_compatible_visible_form_is_not_lost_to_higher_bare_score():
+    from test_recognition import api_for, product
+    reader, result = match_readings([[line('마데카솔', score=0.99)],
+                                     [line('마데카솔겔', score=0.98)]],
+                                    api_for(product('마데카솔겔')))
+    assert result['name'] == '마데카솔겔'
+    assert reader._predict.call_count == 2
+
+
+# 결합에 사용한 수식어의 독립 확인에서도 단독 수식어 검색은 금지한다.
+def test_independent_modifier_is_never_queried():
+    from test_recognition import api_for, product
+
+    from backend.recognition import match_products
+    api = api_for(product('새빛플러스정'))
+    result, _, _ = match_products(group_lines([line('새빛', (10, 10, 80, 35)),
+                                              line('플러스', (82, 10, 160, 35))]),
+                                  api, single_package=True)
+    assert result[0]['name'] == '새빛플러스정'
+    assert '플러스' not in [call.args[0] for call in api.search.call_args_list]
+
+
+# 한 글자도 독립 검색하지 않고 같은 기울기의 이웃과 결합할 때는 보존한다.
+@pytest.mark.parametrize('first,second', [('새', '빛'), ('새빛', '나')])
+def test_single_korean_character_can_join_slanted_name(first, second):
+    cells = group_lines([sloped_line(first, (30, 30), 35),
+                         sloped_line(second, (101, 80), 35)])
+    names = {v['name'] for index in range(len(cells))
+             for v in candidate_observations(cells, index, 0.9)}
+    assert first + second in names
+    assert not any(len(value) == 1 for value in names)
+
+
+# 이미 픽셀 상한에 도달한 두 배와 동일한 네 배 입력은 다시 추론하지 않는다.
+def test_capped_four_times_pass_is_skipped():
+    import cv2
+    from test_recognition import api_for
+
+    from backend.diagnostics import Diagnostics
+    from backend.pi_package import PackageReader
+    from backend.recognition import RecognitionError
+    reader = PackageReader()
+    reader._predict = Mock(return_value=[])
+    photo = cv2.imencode('.jpg', np.full((1200, 1600, 3), 255, np.uint8))[1].tobytes()
+    with pytest.raises(RecognitionError, match='NO_PRODUCT_NAME'):
+        reader.match_package(photo, api_for(), 0.9, Diagnostics('test', enabled=False))
+    assert reader._predict.call_count == 3
+    assert 4 not in [call.kwargs.get('scale_factor') for call in reader._predict.call_args_list]
+
+
+# 첫 판독도 저장 여유가 없는 시점에는 시작하지 않는다.
+def test_initial_ocr_is_not_started_with_one_second_left():
+    from test_recognition import api_for
+
+    from backend.diagnostics import Diagnostics
+    from backend.pi_package import PackageReader
+    from backend.recognition import RecognitionError
+    context = Mock()
+    context.get_remaining_time_in_millis.return_value = 1000
+    reader = PackageReader()
+    reader._predict = Mock(return_value=[])
+    with pytest.raises(RecognitionError):
+        reader.match_package(package_photo(), api_for(), 0.9,
+                             Diagnostics('test', enabled=False), context)
+    reader._predict.assert_not_called()
+
+
+# 큰 원본도 중간 회전 버퍼를 모델 입력 상한 크기로 직접 생성한다.
+def test_rotation_canvas_is_bounded_before_allocation(monkeypatch):
+    import cv2
+    original = cv2.warpAffine
+    spy = Mock(wraps=original)
+    monkeypatch.setattr(cv2, 'warpAffine', spy)
+    reader = PaddleReader()
+    reader.engine = Mock()
+    reader.engine.predict.return_value = [prediction([])]
+    reader._predict(np.zeros((3000, 4000, 3), np.uint8), [0, 0, 4000, 3000],
+                    package=True, scale_factor=2, deskew_angle=45)
+    assert max(spy.call_args.args[2]) <= 2048

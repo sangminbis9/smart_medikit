@@ -25,6 +25,10 @@ def load_config(path: Path) -> dict:
         raise ValueError('aws.staged_capture는 true 또는 false여야 합니다.')
     # 예전 설정으로 영상 재생이나 큐 점검을 할 때도 기본 표시 시간을 사용한다.
     config["gpio"].setdefault("ring_pulse_seconds", 0.5)
+    vision = config["vision"]
+    # 손으로 드는 포장과 고정된 내부 사진은 움직임 허용 범위를 분리한다.
+    vision.setdefault("package_motion_threshold", 0.055)
+    vision.setdefault("package_capture_motion_threshold", 0.14)
     for section, keys in {
         "camera": ("fps", "timeout_seconds", "restart_seconds"),
         "gpio": ("debounce_seconds", "ring_pulse_seconds"),
@@ -54,10 +58,12 @@ def load_config(path: Path) -> dict:
         "max_area",
         "min_iou",
         "capture_motion_threshold",
+        "package_motion_threshold",
+        "package_capture_motion_threshold",
     ):
-        if not 0 < config["vision"][key] <= 1:
+        value = vision[key]
+        if type(value) not in (int, float) or not 0 < value <= 1:
             raise ValueError(f"0 초과 1 이하 값이 필요합니다: vision.{key}")
-    vision = config["vision"]
     # 실행 중 사용하는 기준으로 기존 설정의 기본값과 새 노출·내부 선명도 범위를 검증한다.
     from .vision import capture_thresholds
 

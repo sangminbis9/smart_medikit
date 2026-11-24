@@ -53,7 +53,7 @@ class CaptureController:
         self.clock = clock
         self.pulse_seconds = config["gpio"]["ring_pulse_seconds"]
         self.green_until = None
-        self.candidate_signalled = False
+        self.package_light_at = None
         self.state = "CLOSED"
         self.session_id = None
         self.previous = None
@@ -76,6 +76,14 @@ class CaptureController:
     def pulse_green(self, now):
         self.board.set_ring("green")
         self.green_until = (self.clock() if self.clock else now) + self.pulse_seconds
+
+    # 후보 소실 시 조명을 끄고 다음 검출은 새 추적으로 시작한다.
+    def clear_package_signal(self):
+        self.tracker.reset()
+        if self.package_light_at is not None:
+            self.package_light_at = None
+            self.previous = self.stable_since = None
+            self.board.set_ring(None)
 
     # 같은 품질 지표를 미리보기와 저장할 사진에서 측정하고 원본 없이 현장 보정 수치를 남긴다.
     def quality_ok(self, kind, frame, box=None, *, still=False):
@@ -129,6 +137,7 @@ class CaptureController:
             return
         self.was_open = opened
         self.green_until = None
+        self.package_light_at = None
         if opened:
             LOGGER.info("뚜껑이 열렸습니다. 촬영을 시작합니다.", extra={"section_start": True})
             if self.session_id is not None:
@@ -136,10 +145,10 @@ class CaptureController:
             self.session_id = self.outbox.begin_session(self.config["box_id"])
             self.state = "OPENING"
             self.quality_log.clear()
-            self.candidate_signalled = False
             self.previous = self.background = None
             self.background_at = float("-inf")
             self.stable_since = None
+            self.retry_at = 0.0
             self.detector.reset()
             self.tracker.reset()
             self.board.set_ring(None)
@@ -179,7 +188,6 @@ class CaptureController:
                 self.stable_since = now
         else:
             self.stable_since = None
-            self.tracker.reset()
         if self.state == "WARMUP":
             if (
                 self.stable_since is not None
@@ -205,12 +213,13 @@ class CaptureController:
                 else:
                     preview.publish(frame.image)
             if result is None or result.captured_at < self.ready_at:
-                self.tracker.reset()
+                self.clear_package_signal()
                 return
             # 준비 전에 제시한 포장을 치우면 빈 장면을 새 배경으로 확보한다.
             if (
                 not result.detections
                 and result.source_frame is not None
+                and self.package_light_at is None
                 and self.stable_since is not None
                 and result.captured_at > self.background_at
                 and result.captured_at - self.stable_since >= self.rules["warmup_seconds"]
@@ -220,9 +229,9 @@ class CaptureController:
                     result.source_frame, self.rules["analysis_width"]
                 ).copy()
                 self.background_at = result.captured_at
-            # 첫 감지는 결과가 나온 프레임으로 판단해 늦은 검출과 새 움직임을 섞지 않는다.
+            # 비동기 박스는 해당 원본 영상으로 평가한다.
             detected_gray = gray
-            if not self.candidate_signalled and result.detections and result.source_frame is not None:
+            if result.detections and result.source_frame is not None:
                 detected_gray = gray_frame(result.source_frame, self.rules["analysis_width"])
             candidate = select_candidate(
                 result.detections,
@@ -232,45 +241,50 @@ class CaptureController:
                 max_area=self.rules["max_area"],
                 pixel_threshold=self.rules["pixel_threshold"],
             )
-            if candidate is not None and not self.candidate_signalled:
-                # 밝혀진 장면에서 다시 안정화한 뒤 포장을 저장한다.
+            if candidate is None:
+                self.clear_package_signal()
+                return
+            if self.package_light_at is None:
+                # 점등 이전 결과는 조명 표시만 하고 촬영에는 새 검출을 기다린다.
                 self.board.set_ring("yellow")
-                self.candidate_signalled = True
+                self.package_light_at = now
                 self.previous = self.stable_since = None
-                self.tracker.reset()
+                return
+            if result.captured_at <= self.package_light_at:
+                return
+            # 보인 시간은 검출 시각으로만 센다. 순간 흔들림은 해당 프레임의 촬영만 보류한다.
+            self.tracker.update(candidate, result.captured_at, frame_stable=True)
+            if (
+                self.tracker.stable_duration < self.rules["stable_seconds"]
+                or previous is None
+                or now < self.retry_at
+                or not frame.autofocus_ok
+            ):
+                return
+            box = candidate.box
+            current_crop = crop_box(gray, box)
+            # 늦게 도착한 박스로 이미 사라지거나 크게 움직인 포장을 찍지 않는다.
+            if (
+                motion_score(crop_box(previous, box), current_crop)
+                > self.rules["package_motion_threshold"]
+                or motion_score(crop_box(detected_gray, box), current_crop)
+                > self.rules["package_capture_motion_threshold"]
+                or not self.quality_ok("package", frame, box)
+            ):
+                return
+            LOGGER.info(
+                "포장 감지: 신뢰도 %.0f%% · 연속 감지 %.1f초",
+                candidate.confidence * 100,
+                self.tracker.stable_duration,
+            )
+            if self.capture("package", frame, box):
+                self.state = "CAPTURED"
+                self.package_light_at = None
+                self.pulse_green(now)
                 self.detector.reset()
-                return
-            if self.stable_since is None or result.captured_at < self.stable_since:
+            else:
+                self.retry_at = now + self.rules["package_retry_seconds"]
                 self.tracker.reset()
-                return
-            # 작은 포장의 흔들림은 전체 화면 평균에서 희석되므로 후보 영역도 검사한다.
-            if candidate is not None and previous is not None:
-                stable = (
-                    stable
-                    and motion_score(
-                        crop_box(previous, candidate.box), crop_box(gray, candidate.box)
-                    )
-                    <= self.rules["motion_threshold"]
-                )
-            if candidate is not None and not self.quality_ok("package", frame, candidate.box):
-                # 품질 실패 전에 얻은 비동기 검출을 다음 안정 시간에 합산하지 않는다.
-                self.stable_since = None
-                self.tracker.reset()
-                return
-            ready = self.tracker.update(candidate, result.captured_at, stable)
-            if ready and candidate is not None and now >= self.retry_at and frame.autofocus_ok:
-                LOGGER.info(
-                    "포장 감지: 신뢰도 %.0f%% · 안정 %.1f초",
-                    candidate.confidence * 100,
-                    self.tracker.stable_duration,
-                )
-                if self.capture("package", frame, candidate.box):
-                    self.state = "CAPTURED"
-                    self.pulse_green(now)
-                    self.detector.reset()
-                else:
-                    self.retry_at = now + self.rules["package_retry_seconds"]
-                    self.tracker.reset()
         elif self.state == "CLOSING":
             if not self.quality_ok("interior", frame):
                 self.stable_since = None
@@ -307,12 +321,16 @@ class CaptureController:
             # 세로 영상 축소에서 생긴 한 픽셀 반올림 차이도 동일 좌표로 비교한다.
             if after.shape != before.shape:
                 after = cv2.resize(after, (before.shape[1], before.shape[0]))
-            if motion_score(before, after) > self.rules["capture_motion_threshold"]:
+            motion_limit = self.rules[
+                "package_capture_motion_threshold"
+                if kind == "package"
+                else "capture_motion_threshold"
+            ]
+            if motion_score(before, after) > motion_limit:
                 return False
             if (
                 box is not None
-                and motion_score(crop_box(before, box), crop_box(after, box))
-                > self.rules["capture_motion_threshold"]
+                and motion_score(crop_box(before, box), crop_box(after, box)) > motion_limit
             ):
                 return False
             ok, encoded = cv2.imencode(
@@ -348,7 +366,7 @@ class CaptureController:
     def camera_error(self, now):
         self.previous = None
         self.stable_since = None
-        self.tracker.reset()
+        self.clear_package_signal()
         self.detector.reset()
         if (
             self.state == "CLOSING"
@@ -364,5 +382,6 @@ class CaptureController:
         self.closed_at = None
         self.state = "CLOSED"
         self.green_until = None
+        self.package_light_at = None
         self.board.set_ring(None)
         self.detector.reset()

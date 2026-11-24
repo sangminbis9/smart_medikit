@@ -86,7 +86,7 @@ S3 전송을 읽어 볼 때는 [`transport.py`](medikit_pi/transport.py)의 `S3T
 | `config.py`, `__main__.py` | 설정 검증과 실기기/영상/모델 준비 명령 |
 
 1. 뚜껑이 열리고 카메라 영상이 들어오면 초록색을 한 번 표시한다. 소등 후 영상 안정성과 자동초점(AF)을 확인하고 기준 배경을 잡는다.
-2. 화면 전체에서 처음 유효한 포장 후보가 검출되면 노란색을 유지한다. 이 조명 아래에서 후보가 약 1초 연속 검출되고 영상이 안정되면 고해상도로 촬영한다. 준비 전 포장을 보여줬다면 치웠다가 다시 제시한다.
+2. 유효한 포장 후보를 검출하면 노란색을 켠다. 새 결과에서 후보를 놓치거나 마지막 검출이 만료되면 소등한다. 포장을 다시 보여주면 점등하고 추적을 새로 시작한다. 점등 후 같은 후보가 설정 시간 이상 관측되면 초점과 화질이 좋은 프레임에서 고해상도로 촬영한다. 순간적으로 많이 흔들린 프레임은 건너뛴다. 준비 전 포장을 보여줬다면 치웠다가 다시 제시한다.
 3. 사진의 초점·선명도·움직임과 뚜껑 상태를 재확인하고, 포장 JPEG를 로컬에 저장한 뒤 초록색을 한 번 표시하고 소등한다. 세션당 포장 성공은 한 번이다.
 4. 닫히면 흰색을 켜고 기본 0.75초 안정화와 화질 검사를 거쳐 내부를 촬영한다. 재시도 중에도 흰색을 유지하고 촬영을 마치면 소등한다. 시도당 기본 3초 제한, 최대 두 번 추가 재시도한다. 실패해도 성공한 포장 사진은 보존한다.
 5. 전송은 촬영과 다른 작업자에서 FIFO로 수행한다. 서버 종료 상태를 받기 전에는 다음 세션을 보내거나 사진을 삭제하지 않는다. 전원 중단 후 기존 식별자와 순번으로 복구한다.
@@ -216,8 +216,10 @@ python -m medikit_pi --config config.toml run
 | `detector.image_size`, `interval_seconds`, `threads` | 입력 320, 최소 추론 간격 0.4초, PyTorch CPU 스레드 2개 |
 | `detector.max_age_seconds` | 1.2초보다 오래된 원본 프레임의 검출은 사용하지 않음 |
 | `vision.analysis_width` | 전체 화면을 폭 320으로 줄여 차이 계산 |
-| `vision.stable_seconds` | 같은 후보가 약 1초 관측되어야 촬영 |
-| `vision.motion_threshold`, `minimum_change`, `pixel_threshold` | 연속 흔들림 및 준비 배경 대비 신규 후보 변화 기준 |
+| `vision.stable_seconds`, `min_iou` | 같은 포장의 연속 검출에 필요한 시간과 검출 박스의 최소 겹침 비율. 새 예제는 0.6초, 0.45 |
+| `vision.package_motion_threshold`, `package_capture_motion_threshold` | 포장의 미리보기와 고해상도 사진에서 허용하는 움직임 기준. 값이 없으면 각각 0.055, 0.14를 적용 |
+| `vision.motion_threshold`, `capture_motion_threshold` | 준비 배경과 내부 촬영에 적용되는 움직임 기준 |
+| `vision.minimum_change`, `pixel_threshold` | 준비 배경 대비 신규 후보의 변화 기준 |
 | `vision.sharpness_threshold`, `still_sharpness_threshold` | 포장 미리보기/최종 사진의 라플라시안 분산. 새 예제는 PC 시험값 500에서 시작. 기존 설정의 명시값(예: 65)은 유지되며 측정 영역·축소 방식은 공통 계산으로 바뀐다. |
 | `vision.interior_min_sharpness` | 내부 사진은 화면 전체를 검사하며 새 예제의 시작값은 65. 생략한 기존 설정에서는 미리보기/최종 사진의 각 선명도 기준 사용 |
 | `vision.min_brightness`, `max_brightness`, `max_dark_ratio`, `max_bright_ratio` | 평균 밝기 50~210, 밝기 30 이하 픽셀 최대 30%, 245 이상 픽셀 최대 20%. 포장과 내부 모두 미리보기와 실제 촬영본을 검사 |
@@ -271,7 +273,7 @@ Windows/Linux에서 Python 3.11 이상 가상환경에 `requirements-dev.txt`를
 python -m medikit_pi --config config.toml video --input ../../local_data/test.mp4 --lid-events ../../local_data/lid-events.json --data-dir ../../local_data/hardware-pi-video-run --report ../../local_data/hardware-pi-video-report.json
 ```
 
-`--show`를 붙이면 GUI가 있는 환경에서 미리보기를 띄운다. PowerShell에서는 `python` 대신 `.\.venv\Scripts\python.exe`를 사용할 수 있다. 영상 모드는 **실제 YOLOE와 OpenCV**를 실행한다. 센서는 JSON, AF 성공은 모의값이며 정지 사진은 영상 원본 프레임이다. 영상 프레임률의 시간축으로 1초 안정화를 계산하므로 느린 PC 추론도 재생 판단 시간을 왜곡하지 않는다. 실제 Pi 처리 속도·자동초점·12 MP 화질 검증을 대신하지 않는다.
+`--show`를 붙이면 GUI가 있는 환경에서 미리보기를 띄운다. PowerShell에서는 `python` 대신 `.\.venv\Scripts\python.exe`를 사용할 수 있다. 영상 모드는 **실제 YOLOE와 OpenCV**를 실행한다. 센서는 JSON, AF 성공은 모의값이며 정지 사진은 영상 원본 프레임이다. 검출 지속 시간은 영상 프레임률의 시간축으로 계산한다. 실제 Pi에서 처리 속도·자동초점·12 MP 화질을 따로 확인한다.
 
 테스트 결과는 지정한 데이터 폴더의 세션별 `package.jpg`, `interior.jpg`, `queue.sqlite3`와 보고서에 남는다. 성공하지 않은 사진 파일은 없다. 영상 모드는 AWS 설정과 관계없이 전송하지 않으며 실제 Pi 데이터 폴더 사용을 거부한다. EOF를 닫힘으로 가정하지 않고 미완료 세션을 그대로 보존한다. 자동 단위 테스트의 검출기는 명시적인 모의 객체이고 실행 프로그램의 YOLO를 대체하는 fallback은 없다.
 

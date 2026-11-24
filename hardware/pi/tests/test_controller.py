@@ -14,7 +14,7 @@ from medikit_pi.controller import CaptureController, Debouncer
 from medikit_pi.detection import Detection, DetectionResult
 from medikit_pi.gpio import MockBoard
 from medikit_pi.outbox import Outbox
-from medikit_pi.vision import capture_thresholds
+from medikit_pi.vision import capture_thresholds, crop_box, gray_frame, motion_score
 
 
 # 일정한 포장 후보를 반환하여 상태 머신의 영상 판단을 독립 검증한다.
@@ -182,7 +182,7 @@ def test_capture_messages(rig, caplog):
             feed(rig, index / 10, rig[5], opened=False)
     assert "뚜껑이 열렸습니다" in caplog.text
     assert "촬영 준비 완료" in caplog.text
-    assert "포장 감지: 신뢰도 90% · 안정 " in caplog.text
+    assert "포장 감지: 신뢰도 90% · 연속 감지 " in caplog.text
     assert "약품 포장 감지 및 촬영 성공" in caplog.text
     assert "뚜껑이 닫혔습니다" in caplog.text
     assert "보관함 내부 촬영 성공" in caplog.text
@@ -447,6 +447,82 @@ def test_yellow_waits_for_detection_from_changed_frame(rig):
     assert rig[2].color == "yellow"
 
 
+# 검출 공백과 최신 미검출에서 소등하고, 다시 포장이 잡히면 재점등한다.
+@pytest.mark.parametrize("empty_result", [False, True], ids=["expired", "no-package"])
+def test_yellow_tracks_current_detection(rig, empty_result):
+    warmup(rig)
+    controller, camera, board, _, background, package = rig
+    detector = controller.detector
+    detector.submit = Mock()
+    detector.result = DetectionResult(1.2, (detector.box,), package)
+    feed(rig, 1.2, package)
+    feed(rig, 1.3, package)
+    assert board.color == "yellow"
+
+    detector.result = DetectionResult(1.4, (), background) if empty_result else None
+    feed(rig, 1.4, background)
+    assert board.color is None
+    camera.capture.assert_not_called()
+
+    detector.result = DetectionResult(1.5, (detector.box,), package)
+    feed(rig, 1.5, package)
+    assert board.color == "yellow"
+    controller.camera_error(1.6)
+    assert board.color is None
+
+
+# 미리보기에서 1픽셀씩 흔들리고 촬영본에서 2픽셀 움직인 선명한 포장도 한 번 저장한다.
+def test_package_capture_tolerates_hand_motion(rig):
+    controller, camera, _, outbox, base, _ = rig
+    package = base.copy()
+    rows, columns = np.indices((135, 176))
+    pattern = ((rows // 6 + columns // 6) % 2)[..., None]
+    package[18:153, 32:208] = 100 + pattern * 72
+    shifted = np.roll(package, 1, axis=1)
+    still = np.roll(package, 2, axis=1)
+    box = controller.detector.box.box
+    crops = [crop_box(gray_frame(image), box) for image in (package, shifted, still)]
+    assert controller.rules["motion_threshold"] < motion_score(*crops[:2])
+    assert controller.rules["capture_motion_threshold"] < motion_score(crops[0], crops[2])
+
+    warmup(rig)
+    for index in range(12, 32):
+        frame = package if index % 2 == 0 else shifted
+        feed(rig, index / 10, frame, still_image=np.roll(frame, 2, axis=1))
+    assert controller.state == "CAPTURED"
+    camera.capture.assert_called_once()
+    controller.finish()
+    assert outbox.head()["package_capture_ok"]
+
+
+# 한 번의 검출 결과를 여러 미리보기 프레임에서 읽어도 검출 시간이 늘지 않는다.
+def test_repeated_result_does_not_trigger_capture(rig):
+    warmup(rig)
+    controller, camera, _, _, _, package = rig
+    detector = controller.detector
+    feed(rig, 1.2, package)
+    detector.submit = Mock()
+    detector.result = DetectionResult(1.3, (detector.box,), package)
+    for index in range(13, 24):
+        feed(rig, index / 10, package)
+    camera.capture.assert_not_called()
+
+
+# 늦게 도착한 유효한 박스로 감지 시간이 차도 현재 화면에서 포장이 사라졌으면 촬영하지 않는다.
+def test_delayed_positive_cannot_capture_missing_package(rig):
+    warmup(rig)
+    controller, camera, _, _, background, package = rig
+    detector = controller.detector
+    feed(rig, 1.2, package)
+    detector.submit = Mock()
+    detector.result = DetectionResult(1.3, (detector.box,), package)
+    feed(rig, 1.4, background)
+    detector.result = DetectionResult(2.0, (detector.box,), package)
+    feed(rig, 2.1, background)
+    assert controller.tracker.stable_duration >= controller.rules["stable_seconds"]
+    camera.capture.assert_not_called()
+
+
 # 잘못된 조회 주기, 무제한 재시도 또는 유효 범위 밖의 화질 기준을 거부한다.
 @pytest.mark.parametrize(
     "old,new",
@@ -455,6 +531,8 @@ def test_yellow_waits_for_detection_from_changed_frame(rig):
         ("close_retries = 2", "close_retries = 3"),
         ("max_bright_ratio = 0.20", "max_bright_ratio = 1.1"),
         ("min_brightness = 50.0", "min_brightness = 211.0"),
+        ("package_motion_threshold = 0.055", "package_motion_threshold = true"),
+        ("package_capture_motion_threshold = 0.14", "package_capture_motion_threshold = 1.1"),
     ],
 )
 def test_invalid_config_rejected(tmp_path, old, new):
@@ -476,6 +554,8 @@ def test_existing_quality_config_remains_usable(tmp_path):
         "max_dark_ratio",
         "max_bright_ratio",
         "min_short_side",
+        "package_motion_threshold",
+        "package_capture_motion_threshold",
     )
     previous = "\n".join(line for line in example.splitlines() if not line.startswith(new_fields))
     previous = previous.replace("\nsharpness_threshold = 500.0", "\nsharpness_threshold = 65.0")
@@ -485,6 +565,8 @@ def test_existing_quality_config_remains_usable(tmp_path):
     path = tmp_path / "config.toml"
     path.write_text(previous, encoding="utf-8")
     vision = load_config(path)["vision"]
+    assert vision["package_motion_threshold"] == 0.055
+    assert vision["package_capture_motion_threshold"] == 0.14
     for kind in ("package", "interior"):
         assert capture_thresholds(vision, kind).min_sharpness == 65.0
         assert capture_thresholds(vision, kind, still=True).min_sharpness == 82.0

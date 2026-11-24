@@ -433,6 +433,7 @@ def test_lid_change_during_capture_rejected(rig):
 def test_capture_logs_excess_movement(rig, caplog):
     controller, camera, _, outbox, _, package = rig
     warmup(rig)
+    controller.rules["package_capture_motion_threshold"] = 0.1
     camera.capture.return_value = Frame(255 - package, True, 1.2)
     with caplog.at_level(logging.INFO):
         assert not controller.capture("package", Frame(package, True, 1.2), (0.1, 0.1, 0.65, 0.85))
@@ -562,8 +563,8 @@ def test_delayed_positive_cannot_capture_missing_package(rig):
         ("close_retries = 2", "close_retries = 3"),
         ("max_bright_ratio = 0.20", "max_bright_ratio = 1.1"),
         ("min_brightness = 50.0", "min_brightness = 211.0"),
-        ("package_motion_threshold = 0.055", "package_motion_threshold = true"),
-        ("package_capture_motion_threshold = 0.22", "package_capture_motion_threshold = 1.1"),
+        ("package_motion_threshold = 0.09", "package_motion_threshold = true"),
+        ("package_capture_motion_threshold = 0.35", "package_capture_motion_threshold = 1.1"),
     ],
 )
 def test_invalid_config_rejected(tmp_path, old, new):
@@ -596,8 +597,8 @@ def test_existing_quality_config_remains_usable(tmp_path):
     path = tmp_path / "config.toml"
     path.write_text(previous, encoding="utf-8")
     vision = load_config(path)["vision"]
-    assert vision["package_motion_threshold"] == 0.055
-    assert vision["package_capture_motion_threshold"] == 0.22
+    assert vision["package_motion_threshold"] == 0.09
+    assert vision["package_capture_motion_threshold"] == 0.35
     for kind in ("package", "interior"):
         assert capture_thresholds(vision, kind).min_sharpness == 65.0
         assert capture_thresholds(vision, kind, still=True).min_sharpness == 82.0

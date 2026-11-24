@@ -42,7 +42,7 @@ warmup_seconds = 0.6
 stable_seconds = 0.6
 motion_threshold = 0.018
 # 손으로 든 포장의 미리보기는 내부 촬영보다 움직임을 더 허용한다.
-package_motion_threshold = 0.055
+package_motion_threshold = 0.09
 pixel_threshold = 25
 minimum_change = 0.08
 # 이보다 작은 포장도 후보로 유지하고 크기 경고만 표시한다.
@@ -60,7 +60,7 @@ max_brightness = 210.0
 max_dark_ratio = 0.30
 max_bright_ratio = 0.20
 capture_motion_threshold = 0.08
-package_capture_motion_threshold = 0.22
+package_capture_motion_threshold = 0.35
 close_settle_seconds = 0.75
 close_attempt_seconds = 3.0
 close_retries = 2

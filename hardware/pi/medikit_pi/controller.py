@@ -316,7 +316,11 @@ class CaptureController:
                 # 프레임을 받은 단조 시각을 실제 시각으로 환산해 저장 시각과 구분한다.
                 age = time.monotonic() - photo.timestamp
                 captured_at = datetime.now(timezone.utc) - timedelta(seconds=age)
-            if self.board.is_open() != expected_open or not photo.autofocus_ok:
+            if self.board.is_open() != expected_open:
+                LOGGER.info("촬영 보류: 뚜껑 상태가 바뀌었습니다.")
+                return False
+            if not photo.autofocus_ok:
+                LOGGER.info("촬영 보류: 자동초점을 다시 맞춥니다.")
                 return False
             if not self.quality_ok(kind, photo, box, still=True):
                 return False
@@ -330,12 +334,15 @@ class CaptureController:
                 if kind == "package"
                 else "capture_motion_threshold"
             ]
-            if motion_score(before, after) > motion_limit:
-                return False
-            if (
-                box is not None
-                and motion_score(crop_box(before, box), crop_box(after, box)) > motion_limit
-            ):
+            frame_motion = motion_score(before, after)
+            box_motion = motion_score(crop_box(before, box), crop_box(after, box)) if box else 0.0
+            if max(frame_motion, box_motion) > motion_limit:
+                LOGGER.info(
+                    "촬영 보류: 화면 변화 %.3f · 포장 변화 %.3f · 기준 %.3f",
+                    frame_motion,
+                    box_motion,
+                    motion_limit,
+                )
                 return False
             ok, encoded = cv2.imencode(
                 ".jpg",

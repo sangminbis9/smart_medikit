@@ -429,6 +429,18 @@ def test_lid_change_during_capture_rejected(rig):
     assert not rig[0].capture("package", Frame(rig[5], True, 1.2))
 
 
+# 화질은 양호하지만 미리보기와 사진이 크게 달라지면 저장을 막고 이유를 남긴다.
+def test_capture_logs_excess_movement(rig, caplog):
+    controller, camera, _, outbox, _, package = rig
+    warmup(rig)
+    camera.capture.return_value = Frame(255 - package, True, 1.2)
+    with caplog.at_level(logging.INFO):
+        assert not controller.capture("package", Frame(package, True, 1.2), (0.1, 0.1, 0.65, 0.85))
+    assert "촬영 보류: 화면 변화" in caplog.text
+    controller.finish()
+    assert not outbox.head()["package_capture_ok"]
+
+
 # 지연된 빈 검출 결과가 작은 신규 포장을 현재 배경에 흡수하지 않는다.
 def test_delayed_empty_detection_uses_its_own_frame(rig):
     warmup(rig)
@@ -551,7 +563,7 @@ def test_delayed_positive_cannot_capture_missing_package(rig):
         ("max_bright_ratio = 0.20", "max_bright_ratio = 1.1"),
         ("min_brightness = 50.0", "min_brightness = 211.0"),
         ("package_motion_threshold = 0.055", "package_motion_threshold = true"),
-        ("package_capture_motion_threshold = 0.14", "package_capture_motion_threshold = 1.1"),
+        ("package_capture_motion_threshold = 0.22", "package_capture_motion_threshold = 1.1"),
     ],
 )
 def test_invalid_config_rejected(tmp_path, old, new):
@@ -585,7 +597,7 @@ def test_existing_quality_config_remains_usable(tmp_path):
     path.write_text(previous, encoding="utf-8")
     vision = load_config(path)["vision"]
     assert vision["package_motion_threshold"] == 0.055
-    assert vision["package_capture_motion_threshold"] == 0.14
+    assert vision["package_capture_motion_threshold"] == 0.22
     for kind in ("package", "interior"):
         assert capture_thresholds(vision, kind).min_sharpness == 65.0
         assert capture_thresholds(vision, kind, still=True).min_sharpness == 82.0

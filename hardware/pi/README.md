@@ -217,7 +217,7 @@ python -m medikit_pi --config config.toml run
 | `detector.max_age_seconds` | 1.2초보다 오래된 원본 프레임의 검출은 사용하지 않음 |
 | `vision.analysis_width` | 전체 화면을 폭 320으로 줄여 차이 계산 |
 | `vision.stable_seconds`, `min_iou` | 같은 포장의 연속 검출에 필요한 시간과 검출 박스의 최소 겹침 비율. 새 예제는 0.6초, 0.45 |
-| `vision.package_motion_threshold`, `package_capture_motion_threshold` | 포장의 미리보기와 고해상도 사진에서 허용하는 움직임 기준. 값이 없으면 각각 0.055, 0.14를 적용 |
+| `vision.package_motion_threshold`, `package_capture_motion_threshold` | 포장의 미리보기와 고해상도 사진에서 허용하는 움직임 기준. 값이 없으면 각각 0.055, 0.22를 적용 |
 | `vision.motion_threshold`, `capture_motion_threshold` | 준비 배경과 내부 촬영에 적용되는 움직임 기준 |
 | `vision.minimum_change`, `pixel_threshold` | 준비 배경 대비 신규 후보의 변화 기준 |
 | `vision.sharpness_threshold`, `still_sharpness_threshold` | 포장 미리보기/최종 사진의 라플라시안 분산. 새 예제는 PC 시험값 500에서 시작. 기존 설정의 명시값(예: 65)은 유지되며 측정 영역·축소 방식은 공통 계산으로 바뀐다. |

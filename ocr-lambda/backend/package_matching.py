@@ -8,6 +8,7 @@ from .image_ocr import adjacent, box_overlap, name_height, vertical_english
 from .mfds import ApiError
 from .recognition import (
     BRAND_ALIASES,
+    FORMS,
     NAME_MODIFIERS,
     NOISE,
     QUANTITY,
@@ -227,7 +228,12 @@ class PackageMatcher:
             "indices": indices,
             "required": any(cells[i].get("required", True) for i in indices),
             "label": len(indices) == 1
-            and (text in NAME_MODIFIERS or len(text) < 2 or all(p.get("_letter") for p in words)),
+            and (
+                text in NAME_MODIFIERS
+                or len(text) < 2
+                or text.isdigit()
+                or all(p.get("_letter") for p in words)
+            ),
         }
 
     # API 실패와 불완전한 행을 숨기지 않고 같은 읽힌 검색어는 한 번만 조회한다.
@@ -282,18 +288,31 @@ class PackageMatcher:
             forms.add(observed["form"])
         for part in lines:
             kind = fragment_kind(part["text"])
-            if kind not in {"form", "strength"}:
+            if kind not in {"form", "strength", "quantity"}:
                 continue
             same = box_overlap(phrase["cell"], part)
+            x1, y1, x2, y2 = phrase["cell"]["box"]
+            a1, b1, a2, b2 = part["box"]
+            overlap_x = max(0, min(x2, a2) - max(x1, a1))
+            close_below = (
+                overlap_x >= 0.5 * min(x2 - x1, a2 - a1)
+                and b1 >= y1
+                and max(0, b1 - y2) <= min(y2 - y1, b2 - b1)
+            )
             if (
                 same[0] / same[2] >= 0.8
                 or adjacent(phrase["cell"], part)
                 or adjacent(phrase["cell"], part, below=True)
+                or close_below
             ):
                 if kind == "form":
                     forms.add(normalize_name(part["text"]))
-                else:
+                elif kind == "strength":
                     observed["strengths"].update(name_fields(part["text"])["strengths"])
+                else:
+                    forms.update(
+                        unit for _, unit in name_fields(part["text"])["quantities"] if unit in FORMS
+                    )
         if len(forms) > 1 or len(observed["strengths"]) > 1:
             raise RecognitionError("validation", "CONFLICTING_ATTRIBUTES")
         observed["form"] = next(iter(forms), None)
@@ -314,9 +333,22 @@ class PackageMatcher:
             multiple = True
         else:
             for row in rows:
-                fields = self._fields(row)
+                explicit = name_fields(re.sub(r"\([^()]*\)", "", row["ITEM_NAME"]))
+                # 검증 안 된 괄호를 추측하지 않되 공식 본문에 명시된 속성 불일치는 제외한다.
+                mismatch = (
+                    "FORM_MISMATCH"
+                    if observed["form"] and explicit["form"] and observed["form"] != explicit["form"]
+                    else "STRENGTH_MISMATCH"
+                    if observed["strengths"]
+                    and explicit["strengths"]
+                    and observed["strengths"] != explicit["strengths"]
+                    else None
+                )
+                fields = None if mismatch else self._fields(row)
                 reason = (
-                    "ANNOTATION_UNVERIFIED"
+                    mismatch
+                    if mismatch
+                    else "ANNOTATION_UNVERIFIED"
                     if fields is None
                     else "FORM_MISMATCH"
                     if observed["form"] and observed["form"] != fields["form"]

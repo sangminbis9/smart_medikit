@@ -360,3 +360,55 @@ def test_attached_g_is_a_read_letter_not_a_unit():
     _, result = run_package([line("새빛G")], api)
     assert result["name"] == "새빛지캡슐"
     api.search.assert_called_once_with("새빛지")
+
+
+# 제목 아래에 일부 겹쳐 인쇄된 고신뢰 함량도 실제 관측 속성으로 사용한다.
+def test_overlapping_strength_below_title_is_used():
+    api = catalog_api(product('새빛정500밀리그람'),
+                      product('새빛정160밀리그람', '900000002'),
+                      product('새빛산500밀리그람', '900000003'))
+    _, result = run_package([line('새빛', (34, 79, 179, 130)),
+                             line('정', (172, 105, 185, 121)),
+                             line('500밀리 그람', (40, 123, 121, 144))], api)
+    assert result['product_code'] == '900000001'
+
+
+# 실제 읽힌 수량 표기의 캡슐·정도 제형 근거이며 매·포를 임의 제형으로 만들지는 않는다.
+def test_form_read_inside_quantity_is_used():
+    api = catalog_api(product('새빛캡슐'), product('새빛정', '900000002'))
+    _, result = run_package([line('새빛', (10, 10, 100, 40)),
+                             line('6캡슐', (15, 42, 90, 61))], api)
+    assert result['name'] == '새빛캡슐'
+
+
+# 단독 숫자는 제품명이 아니므로 전체 검색·결합을 방해하는 광범위 조회를 하지 않는다.
+def test_bare_quantity_number_is_not_searched_alone():
+    from backend.mfds import ApiError
+
+    api = catalog_api(product("새빛레이디캡슐"))
+    original = api.search.side_effect
+
+    # 숫자 단독 조회가 실행되면 실제 API의 결과 상한 오류를 재현한다.
+    def search(text):
+        if text.isdigit():
+            raise ApiError("API_RESULT_LIMIT")
+        return original(text)
+
+    api.search.side_effect = search
+    _, result = run_package(
+        [line("새빛레이디", (10, 10, 150, 40)), line("10", (15, 60, 40, 80))], api
+    )
+    assert result["name"] == "새빛레이디캡슐"
+    assert [c.args[0] for c in api.search.call_args_list] == ["새빛레이디"]
+
+
+# 괄호 검증이 미완료라도 공식 이름에 명시된 다른 함량은 실제 관측 함량과 불일치한다.
+def test_unverified_annotation_does_not_hide_explicit_strength_mismatch():
+    api = catalog_api(
+        product('새빛정500밀리그람'),
+        product('새빛정160밀리그람(미확인성분)', '900000002'),
+    )
+    api.ingredients.return_value = []
+    _, result = run_package([line('새빛', (10, 10, 100, 40)),
+                             line('500mg', (15, 42, 90, 61))], api)
+    assert result['product_code'] == '900000001'

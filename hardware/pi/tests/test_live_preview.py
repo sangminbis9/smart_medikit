@@ -3,6 +3,7 @@
 import socket
 import threading
 from http.client import HTTPConnection
+from unittest.mock import Mock
 
 import cv2
 import numpy as np
@@ -51,8 +52,8 @@ def test_stream_follows_publish_and_clear():
             )
             marked = read_frame(stream)
             assert marked.shape == frame.shape
-            assert marked[20, 60, 1] > 150
-            assert np.max(marked[:15]) < 65
+            assert marked[60, 80, 1] > 150
+            assert np.max(marked[-8:, :16]) < 65
             assert np.all(frame == 40)
             preview.clear()
             np.testing.assert_array_equal(read_frame(stream), idle)
@@ -66,6 +67,45 @@ def test_stream_follows_publish_and_clear():
     finally:
         conn.close()
         preview.close()
+
+
+# 화면 오른쪽 위·아래 끝에서도 범주 글씨를 구분하고 점수만 바뀌면 같은 화면을 유지한다.
+@pytest.mark.parametrize("box", [(0.96, 0.0, 1.0, 0.4), (0.96, 0.8, 1.0, 1.0)])
+def test_class_label_visible_at_frame_edge_without_score(box):
+    frame = np.full((120, 320, 3), 40, np.uint8)
+    first = live_preview._jpeg(frame, [Detection(box, 0.71, "medicine box")])
+    other = live_preview._jpeg(frame, [Detection(box, 0.71, "medicine bottle")])
+    assert first == live_preview._jpeg(frame, [Detection(box, 0.95, "medicine box")])
+    first_pixels = cv2.imdecode(np.frombuffer(first, np.uint8), cv2.IMREAD_GRAYSCALE)
+    other_pixels = cv2.imdecode(np.frombuffer(other, np.uint8), cv2.IMREAD_GRAYSCALE)
+    # 같은 좌표에서 포장 종류만 바꿨을 때 화면 안쪽에서도 글씨 차이가 보여야 한다.
+    difference = cv2.absdiff(first_pixels, other_pixels)
+    assert np.count_nonzero(difference[:, :-16] > 25) >= 10
+    assert np.all(frame == 40)
+
+
+# 한글 지원 시 기존 포장 이름을 쓰고, 미지원 글꼴과 새 범주는 모델의 원래 이름을 쓴다.
+@pytest.mark.parametrize(
+    ("korean", "label", "expected"),
+    [
+        (True, "medicine bottle", "약품 병"),
+        (False, "medicine bottle", "medicine bottle"),
+        (True, "sample carton", "sample carton"),
+    ],
+)
+def test_label_text_matches_available_font(korean, label, expected, monkeypatch):
+    font = Mock()
+    font.getbbox.return_value = (0, 0, 70, 16)
+    monkeypatch.setattr(live_preview, "_label_font", Mock(return_value=(font, korean)))
+    draw = Mock()
+    monkeypatch.setattr(live_preview.ImageDraw, "Draw", Mock(return_value=draw))
+    live_preview._label_tile.cache_clear()
+    try:
+        live_preview._label_tile(label)
+        font.getbbox.assert_called_once_with(expected)
+        assert draw.text.call_args.args[1] == expected
+    finally:
+        live_preview._label_tile.cache_clear()
 
 
 # 시청자가 없으면 압축하지 않고 같은 검출 원본을 다시 게시해도 JPEG를 재사용한다.

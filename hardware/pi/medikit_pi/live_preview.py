@@ -2,13 +2,26 @@
 
 import logging
 import threading
+from functools import lru_cache
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
 
 import cv2
 import numpy as np
+from PIL import Image, ImageDraw, ImageFont
 
 LOGGER = logging.getLogger(__name__)
 DEFAULT_PORT = 8765
+KOREAN_LABELS = {
+    "medicine box": "약품 상자",
+    "prescription medicine bag": "처방약 봉투",
+    "medicine sachet": "소형 약품 포장",
+    "pill blister pack": "알약 블리스터 포장",
+    "medicine bottle": "약품 병",
+    "ointment tube": "연고 튜브",
+    "medical patch package": "파스 포장",
+    "paper document": "문서 후보",
+}
 PAGE = """<!doctype html>
 <html lang="ko"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>보관함 카메라</title>
@@ -18,10 +31,41 @@ main{max-width:960px;margin:5vh auto;padding:0 16px}h1{font-size:1.4rem}
 img{width:100%;display:block;aspect-ratio:16/9;object-fit:contain;background:#101316}
 </style>
 <main><h1>보관함 카메라</h1><img src="/stream.mjpg" alt="실시간 카메라 영상">
-<p>초록 상자는 포장 후보입니다. Ⅱ 표시는 카메라가 영상을 기다리는 상태입니다.</p></main></html>""".encode()
+<p>초록 박스 옆에 감지된 포장 종류가 표시됩니다. Ⅱ 표시는 카메라가 영상을 기다리는 상태입니다.</p></main></html>""".encode()
 
 
-# 표시용 복사본에만 포장 상자를 그리며 영상이 없을 때는 대기 기호를 보낸다.
+# 한글을 지원하는 시스템 글꼴을 우선하고, 없으면 영문 범주명을 그릴 글꼴을 고른다.
+@lru_cache(maxsize=1)
+def _label_font():
+    for name in (
+        "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
+        "/usr/share/fonts/truetype/nanum/NanumGothic.ttf",
+        "/usr/share/fonts/truetype/noto/NotoSansKR-Regular.ttf",
+        "C:/Windows/Fonts/malgun.ttf",
+    ):
+        if Path(name).is_file():
+            try:
+                return ImageFont.truetype(name, 16), True
+            except OSError:
+                continue
+    try:
+        return ImageFont.truetype("DejaVuSans.ttf", 16), False
+    except OSError:
+        return ImageFont.load_default(), False
+
+
+# 포장 종류별 글자 이미지를 재사용해 프레임마다 같은 글자를 다시 그리지 않는다.
+@lru_cache(maxsize=64)
+def _label_tile(label):
+    font, korean = _label_font()
+    text = KOREAN_LABELS.get(label, label) if korean else label
+    left, top, right, bottom = font.getbbox(text)
+    tile = Image.new("L", (right - left + 8, bottom - top + 6), 28)
+    ImageDraw.Draw(tile).text((4 - left, 3 - top), text, font=font, fill=255)
+    return np.asarray(tile)
+
+
+# 표시용 복사본에 포장 박스와 분류명을 그리며 영상이 없을 때는 대기 기호를 보낸다.
 def _jpeg(frame, detections):
     if frame is None:
         image = np.full((180, 320, 3), 24, np.uint8)
@@ -40,6 +84,12 @@ def _jpeg(frame, detections):
             left, right = round(x1 * (width - 1)), round(x2 * (width - 1))
             top, bottom = round(y1 * (height - 1)), round(y2 * (height - 1))
             cv2.rectangle(image, (left, top), (right, bottom), (40, 230, 65), 2)
+            tile = _label_tile(detection.label)[:height, :width]
+            h, w = tile.shape
+            x = min(left, width - w)
+            # 화면 상단에서는 박스 안에 표시하고 오른쪽 끝에서도 글씨가 보이게 한다.
+            y = top - h if top >= h else min(top + 2, height - h)
+            image[y : y + h, x : x + w] = tile[:, :, None]
     ok, encoded = cv2.imencode(".jpg", image, [cv2.IMWRITE_JPEG_QUALITY, 80])
     if not ok:
         raise ValueError("실시간 미리보기 JPEG 변환 실패")

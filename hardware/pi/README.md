@@ -25,7 +25,7 @@ ring_pulse_seconds = 0.5
 
 ### PuTTY로 접속한 노트북에서 카메라 영상 보기
 
-Pi에 연결한 PuTTY 창에서는 로그를 읽고, 노트북 브라우저에서는 카메라 영상과 YOLOE가 찾은 포장의 박스를 본다. 점수와 품질 수치는 터미널에서 확인한다.
+Pi에 연결한 PuTTY 창에서는 로그를 읽고, 노트북 브라우저에서는 카메라 영상과 초록 박스 옆의 YOLOE 포장 분류명(예: 약품 상자, 약품 병)을 본다. Pi에 한글 글꼴(Noto CJK/KR 또는 나눔고딕)이 없으면 모델의 영문 분류명을 표시한다. 신뢰도와 품질 수치는 터미널에서 확인한다.
 
 1. **노트북의 PuTTY**에서 현재 창의 제목 표시줄을 오른쪽 클릭하고 **Change Settings… → Connection → SSH → Tunnels**로 간다.
 2. **Source port**에 `8765`, **Destination**에 `127.0.0.1:8765`를 입력한다. **Local**을 선택하고 **Add**를 누른 뒤 목록에 `L8765`가 생기면 **Apply**를 누른다. 다음 접속에도 쓰려면 **Session**에서 해당 연결 설정을 **Save**한다. PuTTY 기본값대로 포트는 이 노트북에서만 접속하도록 둔다. [PuTTY 포트 전달 안내](https://the.earth.li/~sgtatham/putty/0.84/htmldoc/Chapter4.html#config-ssh-portfwd)

@@ -23,13 +23,13 @@ from medikit_pi.outbox import Outbox
 
 
 class SyntheticDetector:
-    # 모델 대신 합성 흰 포장을 찾는 테스트 전용 검출기를 준비한다.
+    # 모델 대신 합성 포장을 찾는 테스트 전용 검출기를 준비한다.
     def __init__(self, *args):
         pass
 
-    # 합성 프레임이 밝을 때만 포장 후보를 반환한다.
+    # 균일한 배경에 포장 무늬가 나타날 때만 후보를 반환한다.
     def predict(self, frame):
-        if frame.mean() > 10:
+        if frame.std() > 10:
             return [Detection((0.1, 0.1, 0.8, 0.9), 0.9, "medicine box")]
         return []
 
@@ -43,10 +43,11 @@ def test_video_command_end_to_end(tmp_path, monkeypatch):
     writer = cv2.VideoWriter(str(video), cv2.VideoWriter_fourcc(*"MJPG"), 10, (320, 240))
     assert writer.isOpened()
     rng = np.random.default_rng(17)
-    image = np.zeros((240, 320, 3), dtype=np.uint8)
+    background = np.full((240, 320, 3), 92, dtype=np.uint8)
+    image = background.copy()
     image[24:216, 32:256] = rng.integers(30, 250, (192, 224, 3), dtype=np.uint8)
     for index in range(90):
-        writer.write(np.zeros_like(image) if index < 20 else image)
+        writer.write(background if index < 20 else image)
     writer.release()
     events = tmp_path / "events.json"
     events.write_text(json.dumps([{"at": 0, "open": True}, {"at": 6, "open": False}]))
@@ -142,3 +143,29 @@ def test_camera_logging_keeps_warnings_and_custom_levels(monkeypatch, caplog):
         assert logger.level == logging.INFO
     finally:
         logger.setLevel(original_level)
+
+
+# 촬영 연습을 반복해도 운영 큐·전송 설정과 이전 연습 사진을 건드리지 않는다.
+def test_local_test_uses_separate_queue_even_with_aws_enabled(tmp_path, monkeypatch):
+    from medikit_pi import __main__ as cli
+
+    example = Path(__file__).parents[1] / "config.example.toml"
+    contents = example.read_text(encoding="utf-8")
+    contents = contents.replace("../../local_data/hardware_pi", "production")
+    contents = contents.replace("enabled = false", "enabled = true").replace(
+        "lid_pin = -1", "lid_pin = 17"
+    )
+    path = tmp_path / "config.toml"
+    path.write_text(contents, encoding="utf-8")
+    runner = Mock(return_value=0)
+    monkeypatch.setattr(cli, "run_hardware", runner)
+    for _ in range(2):
+        assert cli.main(["--config", str(path), "run", "--local-test"]) == 0
+    first, second = (call.args[0] for call in runner.call_args_list)
+    assert first["aws"]["enabled"] is False and second["aws"]["enabled"] is False
+    assert first["data_dir"].is_dir() and second["data_dir"].is_dir()
+    assert first["data_dir"] != second["data_dir"]
+    assert not (tmp_path / "production").exists()
+    assert cli.main(["--config", str(path), "run"]) == 0
+    normal = runner.call_args.args[0]
+    assert normal["aws"]["enabled"] is True and normal["data_dir"] == tmp_path / "production"

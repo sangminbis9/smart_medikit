@@ -13,8 +13,8 @@ from unittest.mock import Mock, patch
 import cv2
 import numpy as np
 
-from hardware import camera_preview, lid_capture
-from hardware.package_detector import PackageDetection
+from hardware.droidcam import camera_preview, lid_capture
+from hardware.droidcam.package_detector import PackageDetection
 
 
 class LidCaptureTests(unittest.TestCase):

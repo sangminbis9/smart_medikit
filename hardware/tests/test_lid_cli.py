@@ -6,7 +6,7 @@ from types import ModuleType
 import unittest
 from unittest.mock import Mock, patch
 
-from hardware import camera_preview
+from hardware.droidcam import camera_preview
 
 
 class LidCliTests(unittest.TestCase):
@@ -17,9 +17,9 @@ class LidCliTests(unittest.TestCase):
         self.loader = self.enterContext(patch.object(camera_preview, "load_detector"))
         self.preview = self.enterContext(patch.object(camera_preview, "run_preview", return_value=0))
         self.capture = self.enterContext(patch.object(camera_preview.cv2, "VideoCapture"))
-        self.simulation = ModuleType("hardware.lid_capture")
+        self.simulation = ModuleType("hardware.droidcam.lid_capture")
         self.simulation.run_lid_simulation = Mock(return_value=0)
-        self.enterContext(patch.dict("sys.modules", {"hardware.lid_capture": self.simulation}))
+        self.enterContext(patch.dict("sys.modules", {"hardware.droidcam.lid_capture": self.simulation}))
 
     # 일반 미리보기의 기본 옵션에는 탐지와 모의 센서를 켜지 않는다.
     def test_simulation_is_opt_in(self):

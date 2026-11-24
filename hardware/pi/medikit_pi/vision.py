@@ -8,6 +8,13 @@ import cv2
 import numpy as np
 
 from .detection import Detection
+from .image_quality import (
+    DEFAULT_THRESHOLDS,
+    PhotoQuality,
+    QualityThresholds,
+    assess_photo,
+    padded_bounds,
+)
 
 
 # 전체 화면을 유지하면서 비교용 회색조 영상을 작게 만든다.
@@ -40,13 +47,43 @@ def crop_box(frame: np.ndarray, box: tuple[float, float, float, float]) -> np.nd
     return frame[y1:y2, x1:x2]
 
 
-# 고주파 경계 성분으로 전체 영상 또는 포장 영역의 선명도를 측정한다.
-def sharpness(frame: np.ndarray, box: tuple[float, float, float, float] | None = None) -> float:
-    region = crop_box(frame, box) if box is not None else frame
-    if region.size == 0:
-        return 0.0
-    gray = cv2.cvtColor(region, cv2.COLOR_BGR2GRAY) if region.ndim == 3 else region
-    return float(cv2.Laplacian(gray, cv2.CV_64F).var())
+# 미리보기·촬영본에 각각 지정한 기준을 사용하고 이전 Pi 설정의 값을 보존한다.
+def capture_thresholds(vision: dict, kind: str, *, still: bool = False) -> QualityThresholds:
+    sharpness_key = "still_sharpness_threshold" if still else "sharpness_threshold"
+    threshold = vision[sharpness_key]
+    if kind == "interior":
+        threshold = vision.get("interior_min_sharpness", threshold)
+    return QualityThresholds(
+        min_sharpness=threshold,
+        min_brightness=vision.get("min_brightness", DEFAULT_THRESHOLDS.min_brightness),
+        max_brightness=vision.get("max_brightness", DEFAULT_THRESHOLDS.max_brightness),
+        max_dark_ratio=vision.get("max_dark_ratio", DEFAULT_THRESHOLDS.max_dark_ratio),
+        max_bright_ratio=vision.get("max_bright_ratio", DEFAULT_THRESHOLDS.max_bright_ratio),
+        min_short_side=vision.get("min_short_side", DEFAULT_THRESHOLDS.min_short_side),
+    )
+
+
+# 포장은 10% 여백이 있는 영역, 내부 사진은 전체 화면에서 공통 품질 기준을 적용한다.
+def assess_capture_quality(
+    frame: np.ndarray,
+    box: tuple[float, float, float, float] | None,
+    thresholds: QualityThresholds,
+    min_area: float,
+) -> PhotoQuality:
+    if box is None:
+        return assess_photo(frame, thresholds=thresholds)
+    height, width = frame.shape[:2]
+    x1, y1, x2, y2 = box
+    bounds, clipped = padded_bounds(
+        (x1 * width, y1 * height, x2 * width, y2 * height), width, height
+    )
+    left, top, right, bottom = bounds
+    return assess_photo(
+        frame[top:bottom, left:right],
+        padding_clipped=clipped,
+        small_area=(x2 - x1) * (y2 - y1) < min_area,
+        thresholds=thresholds,
+    )
 
 
 # 준비 시점 배경에 비해 후보 영역에서 바뀐 픽셀 비율을 계산한다.
@@ -78,12 +115,13 @@ def iou(
     return overlap / union if union > 0 else 0.0
 
 
-# 화면 어디에 있든 배경과 다르고 크기 기준을 만족하는 최고 신뢰도 후보를 선택한다.
+# 배경과 다른 후보 중 유효한 박스를 고른다. 작은 면적은 이후 품질 검사에서만 안내한다.
 def select_candidate(
     detections: tuple[Detection, ...] | list[Detection],
     background: np.ndarray,
     current: np.ndarray,
     minimum_change: float = 0.08,
+    # 기존 위치·키워드 호출과 호환한다. 하한 판정은 assess_capture_quality에서 경고로만 쓴다.
     min_area: float = 0.01,
     max_area: float = 0.9,
     pixel_threshold: int = 25,
@@ -94,7 +132,7 @@ def select_candidate(
         if not all(math.isfinite(value) and 0 <= value <= 1 for value in detection.box):
             continue
         area = max(0, x2 - x1) * max(0, y2 - y1)
-        if not min_area <= area <= max_area:
+        if not 0 < area <= max_area:
             continue
         # 기준 배경 속 정적 포장을 신규 제시로 처리하지 않는다.
         if change_fraction(background, current, detection.box, pixel_threshold) < minimum_change:

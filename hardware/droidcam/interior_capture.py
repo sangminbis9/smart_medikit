@@ -5,10 +5,7 @@ import math
 import cv2
 import numpy as np
 
-if __package__:
-    from .image_quality import PhotoQuality, QualityThresholds, assess_photo
-else:
-    from image_quality import PhotoQuality, QualityThresholds, assess_photo
+from hardware.pi.medikit_pi.image_quality import PhotoQuality, QualityThresholds, assess_photo
 
 
 class InteriorCaptureGate:
@@ -64,7 +61,7 @@ class InteriorCaptureGate:
         self._frame_shape = frame.shape
 
         # 내부 전체 촬영에서는 크기 경고만 허용하고 노출 및 선택한 선명도 기준은 적용한다.
-        if any(warning != "small" for warning in report.warnings):
+        if report.blocking_warnings:
             self._anchor = None
             self._previous = None
             self._observations = 0

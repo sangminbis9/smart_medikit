@@ -1,7 +1,7 @@
-"""한 장의 포장 이미지에서 화질 지표와 실험용 주의 사유를 계산한다."""
+"""Pi 카메라와 DroidCam에 공통인 촬영 영역과 화질 지표를 계산한다."""
 
-from dataclasses import dataclass
 import math
+from dataclasses import dataclass
 
 import cv2
 import numpy as np
@@ -69,12 +69,36 @@ class PhotoQuality:
     bright_ratio: float
     warnings: tuple[str, ...]
 
+    # 작은 포장은 안내만 제공하고, 다른 경고가 남으면 자동 촬영을 보류한다.
+    @property
+    def blocking_warnings(self) -> tuple[str, ...]:
+        return tuple(warning for warning in self.warnings if warning != "small")
+
+
+# 픽셀 좌표의 각 변에 10% 여백을 더하고 화면 밖에서 잘린 여백을 표시한다.
+def padded_bounds(
+    box: tuple[float, float, float, float], width: int, height: int
+) -> tuple[tuple[int, int, int, int], bool]:
+    x1, y1, x2, y2 = box
+    pad_x = (x2 - x1) * 0.10
+    pad_y = (y2 - y1) * 0.10
+    left, top = math.floor(x1 - pad_x), math.floor(y1 - pad_y)
+    right, bottom = math.ceil(x2 + pad_x), math.ceil(y2 + pad_y)
+    clipped = left < 0 or top < 0 or right > width or bottom > height
+    return (
+        max(0, min(width, left)),
+        max(0, min(height, top)),
+        max(0, min(width, right)),
+        max(0, min(height, bottom)),
+    ), clipped
+
 
 # 원본을 보존하면서 제한된 크기의 측정 영상으로 화질 수치와 주의 사유를 반환한다.
 def assess_photo(
     frame: np.ndarray,
     *,
     padding_clipped: bool = False,
+    small_area: bool = False,
     thresholds: QualityThresholds = DEFAULT_THRESHOLDS,
 ) -> PhotoQuality:
     if (
@@ -95,7 +119,9 @@ def assess_photo(
     # 측정 비용을 제한하되 작은 입력을 확대해 해상도가 충분한 것처럼 평가하지 않는다.
     analysis = frame
     if scale < 1.0:
-        analysis = cv2.resize(frame, (analysis_width, analysis_height), interpolation=cv2.INTER_AREA)
+        analysis = cv2.resize(
+            frame, (analysis_width, analysis_height), interpolation=cv2.INTER_AREA
+        )
     gray = cv2.cvtColor(analysis, cv2.COLOR_BGR2GRAY)
     sharpness = float(cv2.Laplacian(gray, cv2.CV_64F).var())
     mean_brightness = float(gray.mean())
@@ -111,7 +137,7 @@ def assess_photo(
     # 흰 포장도 밝은 영역에 포함되므로 빛 반사를 확정하지 않고 의심 사유로만 알린다.
     if mean_brightness > thresholds.max_brightness or bright_ratio > thresholds.max_bright_ratio:
         warnings.append("bright")
-    if min(width, height) < thresholds.min_short_side:
+    if small_area or min(width, height) < thresholds.min_short_side:
         warnings.append("small")
     if padding_clipped:
         warnings.append("edge")

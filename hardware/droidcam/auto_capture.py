@@ -4,8 +4,8 @@ import math
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from hardware.image_quality import PhotoQuality
-    from hardware.package_detector import PackageDetection
+    from hardware.pi.medikit_pi.image_quality import PhotoQuality
+    from .package_detector import PackageDetection
 
 
 class AutoCaptureGate:
@@ -76,7 +76,7 @@ class AutoCaptureGate:
             return False
 
         # 크기는 실험용 주의로 남기고, 다른 품질 경고가 있을 때만 촬영을 막는다.
-        if len(detections) != 1 or any(warning != "small" for warning in qualities[0].warnings):
+        if len(detections) != 1 or qualities[0].blocking_warnings:
             self._clear_pending()
             self.status = "multiple" if len(detections) > 1 else "quality" if detections else "waiting"
             return False

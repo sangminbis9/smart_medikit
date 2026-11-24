@@ -3,9 +3,9 @@
 from dataclasses import replace
 import unittest
 
-from hardware.auto_capture import AutoCaptureGate
-from hardware.image_quality import PhotoQuality
-from hardware.package_detector import PackageDetection
+from hardware.droidcam.auto_capture import AutoCaptureGate
+from hardware.droidcam.package_detector import PackageDetection
+from hardware.pi.medikit_pi.image_quality import PhotoQuality
 
 
 class AutoCaptureTests(unittest.TestCase):

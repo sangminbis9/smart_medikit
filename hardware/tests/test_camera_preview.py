@@ -10,9 +10,9 @@ from unittest.mock import Mock, patch
 import cv2
 import numpy as np
 
-from hardware import camera_preview
-from hardware.auto_capture import AutoCaptureGate
-from hardware.package_detector import PackageDetection
+from hardware.droidcam import camera_preview
+from hardware.droidcam.auto_capture import AutoCaptureGate
+from hardware.droidcam.package_detector import PackageDetection
 
 
 class PreviewTests(unittest.TestCase):

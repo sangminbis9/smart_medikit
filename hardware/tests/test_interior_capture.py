@@ -4,7 +4,7 @@ import unittest
 
 import numpy as np
 
-from hardware.interior_capture import InteriorCaptureGate
+from hardware.droidcam.interior_capture import InteriorCaptureGate
 
 
 class InteriorCaptureTests(unittest.TestCase):

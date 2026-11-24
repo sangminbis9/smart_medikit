@@ -58,6 +58,10 @@ def load_config(path: Path) -> dict:
         if not 0 < config["vision"][key] <= 1:
             raise ValueError(f"0 초과 1 이하 값이 필요합니다: vision.{key}")
     vision = config["vision"]
+    # 실행 중 사용하는 기준으로 기존 설정의 기본값과 새 노출·내부 선명도 범위를 검증한다.
+    from .vision import capture_thresholds
+
+    capture_thresholds(vision, "interior")
     if (
         not 0.5 <= vision["close_settle_seconds"] <= 1.0
         or vision["close_attempt_seconds"] <= vision["close_settle_seconds"]
@@ -68,11 +72,17 @@ def load_config(path: Path) -> dict:
     if not 2 <= config["aws"]["poll_seconds"] <= 3:
         raise ValueError("AWS 상태 조회 간격은 2~3초입니다.")
     if vision["min_area"] >= vision["max_area"]:
-        raise ValueError("후보 최소 면적은 최대 면적보다 작아야 합니다.")
+        raise ValueError(
+            "작은 포장 경고 기준(min_area)은 탐지 최대 면적(max_area)보다 작아야 합니다."
+        )
     if not 0 < config["detector"]["confidence"] <= 1:
         raise ValueError("탐지 신뢰도는 0 초과 1 이하입니다.")
     for key in ("sharpness_threshold", "still_sharpness_threshold"):
-        if not math.isfinite(vision[key]) or vision[key] <= 0:
+        if (
+            type(vision[key]) not in (int, float)
+            or not math.isfinite(vision[key])
+            or vision[key] <= 0
+        ):
             raise ValueError("선명도 기준은 양의 유한한 값이어야 합니다.")
     for key in ("preview_size", "still_size"):
         size = config["camera"][key]

@@ -11,7 +11,7 @@ from unittest.mock import Mock, patch
 
 import numpy as np
 
-from hardware import package_detector
+from hardware.droidcam import package_detector
 
 
 class PackageDetectorTests(unittest.TestCase):

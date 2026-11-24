@@ -113,3 +113,33 @@ def test_webcam_cli_dispatch(monkeypatch):
     config = Path(__file__).parents[1] / "config.example.toml"
     assert main(["--config", str(config), "webcam", "--camera", "1"]) == 0
     assert runner.call_args.args[1].camera == 1
+
+
+# 실제 카메라 CLI가 같은 프레임에 대해 미감지·후보·화질 수치를 출력하고 큐를 만들지 않는지 확인한다.
+def test_pi_camera_check_reports_metrics_without_session_or_cloud(tmp_path, monkeypatch, caplog):
+    from medikit_pi.camera import Frame
+
+    example = Path(__file__).parents[1] / "config.example.toml"
+    output = tmp_path / "no-queue"
+    settings = example.read_text(encoding="utf-8").replace(
+        "../../local_data/hardware_pi", output.as_posix()
+    )
+    settings = settings.replace("enabled = false", "enabled = true")
+    path = tmp_path / "check.toml"
+    path.write_text(settings, encoding="utf-8")
+    camera = Mock()
+    camera.read.return_value = Frame(np.full((100, 200, 3), 255, np.uint8), True, 0.0)
+    monkeypatch.setattr("medikit_pi.camera.PiCamera", Mock(return_value=camera))
+    detector = Mock()
+    candidate = Detection((0.25, 0.25, 0.5, 0.75), 0.9, "medicine box")
+    detector.predict.side_effect = [[], [candidate]]
+    monkeypatch.setattr("medikit_pi.webcam.YOLOEDetector", Mock(return_value=detector))
+    monkeypatch.setattr("medikit_pi.webcam.time.sleep", Mock())
+    caplog.set_level("INFO")
+    assert main(["--config", str(path), "camera-check", "--samples", "2"]) == 0
+    assert "후보 0개" in caplog.text and "medicine box 90%" in caplog.text
+    assert "과노출" in caplog.text and "평균 밝기 255.0" in caplog.text
+    assert "자동초점 완료" in caplog.text and "추론" in caplog.text
+    camera.close.assert_called_once()
+    camera.capture.assert_not_called()
+    assert not output.exists()

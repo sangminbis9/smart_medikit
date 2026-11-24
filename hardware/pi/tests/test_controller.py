@@ -1,5 +1,6 @@
 """합성 영상으로 개폐 상태와 촬영 성공 제한을 검증한다."""
 
+import logging
 from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
@@ -13,6 +14,7 @@ from medikit_pi.controller import CaptureController, Debouncer
 from medikit_pi.detection import Detection, DetectionResult
 from medikit_pi.gpio import MockBoard
 from medikit_pi.outbox import Outbox
+from medikit_pi.vision import capture_thresholds
 
 
 # 일정한 포장 후보를 반환하여 상태 머신의 영상 판단을 독립 검증한다.
@@ -47,7 +49,7 @@ def rig(tmp_path):
     camera = Mock()
     detector = TestDetector()
     controller = CaptureController(config, camera, board, outbox, detector)
-    base = np.zeros((180, 320, 3), dtype=np.uint8)
+    base = np.full((180, 320, 3), 92, dtype=np.uint8)
     package = base.copy()
     rng = np.random.default_rng(2)
     package[18:153, 32:208] = rng.integers(30, 250, (135, 176, 3), dtype=np.uint8)
@@ -56,11 +58,11 @@ def rig(tmp_path):
 
 
 # 프레임과 실제 센서 상태를 같은 시각으로 전달한다.
-def feed(rig, at, image, opened=True, focused=True):
+def feed(rig, at, image, opened=True, focused=True, still_image=None):
     controller, camera, board, _, _, _ = rig
     board.opened = opened
     frame = Frame(image, focused, at, True)
-    camera.capture.return_value = frame
+    camera.capture.return_value = frame if still_image is None else Frame(still_image, focused, at)
     controller.sensor(opened, at)
     controller.frame(frame, at)
 
@@ -148,8 +150,6 @@ def test_one_package_and_same_session_interior(rig):
 
 # 뚜껑과 사진 저장 상태를 실제로 일어난 순서에 맞게 알린다.
 def test_capture_messages(rig, caplog):
-    import logging
-
     with caplog.at_level(logging.INFO):
         warmup(rig)
         present(rig)
@@ -190,6 +190,107 @@ def test_existing_background_not_captured(rig):
         feed(rig, index / 10, rig[5])
     assert rig[0].state == "READY"
     rig[1].capture.assert_not_called()
+
+
+# 동일한 초점·무늬에서 밝기나 흑백 픽셀 비율만 달라지는 합성 프레임을 만든다.
+def textured_frame(shape, low, high):
+    pattern = np.indices(shape[:2]).sum(axis=0) % 2
+    gray = np.where(pattern, low, high).astype(np.uint8)
+    return np.repeat(gray[:, :, None], 3, axis=2)
+
+
+# 1% 미만의 포장도 화질이 좋으면 노란불을 거쳐 사진을 한 번 저장한다.
+def test_small_clear_package_is_saved(rig, caplog):
+    controller, camera, board, outbox, base, _ = rig
+    controller.detector.box = Detection((0.45, 0.4, 0.50, 0.5), 0.9, "bottle")
+    image = base.copy()
+    image[72:90, 144:160] = textured_frame((18, 16), 125, 190)
+    warmup(rig)
+    with caplog.at_level(logging.INFO):
+        for index in range(12, 42):
+            feed(rig, index / 10, image)
+    session_id = controller.session_id
+    controller.finish()
+    event = outbox.head()
+    assert event["session_id"] == session_id and event["package_capture_ok"]
+    assert [color for _, color in board.history] == ["green", None, "yellow", "green", None]
+    camera.capture.assert_called_once()
+    assert any("촬영본" in line and "작음" in line for line in caplog.messages)
+
+
+# 초점이 맞고 무늬가 선명해도 포장 여백을 포함한 영역의 노출이 나쁘면 촬영을 대기한다.
+@pytest.mark.parametrize(
+    ("low", "high"),
+    [(35, 45), (220, 230), (25, 145), (130, 245)],
+    ids=["low-mean", "high-mean", "dark-ratio", "bright-ratio"],
+)
+def test_poor_package_exposure_blocks_preview(rig, low, high):
+    controller, camera, board, _, base, _ = rig
+    # 프레임 대부분은 양호하여 전체 화면을 잘못 평가하면 작은 포장의 결함을 놓친다.
+    controller.detector.box = Detection((0.37, 0.35, 0.6, 0.6), 0.9, "box")
+    image = base.copy()
+    image[55:115, 106:203] = textured_frame((60, 97), low, high)
+    warmup(rig)
+    for index in range(12, 40):
+        feed(rig, index / 10, image)
+    assert controller.state == "READY" and board.color == "yellow"
+    camera.capture.assert_not_called()
+
+
+# 물체 자체는 화면 안이어도 10% 바깥 여백이 잘리면 영속 저장하지 않는다.
+def test_package_requires_border_margin(rig):
+    controller, camera, _, _, _, _ = rig
+    controller.detector.box = Detection((0.03, 0.1, 0.65, 0.85), 0.9, "box")
+    warmup(rig)
+    present(rig)
+    assert controller.state == "READY"
+    camera.capture.assert_not_called()
+
+
+# 닫힘 미리보기에는 포장 후보 없이 전체 화면의 흰색 포화 비율을 적용한다.
+def test_interior_glare_blocks_preview(rig):
+    controller, camera, _, outbox, base, _ = rig
+    warmup(rig)
+    bright = textured_frame(base.shape, 130, 250)
+    for index in range(12, 120):
+        feed(rig, index / 10, bright, opened=False)
+    camera.capture.assert_not_called()
+    assert controller.state == "CLOSED"
+    assert not outbox.head()["interior_capture_ok"]
+
+
+# 미리보기와 거의 같은 고해상도 사진도 흑백 픽셀 비율이 경계를 넘으면 저장하지 않는다.
+@pytest.mark.parametrize("kind", ["package", "interior"])
+@pytest.mark.parametrize(
+    ("preview_levels", "still_levels"),
+    [((31, 150), (29, 150)), ((130, 244), (130, 246))],
+    ids=["dark-ratio", "bright-ratio"],
+)
+def test_final_photo_exposure_rechecked(rig, kind, preview_levels, still_levels):
+    controller, camera, _, outbox, base, _ = rig
+    preview = textured_frame(base.shape, *preview_levels)
+    still = textured_frame(base.shape, *still_levels).repeat(2, axis=0).repeat(2, axis=1)
+    warmup(rig)
+    for index in range(12, 42):
+        feed(rig, index / 10, preview, opened=kind == "package", still_image=still)
+    assert camera.capture.call_count > 0
+    controller.finish()
+    assert not outbox.head()[f"{kind}_capture_ok"]
+
+
+# 같은 테스트 사진에서 조정한 과노출 비율이 미리보기와 최종 저장에 모두 적용된다.
+def test_bright_ratio_can_be_tuned_for_real_camera(rig):
+    original, camera, board, outbox, base, _ = rig
+    config = original.config
+    config["vision"]["max_bright_ratio"] = 0.6
+    controller = CaptureController(config, camera, board, outbox, original.detector)
+    bright = textured_frame(base.shape, 130, 246)
+    tuned = (controller, camera, board, outbox, base, bright)
+    warmup(tuned)
+    present(tuned)
+    assert controller.state == "CAPTURED"
+    controller.finish()
+    assert outbox.head()["package_capture_ok"]
 
 
 # AF 또는 선명도가 불충분하면 포장 성공으로 세지 않는다.
@@ -321,14 +422,45 @@ def test_yellow_waits_for_detection_from_changed_frame(rig):
     assert rig[2].color == "yellow"
 
 
-# 잘못된 서버 조회 주기와 무제한 재시도 설정을 거부한다.
+# 잘못된 조회 주기, 무제한 재시도 또는 유효 범위 밖의 화질 기준을 거부한다.
 @pytest.mark.parametrize(
     "old,new",
-    [("poll_seconds = 2.5", "poll_seconds = 1.0"), ("close_retries = 2", "close_retries = 3")],
+    [
+        ("poll_seconds = 2.5", "poll_seconds = 1.0"),
+        ("close_retries = 2", "close_retries = 3"),
+        ("max_bright_ratio = 0.20", "max_bright_ratio = 1.1"),
+        ("min_brightness = 50.0", "min_brightness = 211.0"),
+    ],
 )
 def test_invalid_config_rejected(tmp_path, old, new):
     source = (Path(__file__).parents[1] / "config.example.toml").read_text(encoding="utf-8")
+    assert old in source
     path = tmp_path / "bad.toml"
     path.write_text(source.replace(old, new), encoding="utf-8")
     with pytest.raises(ValueError):
         load_config(path)
+
+
+# 현장에 남은 예전 설정은 미리보기·촬영본의 선명도 값을 유지하며 새 노출 기준을 읽는다.
+def test_existing_quality_config_remains_usable(tmp_path):
+    example = (Path(__file__).parents[1] / "config.example.toml").read_text(encoding="utf-8")
+    new_fields = (
+        "interior_min_sharpness",
+        "min_brightness",
+        "max_brightness",
+        "max_dark_ratio",
+        "max_bright_ratio",
+        "min_short_side",
+    )
+    previous = "\n".join(line for line in example.splitlines() if not line.startswith(new_fields))
+    previous = previous.replace("\nsharpness_threshold = 500.0", "\nsharpness_threshold = 65.0")
+    previous = previous.replace(
+        "still_sharpness_threshold = 500.0", "still_sharpness_threshold = 82.0"
+    )
+    path = tmp_path / "config.toml"
+    path.write_text(previous, encoding="utf-8")
+    vision = load_config(path)["vision"]
+    for kind in ("package", "interior"):
+        assert capture_thresholds(vision, kind).min_sharpness == 65.0
+        assert capture_thresholds(vision, kind, still=True).min_sharpness == 82.0
+    assert capture_thresholds(vision, "package").max_bright_ratio == 0.2

@@ -28,7 +28,8 @@ debounce_seconds = 0.08
 [detector]
 model_path = "models/yoloe-26n-medikit.pt"
 source_model = "yoloe-26n-seg.pt"
-prompts = ["medicine box", "prescription medicine bag", "pill blister pack", "syrup bottle", "ointment tube", "medicine pouch", "cardboard box", "bottle"]
+# 새 모델은 PC 실험에서 사용한 8개 후보 범주로 준비한다.
+prompts = ["medicine box", "prescription medicine bag", "medicine sachet", "pill blister pack", "medicine bottle", "ointment tube", "medical patch package", "paper document"]
 image_size = 320
 confidence = 0.25
 threads = 2
@@ -42,11 +43,20 @@ stable_seconds = 1.0
 motion_threshold = 0.018
 pixel_threshold = 25
 minimum_change = 0.08
+# 이보다 작은 포장도 후보로 유지하고 크기 경고만 표시한다.
 min_area = 0.01
 max_area = 0.9
 min_iou = 0.6
-sharpness_threshold = 65.0
-still_sharpness_threshold = 65.0
+# 작은 포장(min_area 미만 또는 여백 포함 짧은 변 160px 미만)은 경고만 표시한다.
+min_short_side = 160
+# 포장 사진은 DroidCam 실험값으로 시작한다. 실물 라벨과 비교하며 조정한다.
+sharpness_threshold = 500.0
+still_sharpness_threshold = 500.0
+interior_min_sharpness = 65.0
+min_brightness = 50.0
+max_brightness = 210.0
+max_dark_ratio = 0.30
+max_bright_ratio = 0.20
 capture_motion_threshold = 0.08
 close_settle_seconds = 0.75
 close_attempt_seconds = 3.0

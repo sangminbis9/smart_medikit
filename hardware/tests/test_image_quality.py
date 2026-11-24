@@ -7,7 +7,7 @@ from unittest.mock import patch
 import cv2
 import numpy as np
 
-from hardware.image_quality import DEFAULT_THRESHOLDS, QualityThresholds, assess_photo
+from hardware.pi.medikit_pi.image_quality import DEFAULT_THRESHOLDS, QualityThresholds, assess_photo
 
 
 class PhotoQualityTests(unittest.TestCase):

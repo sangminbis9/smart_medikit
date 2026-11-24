@@ -5,15 +5,16 @@ import unittest
 import cv2
 import numpy as np
 from medikit_pi.detection import Detection
+from medikit_pi.image_quality import DEFAULT_THRESHOLDS
 from medikit_pi.vision import (
     CandidateTracker,
+    assess_capture_quality,
     change_fraction,
     crop_box,
     gray_frame,
     iou,
     motion_score,
     select_candidate,
-    sharpness,
 )
 
 
@@ -37,7 +38,7 @@ class VisionTests(unittest.TestCase):
         self.assertEqual(select_candidate([old, new], background, current), new)
         self.assertEqual(change_fraction(background, current, old.box), 0)
 
-    # 배경 잡음과 너무 작거나 화면을 덮는 후보를 제외하는지 확인한다.
+    # 배경 잡음과 화면을 덮는 후보는 제외하고, 크기만 작은 후보는 유지한다.
     def test_noise_and_implausible_area_rejected(self):
         background = np.zeros((100, 100), dtype=np.uint8)
         noise = np.full((100, 100), 10, dtype=np.uint8)
@@ -46,7 +47,8 @@ class VisionTests(unittest.TestCase):
         bright = noise * 20
         whole = Detection((0, 0, 1, 1), 0.99, "box")
         tiny = Detection((0.5, 0.5, 0.51, 0.51), 0.99, "box")
-        self.assertIsNone(select_candidate([whole, tiny], background, bright))
+        self.assertIsNone(select_candidate([whole], background, bright))
+        self.assertEqual(select_candidate([whole, tiny], background, bright), tiny)
 
     # 영상 차이와 흐림이 서로 독립된 품질 지표인지 확인한다.
     def test_motion_and_sharpness(self):
@@ -54,16 +56,21 @@ class VisionTests(unittest.TestCase):
         blurry = cv2.GaussianBlur(checker, (15, 15), 5)
         self.assertEqual(motion_score(checker, checker), 0)
         self.assertGreater(motion_score(checker, 255 - checker), 0.9)
-        self.assertGreater(sharpness(checker), sharpness(blurry) * 10)
-        self.assertEqual(sharpness(checker, (0.2, 0.2, 0.1, 0.1)), 0)
+        sharp = assess_capture_quality(
+            cv2.cvtColor(checker, cv2.COLOR_GRAY2BGR), None, DEFAULT_THRESHOLDS, 0.01
+        )
+        blurred = assess_capture_quality(
+            cv2.cvtColor(blurry, cv2.COLOR_GRAY2BGR), None, DEFAULT_THRESHOLDS, 0.01
+        )
+        self.assertGreater(sharp.sharpness, blurred.sharpness * 10)
         self.assertEqual(motion_score(None, checker), 1)
 
     # 유효하지 않은 후보 좌표를 안전하게 제외하는지 확인한다.
     def test_invalid_coordinates(self):
         frame = np.zeros((12, 12), dtype=np.uint8)
         self.assertEqual(crop_box(frame, (float("nan"), 0, 1, 1)).size, 0)
-        candidate = Detection((float("nan"), 0, 1, 1), 0.9, "box")
-        self.assertIsNone(select_candidate([candidate], frame, frame))
+        for box in [(float("nan"), 0, 1, 1), (0.51, 0.4, 0.51, 0.8), (0.51, 0.4, 0.50, 0.8)]:
+            self.assertIsNone(select_candidate([Detection(box, 0.9, "box")], frame, frame + 150))
         self.assertEqual(iou((0, 0, 0.5, 0.5), (0.5, 0.5, 1, 1)), 0)
 
     # 같은 검출 결과를 여러 프레임에서 읽어도 안정화 시간이 누적되지 않는지 확인한다.

@@ -6,13 +6,15 @@ from datetime import datetime, timedelta, timezone
 
 import cv2
 
+from .image_quality import WARNING_MESSAGES
 from .vision import (
     CandidateTracker,
+    assess_capture_quality,
+    capture_thresholds,
     crop_box,
     gray_frame,
     motion_score,
     select_candidate,
-    sharpness,
 )
 
 LOGGER = logging.getLogger(__name__)
@@ -40,6 +42,12 @@ class CaptureController:
     def __init__(self, config, camera, board, outbox, detector, *, clock=None):
         self.config = config
         self.rules = config["vision"]
+        self.quality_thresholds = {
+            (kind, still): capture_thresholds(self.rules, kind, still=still)
+            for kind in ("package", "interior")
+            for still in (False, True)
+        }
+        self.quality_log = {}
         self.camera, self.board, self.outbox, self.detector = camera, board, outbox, detector
         self.debounce = Debouncer(config["gpio"]["debounce_seconds"])
         self.clock = clock
@@ -69,6 +77,38 @@ class CaptureController:
         self.board.set_ring("green")
         self.green_until = (self.clock() if self.clock else now) + self.pulse_seconds
 
+    # 같은 품질 지표를 미리보기와 저장할 사진에서 측정하고 원본 없이 현장 보정 수치를 남긴다.
+    def quality_ok(self, kind, frame, box=None, *, still=False):
+        key = (kind, still)
+        report = assess_capture_quality(
+            frame.image, box, self.quality_thresholds[key], self.rules["min_area"]
+        )
+        previous = self.quality_log.get(key)
+        # 촬영본은 매번, 미리보기는 사유 변경 또는 계속되는 실패만 간격을 두어 기록한다.
+        if (
+            still
+            or previous is None
+            or (
+                (previous[0] != report.warnings and frame.timestamp - previous[1] >= 1)
+                or (report.blocking_warnings and frame.timestamp - previous[1] >= 5)
+            )
+        ):
+            LOGGER.info(
+                "%s %s 품질: %s · 선명도 %.1f · 평균 밝기 %.1f · 어두운 영역 %.1f%% · "
+                "밝은 영역 %.1f%% · %d×%d px",
+                "포장" if kind == "package" else "내부",
+                "촬영본" if still else "미리보기",
+                ", ".join(WARNING_MESSAGES[w] for w in report.warnings) or "양호",
+                report.sharpness,
+                report.mean_brightness,
+                report.dark_ratio * 100,
+                report.bright_ratio * 100,
+                report.width,
+                report.height,
+            )
+            self.quality_log[key] = (report.warnings, frame.timestamp)
+        return not report.blocking_warnings
+
     # 시작 시 닫힌 빈 작업 세션으로 첫 비교 기준을 확보한다.
     def initialize_baseline(self, now):
         if not self.outbox.staged or self.board.is_open():
@@ -95,6 +135,7 @@ class CaptureController:
                 self.finish()
             self.session_id = self.outbox.begin_session(self.config["box_id"])
             self.state = "OPENING"
+            self.quality_log.clear()
             self.candidate_signalled = False
             self.previous = self.background = None
             self.background_at = float("-inf")
@@ -174,7 +215,6 @@ class CaptureController:
                 self.background,
                 detected_gray,
                 minimum_change=self.rules["minimum_change"],
-                min_area=self.rules["min_area"],
                 max_area=self.rules["max_area"],
                 pixel_threshold=self.rules["pixel_threshold"],
             )
@@ -198,14 +238,13 @@ class CaptureController:
                     )
                     <= self.rules["motion_threshold"]
                 )
+            if candidate is not None and not self.quality_ok("package", frame, candidate.box):
+                # 품질 실패 전에 얻은 비동기 검출을 다음 안정 시간에 합산하지 않는다.
+                self.stable_since = None
+                self.tracker.reset()
+                return
             ready = self.tracker.update(candidate, result.captured_at, stable)
-            if (
-                ready
-                and candidate is not None
-                and now >= self.retry_at
-                and frame.autofocus_ok
-                and sharpness(frame.image, candidate.box) >= self.rules["sharpness_threshold"]
-            ):
+            if ready and candidate is not None and now >= self.retry_at and frame.autofocus_ok:
                 LOGGER.info(
                     "포장 감지: 신뢰도 %.0f%% · 안정 %.1f초",
                     candidate.confidence * 100,
@@ -219,15 +258,13 @@ class CaptureController:
                     self.retry_at = now + self.rules["package_retry_seconds"]
                     self.tracker.reset()
         elif self.state == "CLOSING":
+            if not self.quality_ok("interior", frame):
+                self.stable_since = None
             settled = (
                 self.stable_since is not None
                 and now - self.stable_since >= self.rules["close_settle_seconds"]
             )
-            if (
-                settled
-                and frame.autofocus_ok
-                and sharpness(frame.image) >= self.rules["sharpness_threshold"]
-            ):
+            if settled and frame.autofocus_ok:
                 if self.capture("interior", frame):
                     self.finish()
                 else:
@@ -249,7 +286,7 @@ class CaptureController:
                 captured_at = datetime.now(timezone.utc) - timedelta(seconds=age)
             if self.board.is_open() != expected_open or not photo.autofocus_ok:
                 return False
-            if sharpness(photo.image, box) < self.rules["still_sharpness_threshold"]:
+            if not self.quality_ok(kind, photo, box, still=True):
                 return False
             before = gray_frame(preview.image, self.rules["analysis_width"])
             after = gray_frame(photo.image, before.shape[1])

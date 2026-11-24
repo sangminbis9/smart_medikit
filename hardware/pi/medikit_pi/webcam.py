@@ -1,4 +1,4 @@
-"""PC 웹캠의 현재 영상과 YOLOE 후보 검출을 저장 없이 표시한다."""
+"""로컬 카메라에서 저장 없이 YOLOE 검출을 확인하고 Pi 미리보기의 화질을 측정한다."""
 
 import logging
 import time
@@ -10,6 +10,76 @@ from .detection import AsyncDetector, YOLOEDetector
 
 LOGGER = logging.getLogger(__name__)
 WINDOW_NAME = "smart_medikit - YOLOE"
+
+
+# 실제 Pi 미리보기 프레임에서 YOLOE 후보와 측정값을 함께 읽어 카메라 보정에 사용한다.
+def run_camera_check(config, samples):
+    from .camera import PiCamera
+    from .image_quality import WARNING_MESSAGES
+    from .vision import assess_capture_quality, capture_thresholds
+
+    settings, vision = config["detector"], config["vision"]
+    limits = capture_thresholds(vision, "package")
+    try:
+        model = YOLOEDetector(
+            settings["model_path"],
+            settings["image_size"],
+            settings["confidence"],
+            settings["threads"],
+            settings["prompts"],
+        )
+    except FileNotFoundError:
+        LOGGER.error("준비된 YOLOE 모델이 없습니다. 같은 설정으로 prepare-model을 먼저 실행하세요.")
+        return 1
+    camera = PiCamera(config["camera"])
+    try:
+        camera.start()
+        LOGGER.info(
+            "Pi 카메라 검사: 포장을 보여주세요. 미리보기 선명도 기준 %.1f, YOLOE 신뢰도 기준 %.0f%%. "
+            "사진과 전송 큐는 만들지 않습니다.",
+            limits.min_sharpness,
+            settings["confidence"] * 100,
+        )
+        for index in range(samples):
+            frame = camera.read()
+            started = time.monotonic()
+            detections = model.predict(frame.image)
+            LOGGER.info(
+                "%d/%d · 자동초점 %s · YOLOE 후보 %d개 · 추론 %.2f초",
+                index + 1,
+                samples,
+                "완료" if frame.autofocus_ok else "대기",
+                len(detections),
+                time.monotonic() - started,
+            )
+            for candidate in detections:
+                x1, y1, x2, y2 = candidate.box
+                if not (0 <= x1 < x2 <= 1 and 0 <= y1 < y2 <= 1):
+                    LOGGER.info("검출 영역의 좌표 범위를 벗어나 화질 측정을 건너뜁니다.")
+                    continue
+                report = assess_capture_quality(
+                    frame.image, candidate.box, limits, vision["min_area"]
+                )
+                LOGGER.info(
+                    "%s %.0f%% · 영역 %d×%d px · 선명도 %.1f · 평균 밝기 %.1f "
+                    "· 어두운 픽셀 %.1f%% · 밝은 픽셀 %.1f%% · %s",
+                    candidate.label,
+                    candidate.confidence * 100,
+                    report.width,
+                    report.height,
+                    report.sharpness,
+                    report.mean_brightness,
+                    report.dark_ratio * 100,
+                    report.bright_ratio * 100,
+                    ", ".join(WARNING_MESSAGES[w] for w in report.warnings) or "화질 양호",
+                )
+            if index + 1 < samples:
+                time.sleep(settings["interval_seconds"])
+    except KeyboardInterrupt:
+        LOGGER.info("Pi 카메라 검사를 종료합니다.")
+    finally:
+        camera.close()
+    return 0
 
 
 # 최신 영상과 검출의 원본 영상을 나란히 표시하여 지연된 상자를 오버레이하지 않는다.

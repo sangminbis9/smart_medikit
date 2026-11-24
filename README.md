@@ -28,13 +28,13 @@
 
 [`hardware/pi/`](hardware/pi/README.md)는 원본을 보존하고 복사한 뒤 단계별 OCR 전송·내부 비교를 추가한 **현재 Pi 설치 대상**이다. 배포된 AWS 연결값, `check-aws` 점검, 설치·GPIO·단기 로그인 절차는 해당 README를 따른다. 기존 DroidCam 실행에는 연결하지 않았으며 `Raspberry_Pi/`와 변경이 자동 동기화되지 않는다. 실제 Pi에서 전체 촬영 경로를 검증하는 작업은 남아 있다.
 
-PC 웹캠 실시간 객체 탐지는 `Raspberry_Pi`에서 `python -m medikit_pi --config config.example.toml webcam --camera 0`으로 실행한다. 준비된 YOLOE 모델을 사용하며 자동 촬영·저장·AWS 전송은 하지 않는다. 환경 설치와 카메라 선택은 [Pi/PC 실행 안내](Raspberry_Pi/README.md)를 참고한다.
+**Camera Module 3 Wide 실물 시험**은 `hardware/pi`에서 진행한다. 준비된 YOLOE 모델로 `python -m medikit_pi --config config.toml camera-check`를 실행하면 포장 검출과 미리보기 품질을 확인할 수 있다. 센서·조명까지 연결한 뒤에는 `run --local-test`로 운영 큐와 분리해 실제 사진을 저장한다. [Pi 시험 절차](hardware/pi/README.md#camera-module-3-wide-실물-시험)
 
-`frontend/`에 웹 소스가 있고, [`hardware/`](hardware/README.md)에 DroidCam/OpenCV 기반 PC 촬영 실험이 있다. 실기기 설치는 `hardware/pi/`를 사용한다. AWS·웹은 배포되었지만 실제 Pi의 카메라·GPIO·AWS 로그인과 실물 인식 정확도는 미검증이다.
+`frontend/`에 웹 소스가 있다. [DroidCam PC 실험](hardware/droidcam/README.md)은 비교용으로 보관하며, Pi와 같은 사진 품질 함수를 사용한다.
 
 ```text
-hardware/    # PC 카메라 탐지·품질 검사·수동/자동 저장 실험
-Raspberry_Pi/ # Raspberry Pi 자동 촬영·YOLOE·센서·LED·오프라인 큐
+hardware/     # pi/는 실기기 촬영·센서·LED·큐, droidcam/은 PC 비교 실험
+Raspberry_Pi/ # 보존 중인 초기 Raspberry Pi 구현
 ocr-lambda/  # 공통 OCR·제품 대조·DynamoDB 인식 이벤트 (첨부 Lambda 소스)
 backend/     # 기존 DynamoDB 제품 캐시 조회 API·배포·검증
 frontend/    # React·TypeScript·Tailwind CSS·PWA·Three.js 반응형 웹

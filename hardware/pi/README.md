@@ -12,6 +12,17 @@ ring_pulse_seconds = 0.5
 
 설정 후 Pi의 `hardware/pi`에서 `python -m medikit_pi --config config.toml check-config --hardware`로 확인할 수 있다.
 
+## Camera Module 3 Wide 실물 시험
+
+대상은 **Pi 5 + Camera Module 3 Wide(IMX708)**다. Pi에 업데이트된 소스와 의존성을 설치하고 가상환경을 활성화한 뒤, `hardware/pi/`에서 아래 순서로 확인한다.
+
+기존 Pi 설정에서 DroidCam과 같은 포장 선명도 기준으로 첫 시험을 하려면 `config.toml`의 `[vision]`에서 `sharpness_threshold`와 `still_sharpness_threshold`를 각각 `500.0`으로 설정하고, 내부 촬영용 `interior_min_sharpness = 65.0`을 추가하거나 갱신한다. 새 예제에는 세 값이 이미 들어 있다. 실제 카메라에서 조정할 시작값이다.
+
+1. `rpicam-hello --list-cameras`로 IMX708이 보이는지 확인한다. `config.toml`은 아래 설치 절차로 준비한다. 기존 설정을 계속 쓸 수 있다. PC 시험과 동일한 8개 후보로 비교하려면 예제의 `[detector].prompts`를 옮기고 `python -m medikit_pi --config config.toml prepare-model`을 한 번 실행한다. 기존 모델과 프롬프트가 일치하면 준비 작업을 반복할 필요가 없다.
+2. **카메라만 확인:** `python -m medikit_pi --config config.toml camera-check --samples 20`. 창 없이 각 표본의 AF, 검출 후보 수, 분류·신뢰도, 추론 시간, 포장 영역의 품질 수치와 경고가 터미널에 나온다. 사진과 큐를 만들지 않으며 센서·링을 구동하지 않는다. 빈 배경, 작은 약통, 글자가 촘촘한 상자, 빛이 반사되는 포장, 화면 가장자리를 차례로 보여준다. 미검출이면 먼저 거리·구도·YOLOE 설정을 보고, 검출되는데 품질 경고가 나오면 해당 수치와 실물을 비교한다.
+3. **실제 개폐·촬영:** 센서와 링 설정을 확인한 뒤 `python -m medikit_pi --config config.toml run --local-test`. 평소처럼 뚜껑을 열고 포장을 한 번 보여준 뒤 닫는다. 포장은 노란 링 아래에서, 내부는 흰 링 아래에서 촬영한다. 성공한 사진은 터미널에 출력된 시험 폴더의 세션별 `package.jpg`, `interior.jpg`로 확인한다. 실행할 때마다 새 시험 큐를 만들고 AWS 전송을 꺼서 다음 운영 실행에 시험 사진이 섞이지 않는다. 종료는 `Ctrl+C`다.
+4. 글자가 실제로 읽히는지 사진을 확대해 보고, 양호한데 차단된 사례와 흐리거나 반사됐는데 통과한 사례를 각각 기록한다. 같은 포장·거리·조명에서 아래 `[vision]` 기준을 하나씩 조정한다. 작은 포장에 크기 경고만 있을 때는 촬영되어야 한다. 검출 수가 계속 0이면 품질 기준을 조정해도 검출되지는 않는다.
+
 ## 내부 사진 전후 비교 실험
 
 실기기 `aws.staged_capture=true` 모드는 포장 저장 직후 OCR 전송을 시작하고 닫힌 뒤 내부 사진을 별도로 분석한다. 시작할 때 뚜껑이 닫혀 있으면 기준 사진을 먼저 확보한다.
@@ -37,7 +48,7 @@ python -m medikit_pi.movement --config config.toml --before before.jpg --after a
 
 사용자 요청으로 커밋 `17b14bc`의 [`Raspberry_Pi/`](../../Raspberry_Pi/README.md)에서 추적 중인 파일을 복사했다. 원본은 삭제하거나 수정하지 않았으며, 두 위치의 변경은 자동 동기화되지 않는다. 이번 복사에서는 실행 코드·테스트를 그대로 두고 이 안내와 예제 설정의 경로만 조정했다. 실제 설정·가상환경·모델·사진·대기열은 복사하지 않았다.
 
-기존 [PC 카메라 미리보기](../README.md)는 그대로 사용하며, 이 복사본의 기능을 호출하거나 AWS에 업로드하지 않는다. 복사본도 기본 `aws.enabled=false`이며 로컬 데이터는 원본과 분리된 `local_data/hardware_pi/`에 저장한다. 단, 복사본의 Pi 실행 모드는 전송을 꺼도 큐를 쌓으므로 이후 AWS를 활성화하면 그 큐도 전송 대상이다.
+[DroidCam PC 비교 실험](../droidcam/README.md)과 Pi는 동일한 노출·선명도·크기·여백 품질 함수를 사용한다. 운영 Pi의 `run`은 전송을 꺼도 큐에 작업을 쌓으므로 반복 촬영 시험에는 위의 `run --local-test`를 사용한다.
 
 실기기 설치 대상은 **Raspberry Pi 5, 64비트 Raspberry Pi OS Bookworm, Python 3.11**이다. 영상 모드는 Python 3.11 이상을 지원한다. GPIO18의 16구 링 단독 점등은 실물에서 확인했고, 카메라·센서·링을 조합한 촬영과 전송은 실기기 검증이 남아 있다.
 
@@ -50,7 +61,7 @@ S3 전송을 읽어 볼 때는 [`transport.py`](medikit_pi/transport.py)의 `S3T
 | `camera.py` | Picamera2 AF 메타데이터, 저해상도 미리보기/고해상도 전환, 제한시간·장치 복구, 영상 파일 입력 |
 | `gpio.py` | 마그네틱 센서와 상태 표시·내부 조명을 겸하는 Pi 5 NeoPixel 링, 모의 입출력 |
 | `detection.py` | 사전 학습 YOLOE-26n 모델 준비, CPU 추론, 최신 프레임 하나만 대기하는 작업자 |
-| `vision.py` | 전체 화면 배경 비교, 후보 영역 변화·선명도·추적 연속성 |
+| `vision.py`, `image_quality.py` | 전체 화면 배경 비교, 후보 추적, 포장 여백 및 포장·내부 사진 품질 판정 |
 | `controller.py` | 개폐 디바운스, 준비/포장/내부 촬영 상태 전이 |
 | `outbox.py` | SQLite 영속 순번·세션, 원자적 JPEG 저장, 순차 업로드·폴링·재시도 |
 | `transport.py` | 명시적으로 확인된 S3 완료 객체 및 인증된 HTTPS 상태 조회 |
@@ -174,7 +185,7 @@ python -m medikit_pi --config config.toml run
 5. 인터넷을 잠시 끊고 한 세션을 만든 뒤 복구한다. 로컬 큐가 같은 ID로 재전송되고 포장·이력·알림이 중복되지 않는지 확인한다.
 6. 별도 합성 검증 대상으로 24시간 미반입 처리와 재반입 시 이전 폐기 대상 해제를 확인한다. 약의 실제 폐기를 입증하는 시험은 아니다.
 
-전송을 끈 `run`도 큐를 쌓는다. 나중에 활성화하면 그 사진들이 전송되므로 로컬 촬영 시험은 다른 `data_dir`를 사용한다. **실사용을 시작한 큐 DB를 지우거나 옛 사본으로 되돌리지 않는다.** 세션 순번도 저장되어 있어 초기화하면 서버의 기존 `last_sequence`와 충돌할 수 있다. 처음 생성하는 실기기 큐만 새 경로를 사용하고, 그 이후에는 같은 큐·보관함 ID를 유지한다.
+운영 모드에서는 세션 순번도 저장하므로 같은 큐와 보관함 ID를 유지한다. 시험 폴더를 운영 `data_dir`로 지정하지 않는다.
 
 `Ctrl+C`로 종료하면 조명·카메라·GPIO를 정리하고 현재 세션의 확보된 사진을 보존한다. 비정상 종료된 촬영은 다음 시작에서 복구한다. 카메라 오류는 기본 2초 간격으로 재시작하고, 내부 촬영은 실패 한도 후 큐에 남긴다. 디스크 쓰기 실패는 성공 표시를 하지 않는다. 동기화가 꺼져 있거나 오랫동안 끊긴 경우 로컬 저장 공간을 운영자가 확인해야 한다.
 
@@ -189,10 +200,13 @@ python -m medikit_pi --config config.toml run
 | `vision.analysis_width` | 전체 화면을 폭 320으로 줄여 차이 계산 |
 | `vision.stable_seconds` | 같은 후보가 약 1초 관측되어야 촬영 |
 | `vision.motion_threshold`, `minimum_change`, `pixel_threshold` | 연속 흔들림 및 준비 배경 대비 신규 후보 변화 기준 |
-| `vision.sharpness_threshold`, `still_sharpness_threshold` | 미리보기/사진의 Laplacian 분산 기준; 실제 조명과 거리로 조정 |
+| `vision.sharpness_threshold`, `still_sharpness_threshold` | 포장 미리보기/최종 사진의 라플라시안 분산. 새 예제는 PC 시험값 500에서 시작. 기존 설정의 명시값(예: 65)은 유지되며 측정 영역·축소 방식은 공통 계산으로 바뀐다. |
+| `vision.interior_min_sharpness` | 내부 사진은 화면 전체를 검사하며 새 예제의 시작값은 65. 생략한 기존 설정에서는 미리보기/최종 사진의 각 선명도 기준 사용 |
+| `vision.min_brightness`, `max_brightness`, `max_dark_ratio`, `max_bright_ratio` | 평균 밝기 50~210, 밝기 30 이하 픽셀 최대 30%, 245 이상 픽셀 최대 20%. 포장과 내부 모두 미리보기와 실제 촬영본을 검사 |
+| `vision.min_short_side`, `min_area`, `max_area` | 여백 포함 짧은 변 160px 미만 또는 포장 박스의 화면 점유율 1% 미만은 경고만 표시. 최대 면적 90%·배경 변화·추적 조건은 Pi 후보 탐색에 적용 |
 | `vision.close_settle_seconds`, `close_attempt_seconds`, `close_retries` | 0.75초 안정화, 시도 창 3초, 추가 2회 |
 
-하드웨어 실행은 추론을 별도 스레드에서 처리하고 오래된 대기 프레임을 덮어쓴다. 실제 추론이 `max_age_seconds`보다 느리면 안전하게 촬영하지 않으므로 지연을 측정해 입력 크기·주기·유효시간을 조정한다. 고해상도는 촬영 시에만 전환하고 닫힘 처리가 끝나면 카메라·조명을 정지한다. AF가 실패하거나 제한시간을 넘으면 사진을 성공 처리하지 않는다.
+포장 품질은 검출 박스의 각 방향에 10% 여백을 더한 영역에서 측정한다. 여백이 화면 경계에 잘리면 자동 저장을 보류한다. 지표 계산 시 긴 변은 최대 640px이며 저장하는 JPEG는 원본 전체 사진이다. 추론은 별도 스레드에서 실행한다. PC의 YOLOE 입력은 640, Pi 기본값은 320이므로 작은 물체의 검출률과 추론 시간을 함께 확인한다. 검출 결과가 `max_age_seconds`보다 오래됐거나 AF가 실패하면 자동 저장하지 않는다.
 
 전역 밝기 변화, 뚜껑 이동, 투명/반사 포장, 여러 포장의 교차·가림은 오탐/미탐 요인이다. YOLOE의 영어 프롬프트는 포장 형태에 대한 힌트이며 한국어 인쇄를 읽거나 국내 모든 포장을 알아본다는 보장은 없다. 실제 영상을 보고 임계값을 결정하며 재고를 Pi에서 추정 확정하지 않는다.
 

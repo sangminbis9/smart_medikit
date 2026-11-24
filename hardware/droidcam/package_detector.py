@@ -9,18 +9,14 @@ from typing import TYPE_CHECKING
 import cv2
 import numpy as np
 
-if __package__:
-    from .image_quality import PhotoQuality, WARNING_MESSAGES
-else:
-    from image_quality import PhotoQuality, WARNING_MESSAGES
+from hardware.pi.medikit_pi.image_quality import PhotoQuality, WARNING_MESSAGES, padded_bounds
 
 if TYPE_CHECKING:
-    from hardware.auto_capture import AutoCaptureGate
+    from .auto_capture import AutoCaptureGate
 
 
-MODEL_DIRECTORY = Path(__file__).resolve().parents[1] / "local_data" / "models" / "yoloe"
+MODEL_DIRECTORY = Path(__file__).resolve().parents[2] / "local_data" / "models" / "yoloe"
 MODEL_FILENAME = "yoloe-26n-seg.pt"
-BOX_PADDING_RATIO = 0.10
 PACKAGE_CLASSES = (
     ("medicine box", "약품 상자"),
     ("prescription medicine bag", "처방약 봉투"),
@@ -133,13 +129,7 @@ class PackageDetector:
                 continue
 
             # 끝점을 너비·높이까지 허용해야 마지막 행과 열도 저장 영역에 포함된다.
-            padding_x = (x2 - x1) * BOX_PADDING_RATIO
-            padding_y = (y2 - y1) * BOX_PADDING_RATIO
-            x1, x2 = math.floor(x1 - padding_x), math.ceil(x2 + padding_x)
-            y1, y2 = math.floor(y1 - padding_y), math.ceil(y2 + padding_y)
-            padding_clipped = x1 < 0 or y1 < 0 or x2 > width or y2 > height
-            x1, x2 = max(0, min(width, x1)), max(0, min(width, x2))
-            y1, y2 = max(0, min(height, y1)), max(0, min(height, y2))
+            (x1, y1, x2, y2), padding_clipped = padded_bounds((x1, y1, x2, y2), width, height)
             if x2 <= x1 or y2 <= y1:
                 continue
             detections.append(PackageDetection(class_id, float(box.conf[0]), (x1, y1, x2, y2), padding_clipped))

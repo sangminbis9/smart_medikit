@@ -14,16 +14,10 @@ import cv2
 import numpy as np
 from PIL import Image, ImageDraw
 
-if __package__:
-    from . import camera_preview as preview
-    from .auto_capture import AutoCaptureGate
-    from .image_quality import QualityThresholds, WARNING_MESSAGES, assess_photo
-    from .interior_capture import InteriorCaptureGate
-else:
-    import camera_preview as preview
-    from auto_capture import AutoCaptureGate
-    from image_quality import QualityThresholds, WARNING_MESSAGES, assess_photo
-    from interior_capture import InteriorCaptureGate
+from hardware.pi.medikit_pi.image_quality import QualityThresholds, WARNING_MESSAGES, assess_photo
+from . import camera_preview as preview
+from .auto_capture import AutoCaptureGate
+from .interior_capture import InteriorCaptureGate
 
 
 # 로컬 촬영 기록에 사용할 시간대가 명시된 시각을 만든다.

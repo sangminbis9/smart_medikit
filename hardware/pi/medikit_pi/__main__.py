@@ -62,13 +62,24 @@ def parse_args(argv=None):
     parser = argparse.ArgumentParser(description="스마트 약품보관함 자동 촬영")
     parser.add_argument("--config", type=Path, default=Path("config.toml"))
     commands = parser.add_subparsers(dest="command", required=True)
-    commands.add_parser("run", help="Pi 카메라·GPIO로 실행")
+    run = commands.add_parser("run", help="Pi 카메라·GPIO로 실행")
+    run.add_argument(
+        "--local-test",
+        action="store_true",
+        help="새 실험 폴더에서 실제 개폐·촬영을 시험하고 AWS 전송은 끔",
+    )
     commands.add_parser("prepare-model", help="사전 학습 모델에 포장 설명을 저장")
     check = commands.add_parser("check-config", help="설정 형식 검사")
     check.add_argument(
         "--hardware", action="store_true", help="GPIO 번호·Pi 모델명·모델 파일도 검사"
     )
     commands.add_parser("check-aws", help="업로드 없이 단기 인증·S3·상태 API 점검")
+    camera_check = commands.add_parser(
+        "camera-check", help="Pi 카메라에서 포장 탐지와 미리보기 화질을 측정"
+    )
+    camera_check.add_argument(
+        "--samples", type=int, default=20, help="검사할 미리보기 프레임 수 (기본 20)"
+    )
     webcam = commands.add_parser("webcam", help="PC 웹캠에서 실시간 포장 후보만 표시")
     webcam.add_argument("--camera", type=int, default=0, help="웹캠 번호")
     webcam.add_argument(
@@ -88,6 +99,8 @@ def parse_args(argv=None):
     video.add_argument("--show", action="store_true", help="미리보기 창 표시")
     video.add_argument("--report", type=Path, help="촬영 상태 변화와 처리시간 보고서")
     args = parser.parse_args(argv)
+    if args.command == "camera-check" and args.samples < 1:
+        parser.error("--samples는 1 이상이어야 합니다.")
     if args.command == "webcam":
         if args.camera < 0:
             parser.error("웹캠 번호는 0 이상이어야 합니다.")
@@ -400,6 +413,22 @@ def main(argv=None):
             from .webcam import run_webcam
 
             return run_webcam(config, args)
+        if args.command == "camera-check":
+            from .webcam import run_camera_check
+
+            configure_camera_logging()
+            return run_camera_check(config, args.samples)
+        if args.command == "run" and args.local_test:
+            import tempfile
+
+            # 촬영 연습용 큐가 다음 운영 실행에서 전송되지 않도록 별도 폴더를 만든다.
+            config["aws"]["enabled"] = False
+            parent = config["data_dir"].parent
+            parent.mkdir(parents=True, exist_ok=True)
+            config["data_dir"] = Path(tempfile.mkdtemp(prefix="pi-camera-test-", dir=parent))
+            LOGGER.info(
+                "로컬 촬영 시험 · AWS 전송 꺼짐 · 사진과 큐 저장 위치: %s", config["data_dir"]
+            )
         return run_video(config, args) if args.command == "video" else run_hardware(config)
     except Exception as error:
         LOGGER.error("실행 실패(%s). 설정·모델·장치 연결을 확인하세요.", type(error).__name__)

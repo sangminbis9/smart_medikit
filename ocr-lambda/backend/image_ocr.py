@@ -469,6 +469,18 @@ def region_area(line):
     return (x2 - x1) * (y2 - y1)
 
 
+# 긴 세로 영어와 단일 상표 글자를 원래 좌표·각도로 구분한다.
+def vertical_english(line):
+    text = line["text"]
+    x1, y1, x2, y2 = line["box"]
+    angle = line.get("angle", 0)
+    return bool(
+        len(re.findall(r"[a-zA-Z]", text)) > 1
+        and re.fullmatch(r"[a-zA-Z0-9\s®™.-]+", text)
+        and (abs(angle) >= 65 or (abs(angle) < 15 and y2 - y1 > (x2 - x1) * 1.8))
+    )
+
+
 class PaddleReader:
     # 모델은 컨테이너에 미리 포함하고 워밍 실행 동안 한 번만 초기화한다.
     def __init__(self):
@@ -590,13 +602,9 @@ class PaddleReader:
                     if package:
                         direction = quad[1] - quad[0]
                         angle = (math.degrees(math.atan2(direction[1], direction[0])) + 90) % 180 - 90
-                        # 대각선 가로 문구는 남기고 세로로 인쇄된 영어만 제외한다.
-                        if re.fullmatch(r"[a-zA-Z0-9\s®™.-]+", text) and (
-                            abs(angle) >= 65
-                            or (abs(angle) < 15 and box[3] - box[1] > (box[2] - box[0]) * 1.8)
-                        ):
-                            continue
                         line.update(angle=angle, quad=quad.tolist())
+                        if vertical_english(line):
+                            continue
                     lines.append(line)
         except (KeyError, TypeError, ValueError, IndexError):
             raise ImageError("OCR_OUTPUT_INVALID") from None

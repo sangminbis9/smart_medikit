@@ -346,12 +346,12 @@ def test_form_fragment_with_different_angle_is_not_joined():
     assert all('새빛정' != ''.join(p['text'] for p in cell['lines']) for cell in cells)
 
 
-# 조금 낮은 점수라도 기준을 통과하고 제형까지 검증한 대안을 근거로 사용한다.
+# 다건 검색에서는 조금 낮은 점수라도 기준을 통과한 관측 제형으로만 후보를 좁힌다.
 def test_compatible_visible_form_is_not_lost_to_higher_bare_score():
     from test_recognition import api_for, product
     reader, result = match_readings([[line('마데카솔', score=0.99)],
                                      [line('마데카솔겔', score=0.98)]],
-                                    api_for(product('마데카솔겔')))
+                                    api_for(product('마데카솔겔'), product('마데카솔크림', '900000002')))
     assert result['name'] == '마데카솔겔'
     assert reader._predict.call_count == 2
 

@@ -297,3 +297,10 @@ def test_geometry_reaches_inventory():
     assert package["position"]["x"] == Decimal("152.5")
     assert package["position"]["certainty"] == "UNCERTAIN"
     assert package["size_class"] == "MEDIUM"
+
+
+# Pi 전용 matcher 의존성도 실제 배포 대상 모듈 목록에 포함한다.
+def test_package_search_module_is_in_deployment_bundle():
+    from deploy_pipeline_fixes import PACKAGE_OCR_MODULES
+
+    assert 'package_matching' in PACKAGE_OCR_MODULES

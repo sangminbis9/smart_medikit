@@ -12,6 +12,7 @@ REGION = "ap-northeast-2"
 OCR_HASH = "84fc7cd0cc7848293a9d7223583bec82b5fda275044b136fb626bd5ff4e0a7db"
 OCR_RECOGNITION_HASH = "bf9e33c045da0afd3e08fbfaeadc66cc2ce8c445a004e7090becfe891ff47aa7"
 ROOT = Path(__file__).resolve().parents[1]
+PACKAGE_OCR_MODULES = ("diagnostics", "image_ocr", "mfds", "pi_package", "recognition", "package_matching")
 
 
 # 검토한 배포 OCR만 수정하고 알 수 없는 버전은 덮어쓰지 않는다.
@@ -150,7 +151,7 @@ def deploy(apply=False, activity_only=False, ocr_only=False):
             if ocr_only:
                 replacements["backend/lambda_function.py"] = patch_package_entrypoint(source).encode("utf-8")
                 replacements["backend/recognition.py"] = patch_verified_enrichment(recognition).encode("utf-8")
-                for module in ("diagnostics", "image_ocr", "mfds", "pi_package", "recognition"):
+                for module in PACKAGE_OCR_MODULES:
                     replacements[f"medikit_package_ocr/{module}.py"] = (
                         ROOT / "ocr-lambda" / "backend" / f"{module}.py"
                     ).read_bytes()

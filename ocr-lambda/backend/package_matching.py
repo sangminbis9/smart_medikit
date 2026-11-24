@@ -4,7 +4,7 @@ import math
 import re
 from itertools import product
 
-from .image_ocr import adjacent, box_overlap, group_lines, name_height, vertical_english
+from .image_ocr import adjacent, box_overlap, name_height, vertical_english
 from .mfds import ApiError
 from .recognition import (
     BRAND_ALIASES,
@@ -13,6 +13,7 @@ from .recognition import (
     QUANTITY,
     STRENGTH,
     RecognitionError,
+    candidate_name,
     extract_candidate,
     fragment_kind,
     load_ingredients,
@@ -76,6 +77,8 @@ ENGLISH_LABELS = {
 # 실제 읽힌 영문만 검증된 상표 또는 한 글자 발음으로 바꾸며 모르는 단어는 만들지 않는다.
 def korean_query(text):
     text = normalize_name(text)
+    if len(text) == 1 and text in LETTER_NAMES:
+        return LETTER_NAMES[text]
     if NOISE.search(text):
         return None
     if re.fullmatch(r"[a-z]+", text):
@@ -83,7 +86,7 @@ def korean_query(text):
     for word in set(re.findall(r"[a-z]+", text)):
         translated = (
             word
-            if word in {"mg", "ug", "g", "ml"}
+            if word in {"mg", "ug", "g", "ml"} and re.search(r"[\d/]" + re.escape(word), text)
             else LETTER_NAMES.get(word)
             if len(word) == 1
             else ENGLISH_LABELS.get(word, BRAND_ALIASES.get(word))
@@ -143,7 +146,11 @@ class PackageMatcher:
                     continue
                 if vertical_english(value):
                     continue
-                text = korean_query(value["text"])
+                text = (
+                    value["text"]
+                    if fragment_kind(value["text"]) == "manufacturer"
+                    else korean_query(value["text"])
+                )
                 if not text:
                     continue
                 values.append(
@@ -162,11 +169,46 @@ class PackageMatcher:
                 cleaned.append(first)
         return cleaned
 
+    # 문서용 사전 결합 없이 개별 원문을 유지하고 명시적 부가정보만 가까운 후보에 붙인다.
+    def _cells(self, lines):
+        cells = []
+        for part in lines:
+            text = normalize_name(part["text"])
+            if fragment_kind(text) != "name":
+                continue
+            if candidate_name(text) or re.fullmatch(r"[가-힣]|\d{1,4}", text):
+                cells.append({"box": part["box"], "lines": [part], "metadata": []})
+        tallest = max(
+            (
+                name_height(c)
+                for c in cells
+                if candidate_name(c["lines"][0]["text"]) and not c["lines"][0].get("_letter")
+            ),
+            default=0,
+        )
+        for cell in cells:
+            text = normalize_name(cell["lines"][0]["text"])
+            label = (
+                len(text) < 2
+                or text.isdigit()
+                or text in NAME_MODIFIERS
+                or cell["lines"][0].get("_letter")
+            )
+            cell["required"] = not label and name_height(cell) >= tallest * 0.6
+            cell["evidence"] = "title" if cell["required"] else "lexical"
+        for part in lines:
+            if fragment_kind(part["text"]) not in {"manufacturer", "quantity", "package_size"}:
+                continue
+            owners = [c for c in cells if adjacent(c, part) or adjacent(c, part, below=True)]
+            if len(owners) == 1:
+                owners[0]["metadata"].append(part)
+        return cells
+
     # 읽힌 이름 부분만 검색어로 만들고 별도 제형·함량은 선택 근거로 남긴다.
     def _phrase(self, cells, indices, parts):
         words = [p for p in parts if fragment_kind(p["text"]) == "name"]
         text = "".join(p["text"] for p in words)
-        if not text or NOISE.search(text) or not re.fullmatch(r"[가-힣a-z0-9-]+", text):
+        if not text or NOISE.search(text) or not re.fullmatch(r"[가-힣a-z0-9.%/-]+", text):
             return None
         boxes = [cells[i]["box"] for i in indices]
         cell = {
@@ -257,54 +299,82 @@ class PackageMatcher:
         observed["form"] = next(iter(forms), None)
         return observed
 
-    # 검색 결과를 실제 읽힌 속성으로만 좁히고 이름 줄기 비교로 여러 품목을 하나로 만들지 않는다.
+    # 검색 결과를 관측 속성으로만 좁히고 검증할 수 없는 행으로 유일성을 만들지 않는다.
     def _lookup(self, phrase, lines, index):
         rows = self._search(phrase["text"])
         observed = self._observed(phrase, lines, rows)
-        selected = []
-        reasons = {}
-        # 제형·함량을 읽지 않았다면 다건 결과는 그대로 다건이다.
-        if (
-            len(rows) > 1
-            and not observed["form"]
-            and not observed["strengths"]
-            and not observed["manufacturer"]
+        possible = set()
+        selected, reasons = [], {}
+        unknown = False
+        if len(rows) > 1 and not any(
+            (observed["form"], observed["strengths"], observed["manufacturer"])
         ):
+            possible = {str(row["ITEM_SEQ"]) for row in rows}
             self.diagnostics.matching(index, len(rows), 0, {}, variant_count=1)
-            return [], True
-        for row in rows:
-            fields = self._fields(row)
-            reason = (
-                "ANNOTATION_UNVERIFIED"
-                if fields is None
-                else "FORM_MISMATCH"
-                if observed["form"] and observed["form"] != fields["form"]
-                else "STRENGTH_MISMATCH"
-                if observed["strengths"] and observed["strengths"] != fields["strengths"]
-                else "MANUFACTURER_MISMATCH"
-                if observed["manufacturer"]
-                and normalize_name(observed["manufacturer"])
-                != normalize_name(row.get("ENTP_NAME", ""))
-                else "MATCH"
-            )
-            if reason == "MATCH":
-                selected.append((row, fields))
-            reasons[reason] = reasons.get(reason, 0) + 1
-        self.diagnostics.matching(index, len(rows), len(selected), reasons, variant_count=1)
-        # 전혀 다른 응답 한 건을 허가 품목이라고 확정하지 않는다.
+            multiple = True
+        else:
+            for row in rows:
+                fields = self._fields(row)
+                reason = (
+                    "ANNOTATION_UNVERIFIED"
+                    if fields is None
+                    else "FORM_MISMATCH"
+                    if observed["form"] and observed["form"] != fields["form"]
+                    else "STRENGTH_MISMATCH"
+                    if observed["strengths"] and observed["strengths"] != fields["strengths"]
+                    else "MANUFACTURER_MISMATCH"
+                    if observed["manufacturer"]
+                    and self._maker(observed["manufacturer"])
+                    != self._maker(row.get("ENTP_NAME", ""))
+                    else "MATCH"
+                )
+                if reason in {"MATCH", "ANNOTATION_UNVERIFIED"}:
+                    possible.add(str(row["ITEM_SEQ"]))
+                if reason == "ANNOTATION_UNVERIFIED":
+                    unknown = True
+                if reason == "MATCH":
+                    selected.append((row, fields))
+                reasons[reason] = reasons.get(reason, 0) + 1
+            self.diagnostics.matching(index, len(rows), len(selected), reasons, variant_count=1)
+            multiple = len(selected) > 1 or unknown
+        if len(phrase["indices"]) == 1 and phrase["required"] and rows:
+            self.evidence.append(possible)
         related = []
-        for row, fields in selected:
-            query = STRENGTH.sub("", QUANTITY.sub("", phrase["text"]))
-            if query in normalize_name(row["ITEM_NAME"]):
-                related.append((row, fields))
-        return (related if len(selected) == 1 else []), len(selected) > 1
+        if not multiple:
+            for row, fields in selected:
+                query = STRENGTH.sub("", QUANTITY.sub("", phrase["text"]))
+                if query in normalize_name(row["ITEM_NAME"]):
+                    related.append((row, fields))
+        return related, multiple
 
-    # 개별 또는 결합 단계의 모든 독립 품목을 확인하여 먼저 나온 한 개로 숨기지 않는다.
+    # 업체의 법인 접두어 차이만 정규화하며 다른 업체를 같은 업체로 만들지 않는다.
+    def _maker(self, text):
+        return normalize_name(text).replace("(주)", "").replace("주식회사", "")
+
+    # 모든 검색 단계에 동일한 긍정 속성·독립 후보·미사용 표지 검증을 적용한다.
+    def _consistent(self, row, phrase):
+        code = str(row["ITEM_SEQ"])
+        if any(code not in possible for possible in self.evidence):
+            return False
+        name = normalize_name(row["ITEM_NAME"])
+        if any(text not in name for text, _ in self.limits):
+            return False
+        for other in self.singles:
+            if (
+                other
+                and other["label"]
+                and not other["text"].isdigit()
+                and set(other["indices"]).isdisjoint(phrase["indices"])
+                and next_fragment(phrase["cell"], other["cell"])
+                and other["text"] not in name
+            ):
+                return False
+        return True
+
+    # 개별 또는 결합 단계에서 확정하더라도 앞서 관측한 근거를 잊지 않는다.
     def _stage(self, phrases, lines):
-        accepted = {}
+        accepted, explicit = {}, []
         ambiguous = False
-        limits = []
-        explicit = []
         for index, phrase in enumerate(phrases):
             if phrase is None or phrase["label"]:
                 continue
@@ -313,15 +383,13 @@ class PackageMatcher:
             except RecognitionError as error:
                 if error.code != "API_RESULT_LIMIT":
                     raise
-                limits.append((phrase["text"], error))
+                self.limits.append((phrase["text"], error))
                 continue
             ambiguous = ambiguous or multiple
-            # 독립된 위치의 서로 다른 전체 제품명을 읽은 경우에만 복수 포장을 거절한다.
             exact = {
                 str(row["ITEM_SEQ"])
                 for row in self.search_cache.get(phrase["text"], [])
-                if not isinstance(row, ApiError)
-                and normalize_name(row["ITEM_NAME"]).split("(")[0] == phrase["text"]
+                if normalize_name(row["ITEM_NAME"]).split("(")[0] == phrase["text"]
             }
             if name_fields(phrase["text"])["form"] and len(exact) == 1:
                 for prior, code in explicit:
@@ -331,35 +399,19 @@ class PackageMatcher:
                         raise RecognitionError("matching", "AMBIGUOUS_PRODUCT")
                 explicit.append((phrase, next(iter(exact))))
             for row, fields in matches:
-                accepted[str(row["ITEM_SEQ"])] = (row, fields)
-        if len(accepted) > 1:
+                accepted[str(row["ITEM_SEQ"])] = (row, fields, phrase)
+        consistent = [(r, f) for r, f, p in accepted.values() if self._consistent(r, p)]
+        if len(consistent) > 1:
             raise RecognitionError("matching", "AMBIGUOUS_PRODUCT")
-        if accepted:
-            row, fields = next(iter(accepted.values()))
-            for phrase in phrases:
-                if not phrase or not phrase["required"] or phrase["label"]:
-                    continue
-                rows = self.search_cache.get(phrase["text"])
-                if (
-                    isinstance(rows, list)
-                    and rows
-                    and str(row["ITEM_SEQ"]) not in {str(p["ITEM_SEQ"]) for p in rows}
-                ):
-                    error = RecognitionError("matching", "AMBIGUOUS_PRODUCT")
-                    error.can_recheck = True
-                    raise error
-            for text, error in limits:
-                if text not in normalize_name(row["ITEM_NAME"]):
-                    raise error
-            return (row, fields), ambiguous
-        if limits:
-            raise limits[0][1]
-        return None, ambiguous
+        return (consistent[0] if consistent else None), ambiguous or bool(
+            accepted and not consistent
+        )
 
     # 새 판독에서 읽힌 순서대로 개별 문구를 조회하고 실패할 때만 최대 세 조각을 결합한다.
     def match(self, lines):
         lines = self._clean(lines)
-        cells = group_lines(lines)
+        cells = self._cells(lines)
+        self.evidence, self.limits = [], []
         self.diagnostics.candidates(cells, self.min_score)
         if not cells:
             raise RecognitionError("extraction", "NO_PRODUCT_NAME")
@@ -372,16 +424,8 @@ class PackageMatcher:
             singles.extend(
                 self._phrase(cells, [i], parts) for parts in reading_combinations(cell["lines"])
             )
+        self.singles = singles
         found, ambiguous = self._stage(singles, lines)
-        labels = [p for p in singles if p and p["label"]]
-        if found and any(
-            next_fragment(p["cell"], q["cell"])
-            and q["text"] not in normalize_name(found[0]["ITEM_NAME"])
-            for p in singles
-            if p and not p["label"]
-            for q in labels
-        ):
-            found = None
         if not found:
             paths = [[i] for i in range(len(cells))]
             for _ in range(2):
@@ -407,6 +451,8 @@ class PackageMatcher:
                     found = candidate
                     break
         if not found:
+            if self.limits:
+                raise self.limits[0][1]
             error = RecognitionError(
                 "matching", "AMBIGUOUS_PRODUCT" if ambiguous else "PRODUCT_NOT_FOUND"
             )

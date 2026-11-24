@@ -223,3 +223,140 @@ def test_read_english_capsules_narrows_the_results():
     )
     assert result["name"] == "새빛캡슐"
     assert [call.args[0] for call in api.search.call_args_list] == ["새빛"]
+
+
+# 다른 단어의 조회로 넘어가도 먼저 관측한 캡슐과 정의 충돌을 지우지 않는다.
+def test_other_query_cannot_erase_observed_form_conflict():
+    api = catalog_api(product("새빛하늘정"))
+    with pytest.raises(RecognitionError):
+        run_package(
+            [
+                line("새빛", (10, 10, 100, 40)),
+                line("캡슐", (104, 10, 150, 40)),
+                line("하늘", (10, 90, 100, 120)),
+            ],
+            api,
+        )
+
+
+# 결합에 쓰이지 않은 독립 필수 문구의 후보도 같은 품목을 지지해야 한다.
+def test_combination_keeps_other_required_product_evidence():
+    api = catalog_api(
+        product("새빛하늘정"),
+        product("새빛바다정", "900000002"),
+        product("아침하늘정", "900000003"),
+        product("파란정", "900000004"),
+        product("파란캡슐", "900000005"),
+    )
+    with pytest.raises(RecognitionError):
+        run_package(
+            [
+                line("새빛", (10, 10, 100, 40)),
+                line("하늘", (10, 42, 100, 72)),
+                line("파란", (230, 180, 330, 210)),
+            ],
+            api,
+        )
+
+
+# 명시된 제조사는 검색어가 아니라 반드시 지켜야 하는 관측 속성이다.
+def test_explicit_manufacturer_conflict_is_not_discarded():
+    api = catalog_api(product("새빛정", ENTP_NAME="나래제약"))
+    with pytest.raises(RecognitionError):
+        run_package(
+            [line("새빛", (10, 10, 100, 40)), line("제조사:가람제약", (10, 43, 150, 63))], api
+        )
+    assert not any("제조사" in c.args[0] for c in api.search.call_args_list)
+
+
+# 동일 제품명의 여러 업체 중에서도 실제 읽은 업체만 사용한다.
+def test_explicit_manufacturer_can_narrow_multiple_products():
+    api = catalog_api(
+        product("새빛정", ENTP_NAME="가람제약"),
+        product("새빛정", "900000002", ENTP_NAME="나래제약"),
+    )
+    _, result = run_package(
+        [line("새빛", (10, 10, 100, 40)), line("제조사:가람제약", (10, 43, 150, 63))], api
+    )
+    assert result["product_code"] == "900000001"
+
+
+# 성분 괄호를 검증할 수 없는 행을 탈락시켜 가짜 유일 후보를 만들지 않는다.
+def test_unknown_annotation_cannot_create_false_uniqueness():
+    api = catalog_api(product("새빛캡슐(미확인성분)"), product("새빛하늘캡슐", "900000002"))
+    with pytest.raises(RecognitionError):
+        run_package([line("새빛", (10, 10, 100, 40)), line("캡슐", (104, 10, 150, 40))], api)
+
+
+# 두 조각이 맞아도 바로 옆의 읽힌 플러스를 무시하고 기본 품목으로 등록하지 않는다.
+def test_pair_success_does_not_ignore_a_remaining_modifier():
+    api = catalog_api(product("새빛큐정"), product("새빛바다정", "900000002"))
+    with pytest.raises(RecognitionError):
+        run_package(
+            [
+                line("새빛", (10, 10, 100, 40)),
+                line("큐", (102, 10, 130, 40)),
+                line("플러스", (132, 10, 195, 40)),
+            ],
+            api,
+        )
+    assert "새빛큐플러스" in [c.args[0] for c in api.search.call_args_list]
+
+
+# 독립된 G는 숫자에 붙은 g 단위가 아니라 지라는 표지로 결합한다.
+def test_single_g_is_transliterated_not_treated_as_a_unit():
+    api = catalog_api(product("새빛시럽"), product("새빛지캡슐", "900000002"))
+    _, result = run_package([line("새빛", (10, 10, 100, 40)), line("G", (102, 10, 130, 40))], api)
+    assert result["name"] == "새빛지캡슐"
+    assert "새빛지" in [c.args[0] for c in api.search.call_args_list]
+
+
+# 읽힌 함량의 소수점과 농도 기호도 버리지 않고 조회한다.
+@pytest.mark.parametrize("text", ["새빛정0.5mg", "새빛크림0.1%", "새빛액10mg/ml"])
+def test_observed_strength_punctuation_is_searchable(text):
+    api = catalog_api(product(text))
+    _, result = run_package([line(text)], api)
+    assert result["name"] == text
+    assert api.search.call_args.args[0] == text
+
+
+# 잘린 넓은 검색은 성공으로 쓰지 않되 더 구체적인 읽힌 조합의 조회는 허용한다.
+def test_result_limit_does_not_skip_a_more_specific_combination():
+    from backend.mfds import ApiError
+
+    api = catalog_api()
+
+    # 넓은 검색은 잘린 응답을, 실제 읽힌 결합어는 유일 품목을 반환한다.
+    def search(text):
+        if text == "새빛":
+            raise ApiError("API_RESULT_LIMIT")
+        if text == "하늘":
+            return [product("새빛하늘정"), product("아침하늘정", "900000002")]
+        if text == "새빛하늘":
+            return [product("새빛하늘정")]
+        return []
+
+    api.search.side_effect = search
+    _, result = run_package([line("새빛", (10, 10, 100, 40)), line("하늘", (10, 42, 100, 72))], api)
+    assert result["name"] == "새빛하늘정"
+    assert [c.args[0] for c in api.search.call_args_list] == ["새빛", "하늘", "새빛하늘"]
+
+
+# 기존에 사전에 있던 이름 조각도 개별 원문 조회보다 먼저 결합하지 않는다.
+def test_known_name_fragments_are_queried_individually_first():
+    api = catalog_api(
+        product("탁센400이부프로펜연질캡슐"), product("이부프로펜연질캡슐", "900000002")
+    )
+    _, result = run_package(
+        [line("탁센400", (10, 10, 120, 40)), line("이부프로펜연질캡슐", (121, 10, 300, 40))], api
+    )
+    assert result["name"] == "탁센400이부프로펜연질캡슐"
+    assert api.search.call_args_list[0].args[0] == "탁센400"
+
+
+# 제품명에 붙어 읽힌 G도 숫자 단위가 아니면 한글 표지로 바꾼다.
+def test_attached_g_is_a_read_letter_not_a_unit():
+    api = catalog_api(product("새빛지캡슐"))
+    _, result = run_package([line("새빛G")], api)
+    assert result["name"] == "새빛지캡슐"
+    api.search.assert_called_once_with("새빛지")

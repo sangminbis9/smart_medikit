@@ -409,7 +409,7 @@ def choose_reading(old, new):
         if (
             fragment_kind(old["text"]) != "name"
             or fragment_kind(new["text"]) != "name"
-            or any(a[key] != b[key] for key in ("form", "strengths", "quantities"))
+            or any(a[key] and b[key] and a[key] != b[key] for key in ("form", "strengths", "quantities"))
         ):
             raise ImageError("OCR_TEXT_CONFLICT")
     selected = new if new["score"] > old["score"] else old
@@ -419,7 +419,7 @@ def choose_reading(old, new):
     for line in readings:
         key = normalize_name(line["text"])
         if key not in variants or line["score"] > variants[key]["score"]:
-            variants[key] = {field: line[field] for field in ("text", "score", "box")}
+            variants[key] = {field: line[field] for field in ("text", "score", "box", "angle", "quad") if field in line}
     if len(variants) > 3:
         raise ImageError("TOO_MANY_OCR_ALTERNATIVES")
     selected = normalize_name(max(variants.values(), key=itemgetter("score"))["text"])
@@ -493,19 +493,37 @@ class PaddleReader:
         return self.engine
 
     # 모델 출력을 검증하고 확대·잘라내기 전 원본 좌표로 돌려놓는다.
-    def _predict(self, image, source_box, *, refined=False, package=False):
+    def _predict(self, image, source_box, *, refined=False, package=False, scale_factor=1,
+                 deskew_angle=0):
         import cv2
         import numpy as np
 
         x1, y1, x2, y2 = source_box
         crop = image[y1:y2, x1:x2]
+        inverse = None
+        if deskew_angle:
+            h, w = crop.shape[:2]
+            matrix = cv2.getRotationMatrix2D((w / 2, h / 2), deskew_angle, 1)
+            c, s = abs(matrix[0, 0]), abs(matrix[0, 1])
+            rotated_w, rotated_h = math.ceil(h * s + w * c), math.ceil(h * c + w * s)
+            matrix[0, 2] += rotated_w / 2 - w / 2
+            matrix[1, 2] += rotated_h / 2 - h / 2
+            crop = cv2.warpAffine(crop, matrix, (rotated_w, rotated_h), borderValue=(255, 255, 255))
+            inverse = cv2.invertAffineTransform(matrix)
+        crop_h, crop_w = crop.shape[:2]
         options = {"text_rec_score_thresh": 0.0}
-        if package and not refined and max(crop.shape[:2]) > 1280:
+        if package and scale_factor != 1:
+            scale = min(scale_factor, 2048 / max(crop.shape[:2]))
+            crop = cv2.resize(crop, None, fx=scale, fy=scale, interpolation=cv2.INTER_CUBIC)
+        elif package and not refined and max(crop.shape[:2]) > 1280:
             # 고해상도 Pi 사진의 첫 검출 해상도를 제한해 Lambda 메모리 여유를 확보한다.
             scale = 1280 / max(crop.shape[:2])
             crop = cv2.resize(crop, None, fx=scale, fy=scale, interpolation=cv2.INTER_AREA)
         if package and not refined:
-            options.update(text_det_limit_side_len=1280, text_det_limit_type="max")
+            options.update(
+                text_det_limit_side_len=2048 if scale_factor != 1 else 1280,
+                text_det_limit_type="max",
+            )
         if refined:
             # 검출 상자 확장을 줄이고 최대 960픽셀에서 순차 추론하여 메모리를 제한한다.
             scale = min(3.0, 960 / max(crop.shape[:2]))
@@ -513,7 +531,7 @@ class PaddleReader:
             options.update(
                 text_det_limit_side_len=960, text_det_limit_type="max", text_det_unclip_ratio=1.1
             )
-        scale_x, scale_y = crop.shape[1] / (x2 - x1), crop.shape[0] / (y2 - y1)
+        scale_x, scale_y = crop.shape[1] / crop_w, crop.shape[0] / crop_h
         predictions = list(self._engine().predict(crop, **options))
         if len(predictions) != 1:
             raise ImageError("OCR_OUTPUT_INVALID")
@@ -535,11 +553,15 @@ class PaddleReader:
                 ):
                     raise ImageError("OCR_OUTPUT_INVALID")
                 if text.strip():
+                    quad = poly / [scale_x, scale_y]
+                    if inverse is not None:
+                        quad = cv2.transform(quad[None, ...], inverse)[0]
+                    quad += [x1, y1]
                     box = [
-                        max(x1, int(poly[:, 0].min() / scale_x + x1)),
-                        max(y1, int(poly[:, 1].min() / scale_y + y1)),
-                        min(x2, int(round(poly[:, 0].max() / scale_x + x1))),
-                        min(y2, int(round(poly[:, 1].max() / scale_y + y1))),
+                        max(x1, int(quad[:, 0].min())),
+                        max(y1, int(quad[:, 1].min())),
+                        min(x2, int(round(quad[:, 0].max()))),
+                        min(y2, int(round(quad[:, 1].max()))),
                     ]
                     if box[2] <= box[0] or box[3] <= box[1]:
                         raise ImageError("OCR_OUTPUT_INVALID")
@@ -551,13 +573,18 @@ class PaddleReader:
                         or (y2 < image.shape[0] and y2 - box[3] < 3)
                     ):
                         continue
-                    lines.append(
-                        {
-                            "text": text,
-                            "score": score,
-                            "box": box,
-                        }
-                    )
+                    line = {"text": text, "score": score, "box": box}
+                    if package:
+                        direction = quad[1] - quad[0]
+                        angle = (math.degrees(math.atan2(direction[1], direction[0])) + 90) % 180 - 90
+                        # 대각선 가로 문구는 남기고 세로로 인쇄된 영어만 제외한다.
+                        if re.fullmatch(r"[a-zA-Z0-9\s®™.-]+", text) and (
+                            abs(angle) >= 65
+                            or (abs(angle) < 15 and box[3] - box[1] > (box[2] - box[0]) * 1.8)
+                        ):
+                            continue
+                        line.update(angle=angle, quad=quad.tolist())
+                    lines.append(line)
         except (KeyError, TypeError, ValueError, IndexError):
             raise ImageError("OCR_OUTPUT_INVALID") from None
         return lines

@@ -35,13 +35,17 @@ NOISE = re.compile(
     r"알레르기|두통|치통|근육통|생리통|관절|인후|가려움|해열|진통|효과|증상|완화|함유|증량|"
     r"제조|업체|수입|성명|환자|병원|약국|전화|처방|주소|사용|주의|보관|유통|제약|"
     r"녹십자|종근당|유한양행|알피바이오|celltrion|madein|since|neosol|빠른|강력한|부드러운|"
-    r"처음부터|뚝떨어|^외용살균소독제$",
+    r"처음부터|뚝떨어|소화불량|속쓰림|체함|과식|위부불쾌감|비동물성성분|"
+    r"daewon|daeuon|daeuuon|^외용살균소독제$",
     re.I,
 )
 # 종근당 공식 제품 페이지 CKD0000525에서 확인한 상표와 허가명 표기 대응이다.
 BRAND_ALIASES = {"모드코s": "모드코에스"}
 # 탁센 공식 설명서의 전체 제품명만 대응하며 다른 탁센 제품으로 확장하지 않는다.
 BRAND_ALIASES["탁센400"] = "탁센400이부프로펜"
+# 공식 국내 제품 페이지·설명서에서 확인한 영문 상표만 한글로 대응한다.
+BRAND_ALIASES.update(tylenol="타이레놀", zyrtec="지르텍")
+NAME_MODIFIERS = {"플러스", "슈퍼", "레이디", "큐", "에스"}
 
 
 class RecognitionError(Exception):
@@ -247,16 +251,39 @@ def reading_combinations(parts):
     return list(combinations(*choices))
 
 
-# 상표 사전 대신 같은 줄의 간격·높이로 두 이름 조각의 연결 가설을 제한한다.
+# 실제 글자 각도의 기준선과 가까운 같은 열로 이름 조각의 연결 가설을 제한한다.
 def tight_name_pair(left, right):
     if left.get("evidence") == "row" or right.get("evidence") == "row":
         return False
     fields = name_fields("".join(part["text"] for part in left["lines"]))
     if fields["form"] or fields["strengths"] or fields["quantities"]:
         return False
-    x1, y1, x2, y2 = left["box"]
-    a1, b1, a2, b2 = right["box"]
+    first, second = left["lines"][-1], right["lines"][0]
+    angle, other_angle = first.get("angle", 0), second.get("angle", 0)
+    if abs((angle - other_angle + 90) % 180 - 90) > 15:
+        return False
+    if abs(angle) >= 15 and "quad" in first and "quad" in second:
+        radians = math.radians(angle)
+        along, normal = (math.cos(radians), math.sin(radians)), (-math.sin(radians), math.cos(radians))
+        bounds = []
+        for part in (first, second):
+            u = [x * along[0] + y * along[1] for x, y in part["quad"]]
+            v = [x * normal[0] + y * normal[1] for x, y in part["quad"]]
+            bounds.append((min(u), min(v), max(u), max(v)))
+        (x1, y1, x2, y2), (a1, b1, a2, b2) = bounds
+    else:
+        x1, y1, x2, y2 = left["box"]
+        a1, b1, a2, b2 = right["box"]
     h, k = y2 - y1, b2 - b1
+    if (
+        abs(angle) < 15
+        and min(h, k) > 0
+        and max(h, k) <= min(h, k) * 2
+        and 0 <= b1 - y2 <= min(h, k) * 0.6
+        and min(x2, a2) - max(x1, a1) >= min(x2 - x1, a2 - a1) * 0.65
+        and max(x2 - x1, a2 - a1) <= min(x2 - x1, a2 - a1) * 2
+    ):
+        return True
     return (
         min(h, k) > 0
         and max(h, k) <= min(h, k) * 4
@@ -307,6 +334,8 @@ def candidate_observations(cells, index, min_score):
             # 기호가 섞인 대체 판독은 유효한 이름 가설이 아니므로 공식 API에 보내지 않는다.
             if candidate_name("".join(part["text"] for part in parts)) is None:
                 continue
+            if name_fields("".join(part["text"] for part in parts))["name"] in NAME_MODIFIERS:
+                continue
             observed = extract_candidate({**option, "lines": list(parts)}, min_score)
             observed["_indices"], observed["_box"] = indices, option["box"]
             observations.append(observed)
@@ -345,8 +374,15 @@ def lookup_candidate(observed, api, ingredient_cache, search_cache, index, diagn
         if query not in search_cache:
             if len(search_cache) >= 32:
                 raise RecognitionError("matching", "TOO_MANY_SEARCH_QUERIES")
-            search_cache[query] = api.search(query)
+            try:
+                search_cache[query] = api.search(query)
+            except ApiError as error:
+                if error.code == "API_RESULT_LIMIT":
+                    search_cache[query] = error
+                raise
         rows = search_cache[query]
+        if isinstance(rows, ApiError):
+            raise rows
     except ApiError as exc:
         raise RecognitionError("matching", exc.code, exc.retryable) from None
     candidates, reasons, detail_checks, plausible = {}, {}, 0, False
@@ -401,7 +437,8 @@ def lookup_candidate(observed, api, ingredient_cache, search_cache, index, diagn
 
 
 # 문자 가설을 공식 품목으로 검증하고 성분 보완과 별개로 검증된 근거를 반환한다.
-def match_products(cells, api, min_score=0.9, diagnostics=None, *, single_package=False):
+def match_products(cells, api, min_score=0.9, diagnostics=None, *, single_package=False,
+                   search_cache=None, ingredient_cache=None):
     if not math.isfinite(min_score) or not 0 < min_score <= 1:
         raise ValueError("OCR_SCORE_CONFIGURATION_INVALID")
     if diagnostics is not None:
@@ -410,12 +447,17 @@ def match_products(cells, api, min_score=0.9, diagnostics=None, *, single_packag
         raise RecognitionError("extraction", "NO_PRODUCT_NAME")
     if len(cells) > 25:
         raise RecognitionError("extraction", "TOO_MANY_PRODUCTS")
-    medicines, items, ingredient_cache, ignored, search_cache = {}, [], {}, [], {}
+    medicines, items, ignored = {}, [], []
+    search_cache = {} if search_cache is None else search_cache
+    ingredient_cache = {} if ingredient_cache is None else ingredient_cache
     consumed, deferred, owners = set(), [], []
     for index, cell in enumerate(cells):
         if index in consumed:
             continue
         required = cell.get("required", True)
+        if all(name_fields("".join(p["text"] for p in parts))["name"] in NAME_MODIFIERS
+               for parts in reading_combinations(cell["lines"])):
+            required = False
         try:
             observations = candidate_observations(cells, index, min_score)
         except RecognitionError as exc:
@@ -434,16 +476,23 @@ def match_products(cells, api, min_score=0.9, diagnostics=None, *, single_packag
                 deferred.append((index, cell, exc.code))
                 continue
             # 제목·제형·약품 행 근거 없는 저신뢰 문구는 등록 후보로 승격하지 않는다.
-            if not required and exc.code == "LOW_OCR_CONFIDENCE":
+            if not required and exc.code in {"LOW_OCR_CONFIDENCE", "NO_PRODUCT_NAME"}:
                 ignored.append({"candidate_index": index, "reason": "LOW_LEXICAL_CONFIDENCE"})
                 continue
             raise
         candidates, witnesses, reasons = {}, {}, {}
         plausible, unresolved, detail_checks, row_count = False, False, 0, 0
+        result_limit = None
         for observed in observations:
-            matched, possible, counts, checks, returned = lookup_candidate(
-                observed, api, ingredient_cache, search_cache, index, diagnostics
-            )
+            try:
+                matched, possible, counts, checks, returned = lookup_candidate(
+                    observed, api, ingredient_cache, search_cache, index, diagnostics
+                )
+            except RecognitionError as error:
+                if error.code != "API_RESULT_LIMIT":
+                    raise
+                result_limit = error
+                continue
             plausible = plausible or possible
             unresolved = unresolved or (possible and not matched)
             detail_checks += checks
@@ -465,6 +514,8 @@ def match_products(cells, api, min_score=0.9, diagnostics=None, *, single_packag
                 detail_checks,
                 variant_count=len(observations),
             )
+        if result_limit and not candidates:
+            raise result_limit
         if unresolved:
             raise RecognitionError("matching", "PRODUCT_NOT_FOUND")
         # 무결과인 주변 문구와 식약처에서 실제로 충돌하는 제품 후보를 구분한다.
@@ -506,6 +557,9 @@ def match_products(cells, api, min_score=0.9, diagnostics=None, *, single_packag
             }
         )
         fields = official_fields(product, ingredient_cache.get(code, ()))
+        # 외용 상표만 읽힌 사진을 같은 상표의 겔·연고 등 다른 제형으로 확정하지 않는다.
+        if single_package and fields and fields["form"] in {"겔", "연고", "크림"} and not observed["form"]:
+            raise RecognitionError("matching", "PRODUCT_NOT_FOUND")
         if not fields["form"] or len(fields["strengths"]) > 1:
             raise RecognitionError("validation", "REQUIRED_PRODUCT_FIELDS_MISSING")
         form = fields["form"]
@@ -546,6 +600,8 @@ def match_products(cells, api, min_score=0.9, diagnostics=None, *, single_packag
     if diagnostics is not None:
         diagnostics.selection([item["cell_index"] for item in items], ignored)
     if not items:
+        if all(name_fields("".join(p["text"] for p in cell["lines"]))["name"] in NAME_MODIFIERS for cell in cells):
+            raise RecognitionError("extraction", "NO_PRODUCT_NAME")
         raise RecognitionError("matching", "PRODUCT_NOT_FOUND")
     return list(medicines.values()), items, ingredient_cache
 

@@ -231,6 +231,7 @@ class MfdsClient:
             raise ApiError("API_CONFIGURATION_ERROR")
         self.max_attempts, self.sleep, self.clock = max_attempts, sleep, clock
         self.remaining_ms, self.diagnostics = None, None
+        self.reserve_seconds = 15
         self.request_count = 0
         self.page_cache = {}
         self.detail_cache = {}
@@ -244,7 +245,7 @@ class MfdsClient:
 
     # DB 저장 시간을 남겨 외부 API 때문에 Lambda가 강제 종료되지 않게 한다.
     def request_timeout(self):
-        available = self.remaining_ms() / 1000 - 15 if self.remaining_ms else self.timeout
+        available = self.remaining_ms() / 1000 - self.reserve_seconds if self.remaining_ms else self.timeout
         if available < 1:
             raise ApiError("API_TIME_BUDGET_EXHAUSTED", True)
         return min(self.timeout, available)
@@ -304,7 +305,7 @@ class MfdsClient:
                 if not exc.retryable or attempt == self.max_attempts:
                     raise
                 delay = min(2, 0.4 * 2 ** (attempt - 1)) + random.uniform(0, 0.2)
-                if self.remaining_ms and self.remaining_ms() / 1000 < 16 + delay:
+                if self.remaining_ms and self.remaining_ms() / 1000 < self.reserve_seconds + 1 + delay:
                     raise ApiError("API_TIME_BUDGET_EXHAUSTED", True) from None
                 self.sleep(delay)
             finally:

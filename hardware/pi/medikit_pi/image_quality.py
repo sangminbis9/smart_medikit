@@ -1,4 +1,4 @@
-"""Pi 카메라와 DroidCam에 공통인 촬영 영역과 화질 지표를 계산한다."""
+"""Pi 카메라 미리보기와 촬영본의 영역 및 화질 지표를 계산한다."""
 
 import math
 from dataclasses import dataclass

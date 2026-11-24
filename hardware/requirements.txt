@@ -1,2 +1,0 @@
-# 기존 PC 설치 명령을 지원한다. Pi 설치는 pi/README.md를 따른다.
--r droidcam/requirements.txt

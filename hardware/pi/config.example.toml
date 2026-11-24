@@ -49,7 +49,7 @@ max_area = 0.9
 min_iou = 0.6
 # 작은 포장(min_area 미만 또는 여백 포함 짧은 변 160px 미만)은 경고만 표시한다.
 min_short_side = 160
-# 포장 사진은 DroidCam 실험값으로 시작한다. 실물 라벨과 비교하며 조정한다.
+# 포장 선명도는 초기 실험값으로 시작하며 실물 라벨의 가독성에 맞춰 조정한다.
 sharpness_threshold = 500.0
 still_sharpness_threshold = 500.0
 interior_min_sharpness = 65.0

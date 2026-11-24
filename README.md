@@ -26,14 +26,12 @@
 
 [`Raspberry_Pi/`](Raspberry_Pi/README.md)는 초기 Pi 구현을 보존한다. 현재 설치 대상은 단계별 OCR·내부 비교와 AWS 설정이 추가된 `hardware/pi/`이며 두 폴더는 자동 동기화되지 않는다.
 
-[`hardware/pi/`](hardware/pi/README.md)는 원본을 보존하고 복사한 뒤 단계별 OCR 전송·내부 비교를 추가한 **현재 Pi 설치 대상**이다. 배포된 AWS 연결값, `check-aws` 점검, 설치·GPIO·단기 로그인 절차는 해당 README를 따른다. 기존 DroidCam 실행에는 연결하지 않았으며 `Raspberry_Pi/`와 변경이 자동 동기화되지 않는다. 실제 Pi에서 전체 촬영 경로를 검증하는 작업은 남아 있다.
+[`hardware/pi/`](hardware/pi/README.md)에서 Camera Module 3 Wide의 YOLOE 포장 탐지, 사진 품질 판정, 단계별 OCR 전송과 내부 비교를 실행한다. 배포된 AWS 연결값, `check-aws` 점검, 설치·GPIO·단기 로그인 절차는 해당 README를 따른다.
 
 **Camera Module 3 Wide 실물 시험**은 `hardware/pi`에서 진행한다. 준비된 YOLOE 모델로 `python -m medikit_pi --config config.toml camera-check`를 실행하면 포장 검출과 미리보기 품질을 확인할 수 있다. 센서·조명까지 연결한 뒤에는 `run --local-test`로 운영 큐와 분리해 실제 사진을 저장한다. [Pi 시험 절차](hardware/pi/README.md#camera-module-3-wide-실물-시험)
 
-`frontend/`에 웹 소스가 있다. [DroidCam PC 실험](hardware/droidcam/README.md)은 비교용으로 보관하며, Pi와 같은 사진 품질 함수를 사용한다.
-
 ```text
-hardware/     # pi/는 실기기 촬영·센서·LED·큐, droidcam/은 PC 비교 실험
+hardware/pi/  # 실기기 촬영·센서·LED·전송 큐
 Raspberry_Pi/ # 보존 중인 초기 Raspberry Pi 구현
 ocr-lambda/  # 공통 OCR·제품 대조·DynamoDB 인식 이벤트 (첨부 Lambda 소스)
 backend/     # 기존 DynamoDB 제품 캐시 조회 API·배포·검증

@@ -332,7 +332,7 @@ class CaptureController:
             motion_limit = self.rules[
                 "package_capture_motion_threshold"
                 if kind == "package"
-                else "capture_motion_threshold"
+                else "interior_capture_motion_threshold"
             ]
             frame_motion = motion_score(before, after)
             box_motion = motion_score(crop_box(before, box), crop_box(after, box)) if box else 0.0

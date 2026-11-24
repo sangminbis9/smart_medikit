@@ -61,6 +61,8 @@ max_dark_ratio = 0.30
 max_bright_ratio = 0.20
 capture_motion_threshold = 0.08
 package_capture_motion_threshold = 0.35
+# 내부 고해상도 전환 시 노출과 화면 차이를 고려한다.
+interior_capture_motion_threshold = 0.22
 close_settle_seconds = 0.75
 close_attempt_seconds = 3.0
 close_retries = 2

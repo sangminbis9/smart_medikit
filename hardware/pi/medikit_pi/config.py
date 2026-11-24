@@ -29,6 +29,7 @@ def load_config(path: Path) -> dict:
     # 손으로 드는 포장과 고정된 내부 사진은 움직임 허용 범위를 분리한다.
     vision.setdefault("package_motion_threshold", 0.09)
     vision.setdefault("package_capture_motion_threshold", 0.35)
+    vision.setdefault("interior_capture_motion_threshold", 0.22)
     for section, keys in {
         "camera": ("fps", "timeout_seconds", "restart_seconds"),
         "gpio": ("debounce_seconds", "ring_pulse_seconds"),
@@ -60,6 +61,7 @@ def load_config(path: Path) -> dict:
         "capture_motion_threshold",
         "package_motion_threshold",
         "package_capture_motion_threshold",
+        "interior_capture_motion_threshold",
     ):
         value = vision[key]
         if type(value) not in (int, float) or not 0 < value <= 1:

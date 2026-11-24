@@ -460,6 +460,19 @@ def test_capture_logs_excess_movement(rig, caplog):
     assert not outbox.head()["package_capture_ok"]
 
 
+# 실측 사례 수준의 미리보기·고해상도 밝기 차이에도 내부 사진을 저장한다.
+def test_interior_capture_allows_mode_difference(rig):
+    controller, camera, board, outbox, _, package = rig
+    outbox.staged = True
+    controller.initialize_baseline(0.0)
+    board.opened = False
+    still = np.clip(package.astype(np.int16) + 43, 0, 255).astype(np.uint8)
+    camera.capture.return_value = Frame(still, True, 1.0)
+    assert controller.capture("interior", Frame(package, True, 1.0))
+    controller.finish()
+    assert outbox.head()["interior_capture_ok"]
+
+
 # 지연된 빈 검출 결과가 작은 신규 포장을 현재 배경에 흡수하지 않는다.
 def test_delayed_empty_detection_uses_its_own_frame(rig):
     warmup(rig)
@@ -583,6 +596,7 @@ def test_delayed_positive_cannot_capture_missing_package(rig):
         ("min_brightness = 50.0", "min_brightness = 211.0"),
         ("package_motion_threshold = 0.09", "package_motion_threshold = true"),
         ("package_capture_motion_threshold = 0.35", "package_capture_motion_threshold = 1.1"),
+        ("interior_capture_motion_threshold = 0.22", "interior_capture_motion_threshold = 1.1"),
     ],
 )
 def test_invalid_config_rejected(tmp_path, old, new):
@@ -606,6 +620,7 @@ def test_existing_quality_config_remains_usable(tmp_path):
         "min_short_side",
         "package_motion_threshold",
         "package_capture_motion_threshold",
+        "interior_capture_motion_threshold",
     )
     previous = "\n".join(line for line in example.splitlines() if not line.startswith(new_fields))
     previous = previous.replace("\nsharpness_threshold = 500.0", "\nsharpness_threshold = 65.0")
@@ -617,6 +632,7 @@ def test_existing_quality_config_remains_usable(tmp_path):
     vision = load_config(path)["vision"]
     assert vision["package_motion_threshold"] == 0.09
     assert vision["package_capture_motion_threshold"] == 0.35
+    assert vision["interior_capture_motion_threshold"] == 0.22
     for kind in ("package", "interior"):
         assert capture_thresholds(vision, kind).min_sharpness == 65.0
         assert capture_thresholds(vision, kind, still=True).min_sharpness == 82.0

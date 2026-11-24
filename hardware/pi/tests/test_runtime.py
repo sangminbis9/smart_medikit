@@ -2,7 +2,6 @@
 
 import json
 import logging
-import queue
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock
@@ -19,6 +18,7 @@ from medikit_pi.__main__ import (
 )
 from medikit_pi.config import load_config
 from medikit_pi.detection import Detection
+from medikit_pi.gpio import MockBoard
 from medikit_pi.outbox import Outbox
 
 
@@ -37,6 +37,8 @@ class SyntheticDetector:
 # 합성 AVI·JSON 개폐 기록으로 촬영·저장·보고서까지 연결한다.
 def test_video_command_end_to_end(tmp_path, monkeypatch):
     monkeypatch.setattr("medikit_pi.detection.YOLOEDetector", SyntheticDetector)
+    board = MockBoard()
+    monkeypatch.setattr("medikit_pi.gpio.MockBoard", lambda: board)
     video = tmp_path / "test.avi"
     writer = cv2.VideoWriter(str(video), cv2.VideoWriter_fourcc(*"MJPG"), 10, (320, 240))
     assert writer.isOpened()
@@ -76,6 +78,9 @@ def test_video_command_end_to_end(tmp_path, monkeypatch):
     assert report["frames"] == 90
     assert report["autofocus_simulated"] and not report["aws_enabled"]
     assert "CAPTURED" in [item["state"] for item in report["transitions"]]
+    assert [color for _, color in board.history] == [
+        "green", None, "yellow", "green", None, "white", None
+    ]
 
 
 # 저장 오류가 조명·카메라의 별도 자원 정리 흐름을 끊지 않는다.
@@ -96,13 +101,11 @@ def test_server_status_logs_are_clear_and_do_not_repeat(caplog):
     worker.step.side_effect = ["UPLOADED", "PENDING", "PROCESSING", "REVIEW_REQUIRED", "ERROR"]
     stop = Mock()
     stop.is_set.side_effect = [False] * 5 + [True]
-    results = queue.SimpleQueue()
     with caplog.at_level(logging.INFO):
-        sync_loop(worker, stop, results)
+        sync_loop(worker, stop)
     assert "서버가 촬영 정보를 처리하고 있습니다" not in caplog.text
     assert "서버 처리 확인 필요. 웹에서 확인하세요" in caplog.text
     assert "AWS 전송 또는 상태 확인 실패. 자동 재시도합니다" in caplog.text
-    assert [results.get() for _ in range(5)] == ["UPLOADED", "PENDING", "PROCESSING", "REVIEW_REQUIRED", "ERROR"]
 
 
 # 새 묶음 앞에만 빈 줄을 넣고 일반 기록은 연속으로 보여 준다.

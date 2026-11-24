@@ -41,6 +41,7 @@ class TestDetector:
 @pytest.fixture
 def rig(tmp_path):
     config = load_config(Path(__file__).parents[1] / "config.example.toml")
+    config["gpio"]["ring_pulse_seconds"] = 0.2
     outbox = Outbox(tmp_path)
     board = MockBoard()
     camera = Mock()
@@ -84,6 +85,48 @@ def test_debounce_rejects_bounce():
     assert not debounce.update(False, 0.03)
     assert not debounce.update(True, 0.05)
     assert debounce.update(True, 0.14)
+
+
+# 뚜껑을 열어도 카메라 영상이 도착해야 초록 신호가 켜지고, 프레임 없이도 제때 꺼진다.
+def test_camera_start_signal_waits_for_frame_and_expires_during_poll(rig):
+    controller, _, board, _, background, _ = rig
+    board.opened = True
+    controller.sensor(True, 0.0)
+    controller.sensor(True, 0.1)
+    controller.camera_error(0.2)
+    assert controller.session_id is not None and board.color is None
+    feed(rig, 0.3, background)
+    assert board.color == "green"
+    controller.sensor(True, 0.4)
+    assert board.color == "green"
+    controller.sensor(True, 0.51)
+    assert board.color is None
+
+
+# 닫힌 채 부팅하면 카메라 시작 신호 없이 내부 기준 사진만 백색으로 촬영한다.
+def test_closed_baseline_uses_only_white_until_saved(rig):
+    controller, _, board, outbox, _, interior = rig
+    outbox.staged = True
+    controller.initialize_baseline(0.0)
+    assert board.color == "white"
+    for index in range(15):
+        feed(rig, index / 10, interior, opened=False)
+    event = outbox.head()
+    assert not event["package_capture_ok"] and event["interior_capture_ok"]
+    assert [color for _, color in board.history] == ["white", None]
+
+
+# 센서가 닫히면 진행 중인 초록 신호의 소등 시각을 넘겨도 내부 촬영 백색이 유지된다.
+def test_close_preempts_camera_start_flash(rig):
+    controller, _, board, _, background, _ = rig
+    feed(rig, 0.0, background)
+    feed(rig, 0.1, background)
+    assert board.color == "green"
+    feed(rig, 0.11, background, opened=False)
+    feed(rig, 0.21, background, opened=False)
+    assert board.color == "white"
+    controller.sensor(False, 0.4)
+    assert board.color == "white"
 
 
 # 한 세션의 포장 성공은 한 번이며 내부 사진과 같은 식별자로 저장된다.
@@ -152,22 +195,39 @@ def test_existing_background_not_captured(rig):
 # AF 또는 선명도가 불충분하면 포장 성공으로 세지 않는다.
 def test_unfocused_package_not_success(rig):
     warmup(rig)
-    for index in range(12, 40):
+    feed(rig, 1.2, rig[5], focused=False)
+    assert rig[2].color == "yellow"
+    for index in range(13, 40):
         feed(rig, index / 10, rig[5], focused=False)
     assert rig[0].state == "READY"
     rig[1].capture.assert_not_called()
+    assert rig[2].color == "yellow"
 
 
-# 화질 실패 후 다시 안정된 포장은 같은 세션에서 성공할 수 있다.
-def test_capture_failure_can_retry(rig):
+# 촬영·저장 실패 때는 노란색을 유지하고 같은 세션의 저장 성공에만 초록색을 표시한다.
+@pytest.mark.parametrize("fail_save", [False, True], ids=["camera", "storage"])
+def test_capture_failure_can_retry(rig, fail_save, monkeypatch):
     warmup(rig)
-    rig[1].capture.side_effect = OSError("camera")
+    assert rig[2].color is None
+    if fail_save:
+        operation = Mock(wraps=rig[3].save_capture)
+        monkeypatch.setattr(rig[3], "save_capture", operation)
+    else:
+        operation = rig[1].capture
+    operation.side_effect = OSError("capture or storage unavailable")
     present(rig)
     assert rig[0].state == "READY"
-    rig[1].capture.side_effect = None
+    assert rig[2].color == "yellow"
+    assert [color for _, color in rig[2].history] == ["green", None, "yellow"]
+    operation.side_effect = None
     for index in range(32, 65):
         feed(rig, index / 10, rig[5])
+        if rig[0].state == "CAPTURED":
+            break
     assert rig[0].state == "CAPTURED"
+    assert rig[2].color == "green"
+    rig[0].sensor(True, index / 10 + 0.21)
+    assert rig[2].color is None
 
 
 # 내부 초점 실패는 최대 세 번의 시도 창 후 포장 사진을 보존하고 끝난다.
@@ -180,6 +240,8 @@ def test_interior_exhausted_keeps_package(rig):
     assert event["package_capture_ok"]
     assert not event["interior_capture_ok"]
     assert rig[0].close_attempts == 3
+    colors = [color for _, color in rig[2].history]
+    assert colors[colors.index("white") :] == ["white", None]
 
 
 # 실제 사진 저장 실패도 내부 촬영 세 번 이상을 실행하지 않는다.
@@ -244,6 +306,19 @@ def test_inference_error_cannot_refresh_background(rig):
     controller.detector.result = DetectionResult(1.0, ())
     feed(rig, 1.2, small)
     assert np.array_equal(controller.background, rig[4][:, :, 0])
+
+
+# 배경에서 검출된 예전 후보 박스에 새 물체가 겹쳐도 노란불을 잘못 켜지 않는다.
+def test_yellow_waits_for_detection_from_changed_frame(rig):
+    warmup(rig)
+    detector = rig[0].detector
+    detector.submit = Mock()
+    detector.result = DetectionResult(1.1, (detector.box,), rig[4])
+    feed(rig, 1.2, rig[5])
+    assert rig[2].color is None
+    detector.result = DetectionResult(1.2, (detector.box,), rig[5])
+    feed(rig, 1.3, rig[5])
+    assert rig[2].color == "yellow"
 
 
 # 잘못된 서버 조회 주기와 무제한 재시도 설정을 거부한다.

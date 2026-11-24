@@ -16,16 +16,18 @@ def load_config(path: Path) -> dict:
         raise ValueError("box_id가 필요합니다.")
     for section, keys in {
         "aws": ("enabled", "contract_confirmed"),
-        "gpio": ("lid_pull_up", "lid_closed_when_active", "output_active_high"),
+        "gpio": ("lid_pull_up", "lid_closed_when_active"),
     }.items():
         for key in keys:
             if type(config[section][key]) is not bool:
                 raise ValueError(f"true 또는 false 설정이 필요합니다: {section}.{key}")
     if type(config['aws'].get('staged_capture', False)) is not bool:
         raise ValueError('aws.staged_capture는 true 또는 false여야 합니다.')
+    # 예전 설정으로 영상 재생이나 큐 점검을 할 때도 기본 표시 시간을 사용한다.
+    config["gpio"].setdefault("ring_pulse_seconds", 0.5)
     for section, keys in {
         "camera": ("fps", "timeout_seconds", "restart_seconds"),
-        "gpio": ("debounce_seconds",),
+        "gpio": ("debounce_seconds", "ring_pulse_seconds"),
         "detector": ("image_size", "threads", "interval_seconds", "max_age_seconds"),
         "vision": (
             "analysis_width",

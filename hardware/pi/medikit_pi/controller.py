@@ -37,11 +37,15 @@ class Debouncer:
 
 class CaptureController:
     # 하드웨어와 저장소를 주입받아 실제 시간과 영상 재생 시간을 함께 지원한다.
-    def __init__(self, config, camera, board, outbox, detector):
+    def __init__(self, config, camera, board, outbox, detector, *, clock=None):
         self.config = config
         self.rules = config["vision"]
         self.camera, self.board, self.outbox, self.detector = camera, board, outbox, detector
         self.debounce = Debouncer(config["gpio"]["debounce_seconds"])
+        self.clock = clock
+        self.pulse_seconds = config["gpio"]["ring_pulse_seconds"]
+        self.green_until = None
+        self.candidate_signalled = False
         self.state = "CLOSED"
         self.session_id = None
         self.previous = None
@@ -60,6 +64,11 @@ class CaptureController:
             config["detector"]["max_age_seconds"],
         )
 
+    # 실기기는 표시 시각을, 영상 재생은 프레임 시각을 기준으로 소등을 예약한다.
+    def pulse_green(self, now):
+        self.board.set_ring("green")
+        self.green_until = (self.clock() if self.clock else now) + self.pulse_seconds
+
     # 시작 시 닫힌 빈 작업 세션으로 첫 비교 기준을 확보한다.
     def initialize_baseline(self, now):
         if not self.outbox.staged or self.board.is_open():
@@ -68,27 +77,31 @@ class CaptureController:
         self.session_id = self.outbox.begin_session(self.config["box_id"])
         self.state = "CLOSING"
         self.close_started = now
-        self.board.lamp(True)
+        self.board.set_ring("white")
 
     # 센서 처리와 촬영을 분리하여 카메라 오류 중에도 닫힘을 기록한다.
     def sensor(self, raw_open: bool, now: float):
+        if self.green_until is not None and now >= self.green_until:
+            self.green_until = None
+            self.board.set_ring(None)
         opened = self.debounce.update(raw_open, now)
         if opened == self.was_open:
             return
         self.was_open = opened
+        self.green_until = None
         if opened:
             LOGGER.info("뚜껑이 열렸습니다. 촬영을 시작합니다.", extra={"section_start": True})
             if self.session_id is not None:
                 self.finish()
             self.session_id = self.outbox.begin_session(self.config["box_id"])
-            self.state = "WARMUP"
+            self.state = "OPENING"
+            self.candidate_signalled = False
             self.previous = self.background = None
             self.background_at = float("-inf")
             self.stable_since = None
             self.detector.reset()
             self.tracker.reset()
-            self.board.status(None)
-            self.board.lamp(True)
+            self.board.set_ring(None)
         elif self.session_id is not None:
             LOGGER.info("뚜껑이 닫혔습니다. 보관함 내부 촬영을 시작합니다.", extra={"section_start": True})
             self.closed_at = datetime.now(timezone.utc).isoformat()
@@ -98,11 +111,18 @@ class CaptureController:
             self.previous = None
             self.stable_since = None
             self.detector.reset()
-            self.board.lamp(True)
+            self.board.set_ring("white")
 
     # 새 프레임의 안정성과 최신 탐지 증거가 함께 충족될 때만 촬영한다.
     def frame(self, frame, now: float):
-        if self.state == "CLOSED":
+        if self.state == "OPENING":
+            # 열린 세션의 첫 프레임이 실제로 도착해야 시작 성공을 알린다.
+            if not self.board.is_open():
+                return
+            self.state = "WARMUP"
+            self.pulse_green(now)
+            return
+        if self.state in {"CLOSED", "CAPTURED"} or self.green_until is not None:
             return
         gray = gray_frame(frame.image, self.rules["analysis_width"])
         previous = self.previous
@@ -125,22 +145,18 @@ class CaptureController:
                 self.background = gray.copy()
                 self.ready_at = now
                 self.state = "READY"
-                self.board.status("white")
                 LOGGER.info("촬영 준비 완료. 약품 포장을 보여주세요.")
         elif self.state == "READY":
             self.detector.submit(frame.image, now)
             result = self.detector.latest(now)
-            if (
-                result is None
-                or self.stable_since is None
-                or result.captured_at < max(self.ready_at, self.stable_since)
-            ):
+            if result is None or result.captured_at < self.ready_at:
                 self.tracker.reset()
                 return
             # 준비 전에 제시한 포장을 치우면 빈 장면을 새 배경으로 확보한다.
             if (
                 not result.detections
                 and result.source_frame is not None
+                and self.stable_since is not None
                 and result.captured_at > self.background_at
                 and result.captured_at - self.stable_since >= self.rules["warmup_seconds"]
             ):
@@ -149,15 +165,30 @@ class CaptureController:
                     result.source_frame, self.rules["analysis_width"]
                 ).copy()
                 self.background_at = result.captured_at
+            # 첫 감지는 결과가 나온 프레임으로 판단해 늦은 검출과 새 움직임을 섞지 않는다.
+            detected_gray = gray
+            if not self.candidate_signalled and result.detections and result.source_frame is not None:
+                detected_gray = gray_frame(result.source_frame, self.rules["analysis_width"])
             candidate = select_candidate(
                 result.detections,
                 self.background,
-                gray,
+                detected_gray,
                 minimum_change=self.rules["minimum_change"],
                 min_area=self.rules["min_area"],
                 max_area=self.rules["max_area"],
                 pixel_threshold=self.rules["pixel_threshold"],
             )
+            if candidate is not None and not self.candidate_signalled:
+                # 밝혀진 장면에서 다시 안정화한 뒤 포장을 저장한다.
+                self.board.set_ring("yellow")
+                self.candidate_signalled = True
+                self.previous = self.stable_since = None
+                self.tracker.reset()
+                self.detector.reset()
+                return
+            if self.stable_since is None or result.captured_at < self.stable_since:
+                self.tracker.reset()
+                return
             # 작은 포장의 흔들림은 전체 화면 평균에서 희석되므로 후보 영역도 검사한다.
             if candidate is not None and previous is not None:
                 stable = (
@@ -182,7 +213,7 @@ class CaptureController:
                 )
                 if self.capture("package", frame, candidate.box):
                     self.state = "CAPTURED"
-                    self.board.status("blue")
+                    self.pulse_green(now)
                     self.detector.reset()
                 else:
                     self.retry_at = now + self.rules["package_retry_seconds"]
@@ -249,13 +280,12 @@ class CaptureController:
         except Exception as error:
             # 사진·서버 응답 원문 대신 오류 종류만 기록한다.
             LOGGER.warning("촬영 또는 저장 실패. 카메라와 저장 공간을 확인하세요. (%s)", type(error).__name__)
-            self.board.status("red")
             return False
 
     # 내부 촬영 실패를 최초 시도와 최대 두 번의 추가 시도로 제한한다.
     def retry_interior(self, now):
         self.close_attempts += 1
-        self.board.status("red")
+        LOGGER.warning("내부 촬영 조건을 만족하지 못했습니다. (시도 %d)", self.close_attempts)
         if self.close_attempts > self.rules["close_retries"]:
             self.finish()
         else:
@@ -269,7 +299,6 @@ class CaptureController:
         self.stable_since = None
         self.tracker.reset()
         self.detector.reset()
-        self.board.status("red")
         if (
             self.state == "CLOSING"
             and now - self.close_started >= self.rules["close_attempt_seconds"]
@@ -283,17 +312,6 @@ class CaptureController:
             self.session_id = None
         self.closed_at = None
         self.state = "CLOSED"
-        self.board.lamp(False)
+        self.green_until = None
+        self.board.set_ring(None)
         self.detector.reset()
-
-    # 서버 종료 결과는 로컬 촬영 안내를 가리지 않는 닫힌 상태에 표시한다.
-    def server_status(self, status):
-        if self.state == "CLOSED":
-            color = {
-                "COMPLETED": "green",
-                "REVIEW_REQUIRED": "yellow",
-                "FAILED": "red",
-                "ERROR": "red",
-            }.get(status)
-            if color:
-                self.board.status(color)

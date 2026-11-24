@@ -1,6 +1,6 @@
 # 상대 경로는 이 설정 파일의 폴더를 기준으로 한다.
 box_id = "inha-capstone-02-medkit"
-pi_model = "unconfirmed"
+pi_model = "Raspberry Pi 5"
 # 원본 Pi 프로그램과 사진·전송 대기열을 공유하지 않는다.
 data_dir = "../../local_data/hardware_pi"
 
@@ -15,17 +15,14 @@ restart_seconds = 2.0
 jpeg_quality = 95
 
 [gpio]
-# 실제 배선 후 BCM 번호를 지정한다. -1은 미설정으로 실행을 차단한다.
+# 센서의 실제 BCM 번호를 입력한다. -1이면 실기기 실행을 차단한다.
 lid_pin = -1
-lamp_pin = -1
-white_pin = -1
-blue_pin = -1
-green_pin = -1
-yellow_pin = -1
-red_pin = -1
+# 16구 GRB 링의 DI는 물리 핀 12(BCM18)에 연결한다.
+ring_data_pin = 18
+ring_brightness = 0.005
+ring_pulse_seconds = 0.5
 lid_pull_up = true
 lid_closed_when_active = true
-output_active_high = true
 debounce_seconds = 0.08
 
 [detector]

@@ -29,7 +29,7 @@ python -m medikit_pi.movement --config config.toml --before before.jpg --after a
 
 기존 [PC 카메라 미리보기](../README.md)는 그대로 사용하며, 이 복사본의 기능을 호출하거나 AWS에 업로드하지 않는다. 복사본도 기본 `aws.enabled=false`이며 로컬 데이터는 원본과 분리된 `local_data/hardware_pi/`에 저장한다. 단, 복사본의 Pi 실행 모드는 전송을 꺼도 큐를 쌓으므로 이후 AWS를 활성화하면 그 큐도 전송 대상이다.
 
-기본 실기기 설치 대상은 **64비트 Raspberry Pi OS Bookworm, Python 3.11**이다. 영상 모드는 Python 3.11 이상을 지원한다. Pi 모델·GPIO·실제 조명/센서는 아직 미확정이며, 실제 Pi에서 성능과 배선 검증을 수행하지 않았다. 아래 2026-10-26 검증 기록은 원본의 기록이며 실기기 통합 성공을 뜻하지 않는다.
+실기기 설치 대상은 **Raspberry Pi 5, 64비트 Raspberry Pi OS Bookworm, Python 3.11**이다. 영상 모드는 Python 3.11 이상을 지원한다. GPIO18의 16구 링 단독 점등은 실물에서 확인했고, 카메라·센서·링을 조합한 촬영과 전송은 실기기 검증이 남아 있다.
 
 S3 전송을 읽어 볼 때는 [`transport.py`](medikit_pi/transport.py)의 `S3Transport.upload()`와 `status()`, [`outbox.py`](medikit_pi/outbox.py)의 `Outbox`와 `SyncWorker.step()`, [`__main__.py`](medikit_pi/__main__.py)의 `run_hardware()` 순서로 확인한다. 버킷·리전·상태 URL은 [`config.example.toml`](config.example.toml)의 `[aws]`에 배포값이 입력되어 있고 전송은 기본적으로 꺼져 있다.
 
@@ -38,7 +38,7 @@ S3 전송을 읽어 볼 때는 [`transport.py`](medikit_pi/transport.py)의 `S3T
 | 모듈 | 책임 |
 |---|---|
 | `camera.py` | Picamera2 AF 메타데이터, 저해상도 미리보기/고해상도 전환, 제한시간·장치 복구, 영상 파일 입력 |
-| `gpio.py` | 마그네틱 센서·조명·독립 색상 LED와 모의 입출력 |
+| `gpio.py` | 마그네틱 센서와 상태 표시·내부 조명을 겸하는 Pi 5 NeoPixel 링, 모의 입출력 |
 | `detection.py` | 사전 학습 YOLOE-26n 모델 준비, CPU 추론, 최신 프레임 하나만 대기하는 작업자 |
 | `vision.py` | 전체 화면 배경 비교, 후보 영역 변화·선명도·추적 연속성 |
 | `controller.py` | 개폐 디바운스, 준비/포장/내부 촬영 상태 전이 |
@@ -46,19 +46,19 @@ S3 전송을 읽어 볼 때는 [`transport.py`](medikit_pi/transport.py)의 `S3T
 | `transport.py` | 명시적으로 확인된 S3 완료 객체 및 인증된 HTTPS 상태 조회 |
 | `config.py`, `__main__.py` | 설정 검증과 실기기/영상/모델 준비 명령 |
 
-1. 열림을 디바운스한 뒤 조명·카메라를 켠다. 연속 영상 안정화와 AF를 확인하여 기준 배경을 잡고 흰 LED를 켠다.
-2. 화면 전체를 YOLOE로 탐색한다. 준비 배경과 다른 후보가 약 1초 연속 검출되고 프레임·후보 영역이 안정적일 때 고해상도 촬영한다. 준비 전 포장을 보여줬다면 치웠다가 다시 제시한다. 안정된 빈 장면에서 배경을 갱신한다.
-3. 사진 자체의 AF·선명도·미리보기 대비 움직임·개폐 상태까지 재확인하고 JPEG를 영속 저장한 뒤 파란 LED를 켠다. 세션당 포장 성공은 한 번이며 화질 실패는 성공으로 세지 않는다.
-4. 닫힌 뒤 기본 0.75초 안정화와 화질 검사를 거쳐 내부를 촬영한다. 시도당 기본 3초 제한, 최대 두 번 추가 재시도한다. 실패해도 성공한 포장 사진은 보존한다. 다시 열면 이전 불완전 세션을 완결하고 새 세션을 시작한다.
+1. 뚜껑이 열리고 카메라 영상이 들어오면 초록색을 한 번 표시한다. 소등 후 영상 안정성과 자동초점(AF)을 확인하고 기준 배경을 잡는다.
+2. 화면 전체에서 처음 유효한 포장 후보가 검출되면 노란색을 유지한다. 이 조명 아래에서 후보가 약 1초 연속 검출되고 영상이 안정되면 고해상도로 촬영한다. 준비 전 포장을 보여줬다면 치웠다가 다시 제시한다.
+3. 사진의 초점·선명도·움직임과 뚜껑 상태를 재확인하고, 포장 JPEG를 로컬에 저장한 뒤 초록색을 한 번 표시하고 소등한다. 세션당 포장 성공은 한 번이다.
+4. 닫히면 흰색을 켜고 기본 0.75초 안정화와 화질 검사를 거쳐 내부를 촬영한다. 재시도 중에도 흰색을 유지하고 촬영을 마치면 소등한다. 시도당 기본 3초 제한, 최대 두 번 추가 재시도한다. 실패해도 성공한 포장 사진은 보존한다.
 5. 전송은 촬영과 다른 작업자에서 FIFO로 수행한다. 서버 종료 상태를 받기 전에는 다음 세션을 보내거나 사진을 삭제하지 않는다. 전원 중단 후 기존 식별자와 순번으로 복구한다.
 
-파랑은 **로컬 촬영 성공**이다. 초록은 AWS `COMPLETED`, 노랑은 `REVIEW_REQUIRED`, 빨강은 촬영/서버 오류다. 서버 LED는 닫힌 상태에서 표시하여 현재 촬영 안내를 가리지 않는다. 기본 AWS 미연결 상태에서는 초록/노랑을 만들지 않는다.
+링은 로컬 촬영 상태를 표시한다. AWS 전송·처리 결과와 오류는 실행 로그에서 확인한다.
 
 ## Pi 설치와 최초 실행
 
 ### 1. OS·카메라·Python 환경
 
-지원 기준은 **64비트 Raspberry Pi OS Bookworm / Python 3.11 / Picamera2 카메라**다. 우선 `uname -m`이 `aarch64`인지, `python3 --version`을 확인한다. 실제 Pi 모델은 아직 지정하지 않았다. Camera Module 3 계열 AF 카메라를 전제로 하며 USB 카메라는 `run`의 Picamera2 입력을 대신하지 않는다.
+Pi 5에서 `uname -m`이 `aarch64`인지, `python3 --version`을 확인한다. 실기기 `run`은 Camera Module 3 계열 AF 카메라와 Picamera2를 사용한다.
 
 새 Pi의 사용자 홈에서 다음 순서로 준비한다. 저장소를 이미 받았다면 clone을 반복하지 말고 기존 저장소의 `hardware/pi`로 이동한다. 아래 Linux/Pi 명령은 제공한 실행 경로이며 이 Windows 개발 환경에서 apt·GPIO·Picamera2 실기기 실행을 검증한 것은 아니다.
 
@@ -79,22 +79,21 @@ python -m medikit_pi --config config.toml check-config
 
 Picamera2/libcamera는 OS 패키지를 사용한다. Pi에서 venv를 `--system-site-packages`로 만들어야 해당 패키지를 읽을 수 있다. Bookworm에서는 apt의 simplejpeg와 NumPy 2.x ABI가 충돌할 수 있어 제공한 제약 파일로 NumPy 1.x·OpenCV 4.11을 함께 고정한다. Pi에서 이후 의존성을 설치할 때도 같은 `-c constraints-pi-bookworm.txt`를 적용한다. 다른 OS 버전에서는 apt 패키지 ABI에 맞춰 검증한 뒤 제약을 조정한다. `rpicam-hello --timeout 3000`으로 카메라가 연결되는지 먼저 확인한다. Pi 모델에 맞는 Camera Module 3 연결 케이블·전원·냉각을 사용한다.
 
-`config.toml`의 `pi_model`을 기록하고 `[gpio]`의 **모든 -1을 실제 BCM 번호**로 바꾼다. 센서 pull-up·닫힘 극성과 출력 active-high 설정을 배선에 맞춘다. 핀 중복/미설정이면 실기기 실행을 거부한다. 이 구현은 흰/파랑/초록/노랑/빨강의 개별 디지털 출력(또는 외부 드라이버 채널)을 사용한다. RGBW LED만 연결하는 경우 회로에 맞는 채널 매핑이 필요하다. LED 저항과 조명용 트랜지스터/드라이버를 사용하고 조명을 GPIO에 직접 전원 연결하지 않는다.
+기존 `config.toml`을 사용하면 `[gpio]`의 `lamp_pin`·색상별 핀과 `output_active_high`를 지우고 예제의 `ring_data_pin`, `ring_brightness`, `ring_pulse_seconds`를 옮긴다. 센서의 실제 BCM 번호와 극성은 유지한다. Pi 5용 링 드라이버에는 실행 사용자의 `/dev/pio0` 접근 권한이 필요하다. 단독 점등에 사용한 계정과 환경을 사용할 수 있다. [Adafruit Pi 5 드라이버 안내](https://learn.adafruit.com/circuitpython-on-raspberrypi-linux/using-neopixels-on-the-pi-5)
 
 ### 2. 사용자가 채울 값과 실물 확인
 
 | 항목 | 설정·확인 내용 |
 |---|---|
-| `pi_model` | 사용 중인 Pi 모델·RAM을 기록한다. `unconfirmed`를 실제 값으로 바꾼다. |
+| `pi_model` | Raspberry Pi 5 |
 | `gpio.lid_pin` | 자석 센서의 **BCM** 번호. 커넥터의 물리 핀 번호와 구분한다. |
-| `gpio.lamp_pin` | 촬영 조명 드라이버 제어 핀. GPIO에 5V를 넣지 않는다. |
-| `white_pin`·`blue_pin`·`green_pin`·`yellow_pin`·`red_pin` | 개별 LED 출력 5개. 핀은 모두 서로 달라야 한다. 실제 LED 구성과 다르면 코드·회로 매핑이 필요하다. |
+| `gpio.ring_data_pin` | 링 데이터 입력 DI는 BCM18(물리 12번). 시험 배선의 VCC는 5V(물리 2번), GND는 물리 6번. |
+| `gpio.ring_brightness`, `gpio.ring_pulse_seconds` | 16구 GRB 링의 초기 밝기 0.005, 두 초록 표시의 기본 지속 시간 각각 0.5초. 내부 촬영 밝기는 사진으로 확인한다. |
 | `lid_pull_up`·`lid_closed_when_active` | 닫힘을 닫힘으로 읽는지 확인한다. 기본 pull-up에서는 GND로 연결될 때 active다. |
-| `output_active_high` | 드라이버가 HIGH에서 켜지는지 확인한다. 모든 출력에 공통 적용된다. |
 | 카메라·조명 | 고정된 구도에서 뚜껑을 닫아도 내부 전체가 보이는지, 최상단 약의 가림·반사·초점 상태를 확인한다. |
 | 전원·냉각·시간·인터넷 | Pi 규격 전원, 발열, 여유 저장 공간, NTP 시간 동기화, 외부 HTTPS 연결을 확인한다. |
 
-핀 번호를 임의의 예제로 채우지 않았다. 배선을 먼저 결정한 뒤 `nano config.toml`로 수정한다. `check-config`는 형식만 검사하며 실제 GPIO를 움직이지 않는다.
+센서 핀의 기본값 `-1`은 실기기 실행을 막으므로 실제 배선에 맞춰 `lid_pin`을 입력한다. `check-config`는 GPIO를 움직이지 않는다.
 
 ### 3. 탐지 모델 준비
 
@@ -152,7 +151,7 @@ python -m medikit_pi --config config.toml check-config --hardware
 python -m medikit_pi --config config.toml run
 ```
 
-처음에는 뚜껑을 닫고 시작해 내부 기준 사진 처리를 마친 뒤 연다. 흰 LED 후 포장을 보여주고 파란 LED가 켜지면 약을 **최상단**에 넣고 닫는다. 닫힘 사진 분석은 OCR 완료를 기다리지 않지만 서버의 약품 등록·알림은 식별과 이동 결과가 합쳐진 뒤 진행된다.
+처음에는 뚜껑을 닫고 시작해 흰 조명 아래 내부 기준 사진을 확보한다. 뚜껑을 열어 첫 초록 표시가 꺼지고 촬영 준비가 끝나면 포장을 보여준다. 노란색이 초록색으로 바뀌면 포장 사진 저장이 끝난 것이므로 약을 **최상단**에 넣고 닫는다. 내부 촬영 중 링은 흰색이며 끝나면 꺼진다.
 
 **현재 구현은 반출 때도 꺼낸 약을 카메라에 보여 포장 촬영을 남겨야 한다.** 포장 사진 없이 꺼내기만 하면 어떤 약인지 연결하지 않아 반출 재고·복용 확인 알림이 생성되지 않는다. 재반입도 같은 포장을 촬영한다. 동시에 여러 약을 움직이지 않고 한 세션에 약 하나씩 다룬다. 물리적으로 하나의 제품은 하나의 포장이라는 운영 조건을 지킨다.
 

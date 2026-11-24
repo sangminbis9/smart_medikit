@@ -4,7 +4,6 @@ import argparse
 import json
 import logging
 import os
-import queue
 import threading
 import time
 from pathlib import Path
@@ -99,14 +98,13 @@ def parse_args(argv=None):
     return args
 
 
-# 비동기 전송 결과를 메인 루프에 전달하고 네트워크 대기를 촬영과 분리한다.
-def sync_loop(worker, stop, results):
+# 촬영과 별도로 전송하며 AWS 결과를 로그에 남긴다.
+def sync_loop(worker, stop):
     previous_message = None
     while not stop.is_set():
         try:
             status = worker.step(time.monotonic())
             if status:
-                results.put(status)
                 messages = {
                     "COMPLETED": "서버 처리 완료.",
                     "REVIEW_REQUIRED": "서버 처리 확인 필요. 웹에서 확인하세요.",
@@ -239,7 +237,6 @@ def run_hardware(config):
     settings = config["detector"]
     board = camera = outbox = detector = controller = None
     stopped = threading.Event()
-    results = queue.SimpleQueue()
     sender = None
     stage_threads = []
     try:
@@ -262,7 +259,7 @@ def run_hardware(config):
             settings["interval_seconds"],
             settings["max_age_seconds"],
         )
-        controller = CaptureController(config, camera, board, outbox, detector)
+        controller = CaptureController(config, camera, board, outbox, detector, clock=time.monotonic)
         if staged:
             controller.initialize_baseline(time.monotonic())
             workers = [StageWorker(outbox, "MOVEMENT_REQUESTED", detector=detector.detector, geometry=config.get('cabinet'))]
@@ -284,7 +281,7 @@ def run_hardware(config):
                 outbox, S3Transport(config["aws"]), poll_seconds=config["aws"]["poll_seconds"]
             )
             sender = threading.Thread(
-                target=sync_loop, args=(worker, stopped, results), name="aws-sync", daemon=True
+                target=sync_loop, args=(worker, stopped), name="aws-sync", daemon=True
             )
             sender.start()
         else:
@@ -293,12 +290,11 @@ def run_hardware(config):
         while True:
             now = time.monotonic()
             controller.sensor(board.is_open(), now)
-            while not results.empty():
-                controller.server_status(results.get())
-            if controller.state == "CLOSED":
-                if running:
-                    safely_stop(camera)
-                    running = False
+            if controller.state == "CLOSED" and running:
+                safely_stop(camera)
+                running = False
+            # 초록 점멸 중에는 다음 프레임을 기다리지 않고 센서와 소등 시각을 확인한다.
+            if controller.state == "CLOSED" or controller.green_until is not None:
                 time.sleep(0.02)
                 continue
             if now < retry_at:
@@ -322,7 +318,6 @@ def run_hardware(config):
             controller.sensor(board.is_open(), now)
             controller.frame(frame, now)
             if detector.error:
-                board.status("red")
                 if detector.error != last_detector_error:
                     LOGGER.warning("약품 포장을 감지하지 못했습니다. 모델과 실행 환경을 확인해 주세요. (오류 종류: %s)", detector.error)
                 last_detector_error = detector.error
@@ -332,12 +327,13 @@ def run_hardware(config):
         LOGGER.info("촬영을 중지하고 로컬 큐를 보존합니다.")
     finally:
         stopped.set()
+        safely_finish(controller)
+        safely_close(board)
         if sender:
             sender.join(timeout=20)
         for thread in stage_threads:
             thread.join(timeout=20)
-        safely_finish(controller)
-        for resource in (detector, camera, board):
+        for resource in (detector, camera):
             safely_close(resource)
         if (
             outbox

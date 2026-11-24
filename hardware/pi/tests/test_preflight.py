@@ -105,13 +105,9 @@ def test_hardware_pin_preflight():
     path = Path(__file__).parents[1] / "config.example.toml"
     assert main(["--config", str(path), "check-config"]) == 0
     assert main(["--config", str(path), "check-config", "--hardware"]) == 1
-    pins = {
-        name: i + 2
-        for i, name in enumerate(
-            ("lid_pin", "lamp_pin", "white_pin", "blue_pin", "green_pin", "yellow_pin", "red_pin")
-        )
-    }
+    pins = load_config(path)["gpio"].copy()
+    pins["lid_pin"] = 23
     validate_pins(pins)
-    pins["red_pin"] = pins["lid_pin"]
-    with pytest.raises(ValueError, match="서로 다른"):
+    pins["lid_pin"] = pins["ring_data_pin"]
+    with pytest.raises(ValueError):
         validate_pins(pins)

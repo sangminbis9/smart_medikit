@@ -331,6 +331,8 @@ def reconcile(store, box, event_id, decision=None):
         ):
             current = store.activity.get_item(Key=key, ConsistentRead=True).get("Item", {})
             if current.get("processing_status") == "COMPLETED":
+                # 다른 처리와 동시에 완료된 경우에도 뒤늦은 위치를 반영한다.
+                apply_late_position(store, box, event_id, current)
                 return "COMPLETED"
             if by_inventory and not decision and current.get("processing_status") == "REVIEW_REQUIRED":
                 return "REVIEW_REQUIRED"

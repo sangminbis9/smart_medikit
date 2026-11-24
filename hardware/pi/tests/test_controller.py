@@ -6,6 +6,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock
 
+import cv2
 import numpy as np
 import pytest
 from medikit_pi.camera import Frame
@@ -171,6 +172,23 @@ def test_one_package_and_same_session_interior(rig):
     assert datetime.fromisoformat(event["closed_at"]) >= datetime.fromisoformat(event["occurred_at"])
     assert rig[1].capture.call_count == 2
     assert rig[0].state == "CLOSED"
+
+
+# 포장만 고해상도 검출 박스와 여유를 잘라 저장하고 내부 사진은 원본 크기를 유지한다.
+def test_package_crop_and_interior_full_frame(rig):
+    controller, _, _, outbox, _, package = rig
+    warmup(rig)
+    present(rig)
+    for index in range(32, 48):
+        feed(rig, index / 10, package, opened=False)
+    event = outbox.head()
+    package_bytes = (event["_directory"] / "package.jpg").read_bytes()
+    interior_bytes = (event["_directory"] / "interior.jpg").read_bytes()
+    cropped = cv2.imdecode(np.frombuffer(package_bytes, np.uint8), cv2.IMREAD_COLOR)
+    interior = cv2.imdecode(np.frombuffer(interior_bytes, np.uint8), cv2.IMREAD_COLOR)
+    assert cropped.shape == (163, 212, 3)
+    assert interior.shape == package.shape
+    assert controller.state == "CLOSED"
 
 
 # 뚜껑과 사진 저장 상태를 실제로 일어난 순서에 맞게 알린다.

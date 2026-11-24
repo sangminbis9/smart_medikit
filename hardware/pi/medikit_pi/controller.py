@@ -6,7 +6,7 @@ from datetime import datetime, timedelta, timezone
 
 import cv2
 
-from .image_quality import WARNING_MESSAGES
+from .image_quality import WARNING_MESSAGES, padded_bounds
 from .vision import (
     CandidateTracker,
     assess_capture_quality,
@@ -344,9 +344,21 @@ class CaptureController:
                     motion_limit,
                 )
                 return False
+            image = photo.image
+            if kind == "package" and box is not None:
+                # 미리보기의 정규화 박스를 고해상도 좌표로 변환하고 10% 여유를 둔다.
+                height, width = image.shape[:2]
+                x1, y1, x2, y2 = box
+                bounds, _ = padded_bounds(
+                    (x1 * width, y1 * height, x2 * width, y2 * height), width, height
+                )
+                left, top, right, bottom = bounds
+                image = image[top:bottom, left:right]
+                if not image.size:
+                    raise ValueError("포장 촬영 영역을 확인할 수 없습니다.")
             ok, encoded = cv2.imencode(
                 ".jpg",
-                photo.image,
+                image,
                 [cv2.IMWRITE_JPEG_QUALITY, self.config["camera"]["jpeg_quality"]],
             )
             if not ok:

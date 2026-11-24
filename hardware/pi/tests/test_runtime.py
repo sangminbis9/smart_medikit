@@ -73,7 +73,10 @@ def test_video_command_end_to_end(tmp_path, monkeypatch):
                 np.frombuffer((event["_directory"] / f"{kind}.jpg").read_bytes(), np.uint8),
                 cv2.IMREAD_COLOR,
             )
-            assert photo.shape == image.shape
+            if kind == "package":
+                assert photo.shape == (232, 270, 3)
+            else:
+                assert photo.shape == image.shape
     finally:
         outbox.close()
     report = json.loads(args.report.read_text(encoding="utf-8"))

@@ -16,6 +16,7 @@ from medikit_pi.__main__ import (
     safely_finish,
     sync_loop,
 )
+from medikit_pi.camera import Frame
 from medikit_pi.config import load_config
 from medikit_pi.detection import Detection
 from medikit_pi.gpio import MockBoard
@@ -169,3 +170,38 @@ def test_local_test_uses_separate_queue_even_with_aws_enabled(tmp_path, monkeypa
     assert cli.main(["--config", str(path), "run"]) == 0
     normal = runner.call_args.args[0]
     assert normal["aws"]["enabled"] is True and normal["data_dir"] == tmp_path / "production"
+
+
+# 카메라 재연결과 닫힘 대기에서 이전 장면을 지우고 읽기에 성공한 프레임만 전달한다.
+def test_live_preview_clears_when_camera_fails_or_stops(tmp_path, monkeypatch):
+    from medikit_pi import __main__ as cli
+
+    config = load_config(Path(__file__).parents[1] / "config.example.toml")
+    config["aws"]["staged_capture"] = False
+    config["data_dir"] = tmp_path
+    controller = Mock(green_until=None)
+
+    # 센서 값에 따라 실기기 루프가 카메라 활성 상태와 닫힘 대기를 오가게 한다.
+    def sensor(opened, now):
+        controller.state = "READY" if opened else "CLOSED"
+
+    controller.sensor.side_effect = sensor
+    board = Mock()
+    board.is_open.side_effect = [True, True, True, False, KeyboardInterrupt()]
+    frame = Frame(np.zeros((24, 32, 3), dtype=np.uint8), True, 20)
+    camera = Mock()
+    camera.read.side_effect = [OSError(), frame]
+    monkeypatch.setattr("medikit_pi.detection.YOLOEDetector", SyntheticDetector)
+    monkeypatch.setattr("medikit_pi.controller.CaptureController", Mock(return_value=controller))
+    monkeypatch.setattr("medikit_pi.gpio.Board", Mock(return_value=board))
+    monkeypatch.setattr("medikit_pi.camera.PiCamera", Mock(return_value=camera))
+    clock = iter(range(0, 100, 10))
+    monkeypatch.setattr(cli, "time", SimpleNamespace(monotonic=clock.__next__, sleep=Mock()))
+
+    preview = Mock()
+    assert cli.run_hardware(config, preview=preview) == 0
+    assert camera.start.call_count == camera.stop.call_count == 2
+    assert preview.clear.call_count == 2
+    controller.frame.assert_called_once()
+    assert controller.frame.call_args.args[0] is frame
+    assert controller.frame.call_args.kwargs["preview"] is preview

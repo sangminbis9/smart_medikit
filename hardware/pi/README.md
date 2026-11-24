@@ -23,6 +23,24 @@ ring_pulse_seconds = 0.5
 3. **실제 개폐·촬영:** 센서와 링 설정을 확인한 뒤 `python -m medikit_pi --config config.toml run --local-test`. 평소처럼 뚜껑을 열고 포장을 한 번 보여준 뒤 닫는다. 포장은 노란 링 아래에서, 내부는 흰 링 아래에서 촬영한다. 성공한 사진은 터미널에 출력된 시험 폴더의 세션별 `package.jpg`, `interior.jpg`로 확인한다. 실행할 때마다 새 시험 큐를 만들고 AWS 전송을 꺼서 다음 운영 실행에 시험 사진이 섞이지 않는다. 종료는 `Ctrl+C`다.
 4. 글자가 실제로 읽히는지 사진을 확대해 보고, 양호한데 차단된 사례와 흐리거나 반사됐는데 통과한 사례를 각각 기록한다. 같은 포장·거리·조명에서 아래 `[vision]` 기준을 하나씩 조정한다. 작은 포장에 크기 경고만 있을 때는 촬영되어야 한다. 검출 수가 계속 0이면 품질 기준을 조정해도 검출되지는 않는다.
 
+### PuTTY로 접속한 노트북에서 카메라 영상 보기
+
+Pi에 연결한 PuTTY 창에서는 로그를 읽고, 노트북 브라우저에서는 카메라 영상과 YOLOE가 찾은 포장의 박스를 본다. 점수와 품질 수치는 터미널에서 확인한다.
+
+1. **노트북의 PuTTY**에서 현재 창의 제목 표시줄을 오른쪽 클릭하고 **Change Settings… → Connection → SSH → Tunnels**로 간다.
+2. **Source port**에 `8765`, **Destination**에 `127.0.0.1:8765`를 입력한다. **Local**을 선택하고 **Add**를 누른 뒤 목록에 `L8765`가 생기면 **Apply**를 누른다. 다음 접속에도 쓰려면 **Session**에서 해당 연결 설정을 **Save**한다. PuTTY 기본값대로 포트는 이 노트북에서만 접속하도록 둔다. [PuTTY 포트 전달 안내](https://the.earth.li/~sgtatham/putty/0.84/htmldoc/Chapter4.html#config-ssh-portfwd)
+3. **Pi 터미널**의 `hardware/pi/`에서 아래 세 가지 중 시험할 명령 하나를 실행한다. 이미 카메라를 사용 중인 시험 명령이 있으면 먼저 `Ctrl+C`로 종료한다.
+
+   | 확인할 내용 | 명령 |
+   |---|---|
+   | 센서·링 없이 포장을 보여주며 카메라와 탐지만 확인 | `.venv/bin/python -m medikit_pi --config config.toml camera-check --preview` |
+   | 실제 개폐·LED·촬영과 로컬 저장 | `.venv/bin/python -m medikit_pi --config config.toml run --local-test --preview` |
+   | 실제 개폐·촬영과 설정된 S3 전송 | `.venv/bin/python -m medikit_pi --config config.toml run --preview` |
+
+4. PuTTY를 연결한 채 **노트북 브라우저**에서 `http://127.0.0.1:8765/`를 연다. Pi의 미리보기 서버는 Pi 내부에서만 접속할 수 있고, PuTTY가 노트북 브라우저를 이 주소에 연결한다.
+
+`camera-check --preview`는 `Ctrl+C`까지 계속된다. 표본 수를 정해 끝내려면 `--samples 20`처럼 지정한다. 박스는 YOLOE가 해당 프레임의 추론을 마칠 때 갱신되고, 저장하는 사진에는 들어가지 않는다. `run`에서는 뚜껑을 열고 촬영 준비가 된 뒤 포장을 보여주면 박스를 확인할 수 있다. 내부 촬영을 마치고 닫힘 대기 상태로 돌아가면 카메라도 멈춘다.
+
 ## 내부 사진 전후 비교 실험
 
 실기기 `aws.staged_capture=true` 모드는 포장 저장 직후 OCR 전송을 시작하고 닫힌 뒤 내부 사진을 별도로 분석한다. 시작할 때 뚜껑이 닫혀 있으면 기준 사진을 먼저 확보한다.

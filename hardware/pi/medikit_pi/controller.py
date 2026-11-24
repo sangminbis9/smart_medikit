@@ -155,7 +155,10 @@ class CaptureController:
             self.board.set_ring("white")
 
     # 새 프레임의 안정성과 최신 탐지 증거가 함께 충족될 때만 촬영한다.
-    def frame(self, frame, now: float):
+    def frame(self, frame, now: float, *, preview=None):
+        # 탐색 단계 이외에는 추론을 새로 요청하지 않고 현재 카메라 영상만 보여준다.
+        if preview is not None and self.state not in {"CLOSED", "READY"}:
+            preview.publish(frame.image)
         if self.state == "OPENING":
             # 열린 세션의 첫 프레임이 실제로 도착해야 시작 성공을 알린다.
             if not self.board.is_open():
@@ -190,6 +193,17 @@ class CaptureController:
         elif self.state == "READY":
             self.detector.submit(frame.image, now)
             result = self.detector.latest(now)
+            if preview is not None:
+                # 비동기 검출 박스를 새 프레임에 덧씌우면 이미 움직인 포장의 위치가 틀어진다.
+                if (
+                    result is not None
+                    and result.captured_at >= self.ready_at
+                    and result.detections
+                    and result.source_frame is not None
+                ):
+                    preview.publish(result.source_frame, result.detections)
+                else:
+                    preview.publish(frame.image)
             if result is None or result.captured_at < self.ready_at:
                 self.tracker.reset()
                 return

@@ -2,6 +2,7 @@
 
 import logging
 import time
+from itertools import count
 
 import cv2
 import numpy as np
@@ -13,7 +14,7 @@ WINDOW_NAME = "smart_medikit - YOLOE"
 
 
 # 실제 Pi 미리보기 프레임에서 YOLOE 후보와 측정값을 함께 읽어 카메라 보정에 사용한다.
-def run_camera_check(config, samples):
+def run_camera_check(config, samples, *, preview=None):
     from .camera import PiCamera
     from .image_quality import WARNING_MESSAGES
     from .vision import assess_capture_quality, capture_thresholds
@@ -40,17 +41,19 @@ def run_camera_check(config, samples):
             limits.min_sharpness,
             settings["confidence"] * 100,
         )
-        for index in range(samples):
+        for index in count(1):
             frame = camera.read()
             started = time.monotonic()
             detections = model.predict(frame.image)
+            elapsed = time.monotonic() - started
+            if preview is not None:
+                preview.publish(frame.image, detections)
             LOGGER.info(
-                "%d/%d · 자동초점 %s · YOLOE 후보 %d개 · 추론 %.2f초",
-                index + 1,
-                samples,
+                "%s · 자동초점 %s · YOLOE 후보 %d개 · 추론 %.2f초",
+                index if samples is None else f"{index}/{samples}",
                 "완료" if frame.autofocus_ok else "대기",
                 len(detections),
-                time.monotonic() - started,
+                elapsed,
             )
             for candidate in detections:
                 x1, y1, x2, y2 = candidate.box
@@ -73,8 +76,9 @@ def run_camera_check(config, samples):
                     report.bright_ratio * 100,
                     ", ".join(WARNING_MESSAGES[w] for w in report.warnings) or "화질 양호",
                 )
-            if index + 1 < samples:
-                time.sleep(settings["interval_seconds"])
+            if samples is not None and index >= samples:
+                break
+            time.sleep(settings["interval_seconds"])
     except KeyboardInterrupt:
         LOGGER.info("Pi 카메라 검사를 종료합니다.")
     finally:

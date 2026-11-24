@@ -143,3 +143,39 @@ def test_pi_camera_check_reports_metrics_without_session_or_cloud(tmp_path, monk
     camera.close.assert_called_once()
     camera.capture.assert_not_called()
     assert not output.exists()
+
+
+# 미리보기는 기본 연속 실행이고 명시한 검사 횟수와 기존 터미널 기본값도 지킨다.
+def test_camera_check_preview_sample_limits():
+    assert parse_args(["camera-check"]).samples == 20
+    assert parse_args(["camera-check", "--preview"]).samples is None
+    assert parse_args(["camera-check", "--preview", "--samples", "2"]).samples == 2
+    with pytest.raises(SystemExit):
+        parse_args(["camera-check", "--preview", "--samples", "0"])
+
+
+# 연속 검사에서 각 검출 원본을 화면에 전달하고 Ctrl+C로 카메라와 서버를 함께 닫는다.
+def test_camera_check_preview_uses_inference_frame_and_closes(monkeypatch):
+    from medikit_pi.camera import Frame
+
+    config = Path(__file__).parents[1] / "config.example.toml"
+    images = [np.full((100, 200, 3), value, np.uint8) for value in (80, 180)]
+    camera = Mock()
+    camera.read.side_effect = [Frame(image, True, 0.0) for image in images] + [KeyboardInterrupt()]
+    monkeypatch.setattr("medikit_pi.camera.PiCamera", Mock(return_value=camera))
+    detector = Mock()
+    box = Detection((0.2, 0.3, 0.7, 0.8), 0.9, "medicine box")
+    detector.predict.side_effect = [[box], []]
+    monkeypatch.setattr("medikit_pi.webcam.YOLOEDetector", Mock(return_value=detector))
+    monkeypatch.setattr("medikit_pi.webcam.time.sleep", Mock())
+    preview = Mock()
+    monkeypatch.setattr("medikit_pi.live_preview.LivePreview", Mock(return_value=preview))
+
+    assert main(["--config", str(config), "camera-check", "--preview"]) == 0
+    preview.start.assert_called_once()
+    for index, call in enumerate(preview.publish.call_args_list):
+        assert call.args[0] is images[index] is detector.predict.call_args_list[index].args[0]
+    assert [call.args[1] for call in preview.publish.call_args_list] == [[box], []]
+    camera.capture.assert_not_called()
+    camera.close.assert_called_once()
+    preview.close.assert_called_once()

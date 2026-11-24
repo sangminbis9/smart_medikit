@@ -105,6 +105,31 @@ def test_camera_start_signal_waits_for_frame_and_expires_during_poll(rig):
     assert board.color is None
 
 
+# 열린 동안 탐지한 원본에만 박스를 표시하고 유효한 결과가 없으면 실시간 원본을 내보낸다.
+def test_preview_pairs_boxes_with_detector_frame(rig):
+    controller, _, _, _, current, detected = rig
+    warmup(rig)
+    box = controller.detector.box
+    detections = (box,)
+    controller.detector.submit = Mock()
+    controller.detector.latest = Mock(
+        side_effect=[
+            DetectionResult(1.2, detections, detected),
+            DetectionResult(0.0, detections, detected),
+            DetectionResult(1.4, (), detected),
+            DetectionResult(1.5, detections, None),
+        ]
+    )
+    preview = Mock()
+    for at in (1.2, 1.3, 1.4, 1.5):
+        controller.frame(Frame(current, True, at), at, preview=preview)
+    displayed = [call.args for call in preview.publish.call_args_list]
+    assert len(displayed) == 4
+    assert controller.detector.latest.call_count == controller.detector.submit.call_count == 4
+    assert displayed[0][0] is detected and displayed[0][1] == detections
+    assert all(len(args) == 1 and args[0] is current for args in displayed[1:])
+
+
 # 닫힌 채 부팅하면 카메라 시작 신호 없이 내부 기준 사진만 백색으로 촬영한다.
 def test_closed_baseline_uses_only_white_until_saved(rig):
     controller, _, board, outbox, _, interior = rig

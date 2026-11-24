@@ -68,6 +68,9 @@ def parse_args(argv=None):
         action="store_true",
         help="새 실험 폴더에서 실제 개폐·촬영을 시험하고 AWS 전송은 끔",
     )
+    run.add_argument(
+        "--preview", action="store_true", help="브라우저로 Pi 카메라 영상과 포장 검출 박스 보기"
+    )
     commands.add_parser("prepare-model", help="사전 학습 모델에 포장 설명을 저장")
     check = commands.add_parser("check-config", help="설정 형식 검사")
     check.add_argument(
@@ -78,7 +81,10 @@ def parse_args(argv=None):
         "camera-check", help="Pi 카메라에서 포장 탐지와 미리보기 화질을 측정"
     )
     camera_check.add_argument(
-        "--samples", type=int, default=20, help="검사할 미리보기 프레임 수 (기본 20)"
+        "--preview", action="store_true", help="브라우저에서 Pi 영상과 포장 검출 박스 표시"
+    )
+    camera_check.add_argument(
+        "--samples", type=int, help="검사할 프레임 수 (기본 20, --preview에서는 Ctrl+C까지)"
     )
     webcam = commands.add_parser("webcam", help="PC 웹캠에서 실시간 포장 후보만 표시")
     webcam.add_argument("--camera", type=int, default=0, help="웹캠 번호")
@@ -99,8 +105,11 @@ def parse_args(argv=None):
     video.add_argument("--show", action="store_true", help="미리보기 창 표시")
     video.add_argument("--report", type=Path, help="촬영 상태 변화와 처리시간 보고서")
     args = parser.parse_args(argv)
-    if args.command == "camera-check" and args.samples < 1:
-        parser.error("--samples는 1 이상이어야 합니다.")
+    if args.command == "camera-check":
+        if args.samples is not None and args.samples < 1:
+            parser.error("--samples는 1 이상이어야 합니다.")
+        if args.samples is None and not args.preview:
+            args.samples = 20
     if args.command == "webcam":
         if args.camera < 0:
             parser.error("웹캠 번호는 0 이상이어야 합니다.")
@@ -236,7 +245,7 @@ def run_video(config, args):
 
 
 # 실기기 오류를 제한 시간마다 복구하며 센서와 로컬 큐를 계속 유지한다.
-def run_hardware(config):
+def run_hardware(config, *, preview=None):
     # libcamera가 처음 로드되기 전에 로그 기준을 적용한다.
     configure_camera_logging()
     from .camera import PiCamera
@@ -304,6 +313,8 @@ def run_hardware(config):
             now = time.monotonic()
             controller.sensor(board.is_open(), now)
             if controller.state == "CLOSED" and running:
+                if preview is not None:
+                    preview.clear()
                 safely_stop(camera)
                 running = False
             # 초록 점멸 중에는 다음 프레임을 기다리지 않고 센서와 소등 시각을 확인한다.
@@ -321,6 +332,8 @@ def run_hardware(config):
                 frame = camera.read()
             except Exception as error:
                 LOGGER.warning("카메라 연결 오류: %s", type(error).__name__)
+                if preview is not None:
+                    preview.clear()
                 controller.camera_error(time.monotonic())
                 safely_stop(camera)
                 running = False
@@ -329,7 +342,7 @@ def run_hardware(config):
             # 카메라 대기 중 변경된 센서를 다시 읽어 닫힌 상태의 포장 촬영을 막는다.
             now = time.monotonic()
             controller.sensor(board.is_open(), now)
-            controller.frame(frame, now)
+            controller.frame(frame, now, preview=preview)
             if detector.error:
                 if detector.error != last_detector_error:
                     LOGGER.warning("약품 포장을 감지하지 못했습니다. 모델과 실행 환경을 확인해 주세요. (오류 종류: %s)", detector.error)
@@ -366,6 +379,7 @@ def main(argv=None):
     handler = logging.StreamHandler()
     handler.setFormatter(DemoLogFormatter("%(asctime)s [%(levelname)s] %(message)s"))
     logging.basicConfig(level=logging.INFO, handlers=[handler])
+    preview = None
     try:
         try:
             config = load_config(args.config.resolve())
@@ -413,11 +427,16 @@ def main(argv=None):
             from .webcam import run_webcam
 
             return run_webcam(config, args)
+        if args.command in {"camera-check", "run"} and args.preview:
+            from .live_preview import LivePreview
+
+            preview = LivePreview()
+            preview.start()
         if args.command == "camera-check":
             from .webcam import run_camera_check
 
             configure_camera_logging()
-            return run_camera_check(config, args.samples)
+            return run_camera_check(config, args.samples, preview=preview)
         if args.command == "run" and args.local_test:
             import tempfile
 
@@ -429,10 +448,14 @@ def main(argv=None):
             LOGGER.info(
                 "로컬 촬영 시험 · AWS 전송 꺼짐 · 사진과 큐 저장 위치: %s", config["data_dir"]
             )
-        return run_video(config, args) if args.command == "video" else run_hardware(config)
+        if args.command == "video":
+            return run_video(config, args)
+        return run_hardware(config, preview=preview)
     except Exception as error:
         LOGGER.error("실행 실패(%s). 설정·모델·장치 연결을 확인하세요.", type(error).__name__)
         return 1
+    finally:
+        safely_close(preview)
 
 
 if __name__ == "__main__":

@@ -1,6 +1,7 @@
 """도착 순서와 무관하게 촬영 단계를 결합하고 실패 확인·복구를 유지한다."""
 
 import json
+import math
 import os
 import re
 from datetime import datetime, timezone
@@ -8,7 +9,7 @@ from decimal import Decimal
 from urllib.parse import unquote_plus
 
 from activity_api import ACTIVITY_TABLE, ApiError, exact_body, get_store, identifier, timestamp
-from inventory_events import persist_transition, transition
+from inventory_events import persist_transition, stack_geometry, transition
 
 WAIT_SECONDS = 900
 TERMINAL = ("COMPLETED", "REVIEW_REQUIRED")
@@ -121,11 +122,82 @@ def wake_notifications():
             print("NOTIFICATION_WAKE_RETRY_SCHEDULED")
 
 
+# 완료된 반입의 위치 후보를 현재도 같은 단독 포장인 경우에만 조건부 반영한다.
+def apply_late_position(store, box, event_id, item):
+    closed = item.get("SESSION_CLOSED") or {}
+    movement_stage = item.get("MOVEMENT_REQUESTED") or {}
+    movement = movement_stage.get("movement") or {}
+    if (closed.get("movement_policy") != "INVENTORY_STATE"
+            or movement_stage.get("session_id") != closed.get("session_id")
+            or movement_stage.get("sequence") != closed.get("sequence")
+            or item.get("user_decision")):
+        return
+    candidate = movement.get("candidate") or {}
+    if not isinstance(candidate, dict):
+        return
+    if candidate.get("direction") != "IN" and not movement.get("single_visible"):
+        return
+    placement = movement if candidate.get("direction") == "IN" else {}
+    packages = [p for p in product_packages(store, box) if p.get("state") == "STORED"]
+    single_visible = not placement and len(packages) == 1
+    if single_visible:
+        placement = movement.get("single_visible") or {}
+    if not isinstance(placement, dict):
+        return
+    geometry = placement.get("geometry") or {}
+    bounds = (placement.get("candidate") or {}).get("box")
+    if not isinstance(geometry, dict) or not isinstance(bounds, (list, tuple)) or len(bounds) != 4:
+        return
+    if not all(isinstance(v, (int, float, Decimal)) and not isinstance(v, bool)
+               and math.isfinite(float(v)) and 0 <= v <= 1 for v in bounds):
+        return
+    if not (bounds[0] < bounds[2] and bounds[1] < bounds[3]):
+        return
+    position = geometry.get("position") or {}
+    if not isinstance(position, dict):
+        return
+    coords = [position.get(k) for k in ("x", "y", "z_estimated")]
+    if (not all(isinstance(v, (int, float, Decimal)) and not isinstance(v, bool)
+                and math.isfinite(float(v)) and 0 <= v <= 10000 for v in coords)
+            or position.get("certainty") not in ("ESTIMATED", "UNCERTAIN")
+            or geometry.get("size_class") not in ("SMALL", "MEDIUM", "LARGE")):
+        return
+    matching = [p for p in packages if p.get("last_event_id") == event_id
+                and p.get("last_sequence") == closed.get("sequence")]
+    if len(matching) != 1:
+        return
+    package = matching[0]
+    if package.get("position") or package.get("size_class"):
+        return
+    placement = stack_geometry(placement, packages, package)
+    position = dict(placement['geometry']['position'])
+    if single_visible:
+        position['certainty'] = 'UNCERTAIN'
+    values = {k: Decimal(str(v)) for k, v in position.items() if k in ('x', 'y', 'z_estimated')}
+    values['certainty'] = position['certainty']
+    try:
+        store.inventory.update_item(
+            Key={'pk': package['pk'], 'sk': 'META'},
+            UpdateExpression='SET #pos=:pos, size_class=:size, visual_box=:bounds',
+            ConditionExpression=('#state=:stored AND last_event_id=:event AND last_sequence=:seq '
+                                 'AND attribute_not_exists(#pos) AND attribute_not_exists(size_class)'),
+            ExpressionAttributeNames={'#pos': 'position', '#state': 'state'},
+            ExpressionAttributeValues={':pos': values, ':size': geometry['size_class'],
+                                       ':bounds': [Decimal(str(v)) for v in bounds],
+                                       ':stored': 'STORED', ':event': event_id,
+                                       ':seq': closed['sequence']},
+        )
+    except Exception as error:
+        if getattr(error, 'response', {}).get('Error', {}).get('Code') != 'ConditionalCheckFailedException':
+            raise
+
+
 # 같은 세션의 단계와 OCR 결과를 결합하고 선행 세션의 처리 순서를 보존한다.
 def reconcile(store, box, event_id, decision=None):
     key = {"pk": f"BOX#{box}", "sk": f"CAPTURE#{event_id}"}
     item = store.activity.get_item(Key=key, ConsistentRead=True).get("Item", {})
     if item.get("processing_status") == "COMPLETED":
+        apply_late_position(store, box, event_id, item)
         return "COMPLETED"
     if decision and decision["direction"] == "NONE":
         store.client.transact_write_items(
@@ -264,6 +336,7 @@ def reconcile(store, box, event_id, decision=None):
                 return "REVIEW_REQUIRED"
         raise
     wake_notifications()
+    apply_late_position(store, box, event_id, item)
     return "COMPLETED"
 
 

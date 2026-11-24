@@ -6,7 +6,7 @@ from unittest.mock import Mock
 
 import pytest
 from activity_api import ApiError, confirm_initial
-from capture_events import list_reviews, reconcile, resolve_review
+from capture_events import apply_late_position, list_reviews, reconcile, resolve_review
 from deploy_pipeline_fixes import patch_ocr
 from inventory_events import transition
 from read_api import read_inventory
@@ -114,6 +114,30 @@ def inventory_state_fixture():
     raw = store.inventory.get_item.return_value["Item"]
     raw["source"] = {"key": "ocr-input/s2/package.jpg", "session_id": "s2"}
     return store, record, medicine, raw
+
+
+# 늦은 단독 후보는 같은 반입에만 적용하고 중복 포장이면 적용하지 않는다.
+def test_late_single_position_requires_current_unique_package():
+    store, record, _, _ = inventory_state_fixture()
+    record['processing_status'] = 'COMPLETED'
+    record['MOVEMENT_REQUESTED']['movement'] = {
+        'reason': 'NO_SINGLE_CHANGE',
+        'single_visible': {'candidate': {'box': [.1, .1, .4, .4]},
+                           'geometry': {'position': {'x': 40, 'y': 50, 'z_estimated': 0,
+                                                     'certainty': 'ESTIMATED'},
+                                        'size_class': 'SMALL'}},
+    }
+    package = {'pk': 'PACKAGE#p1', 'package_id': 'p1', 'state': 'STORED',
+               'last_event_id': 'e2', 'last_sequence': 2}
+    store.inventory.scan.return_value = {'Items': [package]}
+    apply_late_position(store, 'test', 'e2', record)
+    call = store.inventory.update_item.call_args.kwargs
+    assert call['ExpressionAttributeValues'][':pos']['certainty'] == 'UNCERTAIN'
+    assert call['ExpressionAttributeValues'][':seq'] == 2
+    store.inventory.update_item.reset_mock()
+    store.inventory.scan.return_value = {'Items': [package, {'state': 'STORED'}]}
+    apply_late_position(store, 'test', 'e2', record)
+    store.inventory.update_item.assert_not_called()
 
 
 # 같은 이름의 다른 품목이나 폐기 이력은 신규 반입을 막지 않는다.

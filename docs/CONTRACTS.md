@@ -63,7 +63,8 @@
 - 기존 세션은 단계 객체 `ocr-ready.json`, `movement-ready.json` 전송 후 `closed-ready.json`을 발행한다. 최상단 새 후보와 가림에 대한 기존 방향 판정을 유지한다.
 - **단일 품목 운영 방식:** 단계별 Pi는 한 개폐에 실제로 이동한 포장 하나만 촬영한다. GPIO에서 닫힘을 확인하고 포장 사진이 있는 세션의 `SESSION_CLOSED`에만 `movement_policy=INVENTORY_STATE`, `closed_at`(센서 닫힘 관측 시각, 시간대 포함 ISO 8601)을 보낸다. 새 종료 객체는 포장 전송 후 내부 분석·전송 완료를 기다리지 않는다. 기존 큐, 센서 닫힘을 확인하기 전에 중단된 세션, 기준 촬영은 이 판정에 참여하지 않는다.
 - 서버는 닫힘과 같은 이벤트의 완료 OCR 결과를 결합한다. OCR의 사진 키·세션 ID가 종료 객체와 같아야 하며, 식약처 품목기준코드 하나로 대상 포장을 찾는다. `STORED`이면 `OUT`, 등록 대기·반출 중이면 같은 포장을 `STORED`로, 활성 포장이 없으면 새 포장을 `STORED`로 처리한다. 폐기·소진 포장은 이력으로 보존하며 새 포장에 옛 수량·기한을 복사하지 않는다. 중복 활성 포장·불명확한 OCR은 사용자가 확인한다. 새 규칙으로 이미 확인 대기가 된 이벤트는 자동 재판정하지 않는다.
-- 내부 사진 비교는 계속 병행한다. 재고 반영 시점까지 도착한 명확한 반입 후보의 좌표만 3D 배치에 사용한다. 좌표가 없어도 등록하며 반출 기록의 시각은 센서가 관측한 `closed_at`을 사용한다. 제품 이름을 읽거나 촬영 상태가 `COMPLETED`라고 해서 실물 이동이나 복용이 증명되지는 않는다.
+- 내부 사진 비교는 계속 병행한다. 명확한 반입 후보의 좌표를 3D 배치에 사용하며 늦은 결과는 아래 조건에 따라 반영한다. 좌표가 없어도 등록하며 반출 기록의 시각은 센서가 관측한 `closed_at`을 사용한다. 제품 이름을 읽거나 촬영 상태가 `COMPLETED`라고 해서 실물 이동이나 복용이 증명되지는 않는다.
+- 내부 분석의 `NO_SINGLE_CHANGE`에서 현재 사진에 후보가 하나면 `single_visible`에 후보 박스와 추정 좌표를 보관한다. 서버는 같은 세션의 반입 결과가 완료된 이후라도 대상 포장이 동일 이벤트의 최신 보관 상태인 경우 위치를 조건부 갱신한다. 단독 후보는 보관 중인 포장이 하나인 경우에만 `UNCERTAIN`으로 연결한다. 이미 위치가 있거나 사용자가 촬영을 정정한 경우 덮어쓰지 않는다. 분석 결과에 후보가 없는 이전 세션은 자동으로 좌표를 복원하지 못한다.
 - `capture_events.py`는 단일 식약처 품목기준코드와 동일 세션을 결합한다. 포장 `last_sequence` 조건과 이력·알림 트랜잭션으로 중복을 막는다. 신규 포장에 `first_registration_pending=true`, 알 수 없는 수량·기한은 null이다. 재반입은 `active_out_event_id`를 해제한다.
 - `GET /activity` → `{pending,history}`. `POST /activity/{eventId}/confirm` → `{result:TAKEN|NOT_TAKEN,quantity:number|null}`. N은 미복용 이력을 남기고 대기 목록에서만 제거한다. Y는 정제·캡슐만 수량 입력·최초 확인 트랜잭션 차감을 허용한다.
 - `POST /packages/{packageId}/initial` → `{condition:NEW|USED,actualExpiry:YYYY-MM-DD|null,remainingQty:number|null}`. NEW는 기존 값을 유지하고 USED는 입력한 실제 값만 저장한다.

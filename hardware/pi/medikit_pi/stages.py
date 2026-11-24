@@ -68,6 +68,13 @@ class StageWorker:
         result = compare_interior(before, after, first, second, automatic_in=True)
         if result.get('candidate'):
             result['geometry'] = locate_candidate(result['candidate'], self.geometry)
+        elif result.get('reason') == 'NO_SINGLE_CHANGE' and len(second) == 1:
+            # 전후 변화가 불명확하면 단독 검출을 위치 후보로만 보존한다.
+            candidate = {'box': second[0].box, 'certainty': 'UNCERTAIN'}
+            result['single_visible'] = {
+                'candidate': candidate,
+                'geometry': locate_candidate(candidate, self.geometry),
+            }
         result["observed_at"] = event["captured_at"]
         with store._mutex, store._db:
             store._db.execute("INSERT INTO movement_results VALUES(?,?)", (event["session_id"], json.dumps(result)))

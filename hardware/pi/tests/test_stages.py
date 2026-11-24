@@ -81,6 +81,30 @@ def test_movement_does_not_wait_for_ocr(tmp_path):
         box.close()
 
 
+# 전후에 같은 단독 후보가 보여 변화가 없을 때 위치 후보만 별도로 기록한다.
+def test_single_visible_candidate_is_preserved(tmp_path):
+    box = Outbox(tmp_path, staged=True)
+    detector = Mock()
+    worker = StageWorker(box, 'MOVEMENT_REQUESTED', detector=detector)
+    try:
+        candidate = Detection((.1, .1, .4, .4), .9, 'box')
+        detector.predict.return_value = [candidate]
+        first = box.begin_session('test-box')
+        box.save_capture(first, 'interior', photo())
+        box.finish_session(first)
+        worker.step()
+        second = box.begin_session('test-box')
+        box.save_capture(second, 'interior', photo())
+        box.finish_session(second)
+        worker.step()
+        import json
+        result = json.loads(box._db.execute('SELECT result FROM movement_results WHERE session_id=?', (second,)).fetchone()[0])
+        assert result['reason'] == 'NO_SINGLE_CHANGE'
+        assert result['single_visible']['candidate']['box'] == [.1, .1, .4, .4]
+    finally:
+        box.close()
+
+
 # 파일 저장 뒤 큐 기록이 빠진 장애를 재시작 시 복구한다.
 def test_recover_missing_stage(tmp_path):
     box = Outbox(tmp_path, staged=True)

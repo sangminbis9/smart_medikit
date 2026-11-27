@@ -1,6 +1,35 @@
 import { test, expect } from '@playwright/test';
 import { packageSchema } from '../src/data';
 
+// 반출 상태는 재고 기록에 남아도 홈의 보관 목록과 3D에서 제외한다.
+test('반출된 포장은 홈 보관 목록에 표시하지 않는다', async function outboundHome({
+  page,
+}) {
+  const item = packageSchema.parse({
+    package_id: 'out-p1',
+    box_id: 'test-box',
+    kind: 'OTC',
+    state: 'OUT',
+    name: '반출된 합성 시험약',
+    medicines: [{ medicine_id: 'm1', name: '반출된 합성 시험약' }],
+  });
+  await page.route('**/api/**', async function inventory(route) {
+    await route.fulfill({
+      json: route.request().url().includes('/inventory')
+        ? {
+            box: { box_id: 'test-box' },
+            packages: [item],
+            inventory_status: 'CONFIRMED',
+          }
+        : { alerts: [] },
+    });
+  });
+  await page.goto('/');
+  await expect(page.getByText('보관 중 0', { exact: false })).toHaveCount(1);
+  await expect(page.locator('[data-package="out-p1"]')).toHaveCount(0);
+  await expect(page.getByText('반출된 합성 시험약')).toHaveCount(0);
+});
+
 // 합성 재고로 신규 확인과 실제 수량 입력의 서버 왕복을 검증한다.
 test('신규 약 정보와 반출 미복용 이력을 저장한다', async function flow({
   page,

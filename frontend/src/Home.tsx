@@ -66,7 +66,12 @@ export default function Home({
   const items = useMemo(
     // 현재 검색어와 일치하는 포장만 반환한다.
     function filtered() {
-      const found = findPackages(data.packages, query);
+      // 반출된 포장은 복용 기록에서 관리하고 홈 보관 목록에는 보이지 않는다.
+      const found = findPackages(data.packages, query).filter(
+        function stored(item) {
+          return item.state === 'STORED';
+        },
+      );
       return categoryMatches
         ? found.filter(function inCategory(item) {
             return categoryMatches.packageIds.has(item.package_id);
@@ -88,7 +93,7 @@ export default function Home({
   let review = 0;
   for (const item of data.packages) {
     if (item.state === 'STORED') stored++;
-    if (!item.expiry.verified && item.state !== 'DISPOSED') review++;
+    if (!item.expiry.verified && item.state === 'STORED') review++;
   }
 
   useEffect(

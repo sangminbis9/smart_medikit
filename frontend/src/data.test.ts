@@ -117,9 +117,14 @@ describe('표시 정책', function policies() {
   it('미확인 수량과 소진 수량을 구분한다', function zeroQuantity() {
     const item = makeDemo().packages[0];
     item.inventory!.estimated_qty = null;
-    expect(stockLabel(item)).toContain('미확인');
+    expect(stockLabel(item)).toBe('수량을 입력해주세요');
     item.inventory!.estimated_qty = 0;
     expect(stockLabel(item)).toBe('예상 잔여 0정');
+    item.inventory!.initial_qty = 3;
+    item.inventory!.estimated_qty = 3;
+    expect(stockLabel(item)).toBe('가득 참 · 3정');
+    item.inventory!.estimated_qty = 2;
+    expect(stockLabel(item)).toBe('예상 잔여 2정');
   });
   // 처방약은 구성 약품 수와 무관하게 봉투 회분으로 표시한다.
   it('처방약은 정수가 아닌 회분을 표시한다', function prescription() {
@@ -133,7 +138,7 @@ describe('표시 정책', function policies() {
       verified: false,
       temporary_management_date: '2027-01-01',
     };
-    expect(expiryLabel(item)).toBe('임시 기준 2027.01.01');
+    expect(expiryLabel(item)).toBe('유효기간: 2027.01.01 (추정)');
     item.expiry.temporary_management_date = null;
     expect(expiryLabel(item)).toBe('유효기간 미확인');
   });

@@ -102,7 +102,7 @@ export default function PackageDetail({ kit }: { kit: Medkit }) {
                 {item.kind === 'PRESCRIPTION'
                   ? '봉투 전체의 예상 회분이며 개별 알약 수가 아니에요.'
                   : item.inventory?.initial_qty == null
-                    ? '초기 수량은 미확인 상태예요.'
+                    ? '포장에 표시된 수량을 입력해주세요.'
                     : `초기 ${item.inventory.initial_qty} · 포장 기준 추정값`}
               </p>
             </div>

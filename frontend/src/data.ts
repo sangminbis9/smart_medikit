@@ -238,16 +238,20 @@ export function stockLabel(item: Package): string | null {
   if (!hasStock(item)) return null;
   const qty = item.inventory?.estimated_qty;
   const unit = item.medicines[0]?.form === 'CAPSULE' ? '캡슐' : '정';
-  return qty == null ? '초기 수량 미확인' : `예상 잔여 ${qty}${unit}`;
+  if (qty == null) return '수량을 입력해주세요';
+  // 실제 입력한 초기 수량과 같을 때만 가득 찬 것으로 표시한다.
+  if (qty > 0 && qty === item.inventory?.initial_qty)
+    return `가득 참 · ${qty}${unit}`;
+  return `예상 잔여 ${qty}${unit}`;
 }
 
 // 실제 만료일과 임시 관리 기준일의 근거를 구분한다.
 export function expiryLabel(item: Package, today = dayKey()): string {
   const expiry = item.expiry;
   if (expiry.verified && expiry.actual_expiry)
-    return `${expiry.actual_expiry.replaceAll('-', '.')} ${expiry.actual_expiry < today ? '만료' : '까지'}`;
+    return `유효기간: ${expiry.actual_expiry.replaceAll('-', '.')}${expiry.actual_expiry < today ? ' · 만료' : ''}`;
   if (expiry.temporary_management_date)
-    return `임시 기준 ${expiry.temporary_management_date.replaceAll('-', '.')}`;
+    return `유효기간: ${expiry.temporary_management_date.replaceAll('-', '.')} (추정)`;
   return '유효기간 미확인';
 }
 

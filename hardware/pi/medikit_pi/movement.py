@@ -80,6 +80,54 @@ def compare_interior(before, after, before_items, after_items, *, automatic_in=F
     return result
 
 
+# 포장 사진의 인쇄 특징을 닫힌 내부 사진에 대응시켜 해당 포장만 찾는다.
+def match_package_interior(package, interior):
+    images = []
+    for frame in (package, interior):
+        scale = min(1, 1600 / max(frame.shape[:2]))
+        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        if scale < 1:
+            gray = cv2.resize(gray, None, fx=scale, fy=scale, interpolation=cv2.INTER_AREA)
+        images.append(gray)
+    reference, scene = images
+    detector = cv2.SIFT_create(nfeatures=2200)
+    source, source_desc = detector.detectAndCompute(reference, None)
+    target, target_desc = detector.detectAndCompute(scene, None)
+    if source_desc is None or target_desc is None or len(target_desc) < 2:
+        return None
+    pairs = cv2.BFMatcher().knnMatch(source_desc, target_desc, k=2)
+    # 인쇄 글자처럼 반복되는 모양은 두 번째 후보와 충분히 구분될 때만 사용한다.
+    matches = sorted((a for a, b in pairs if a.distance < .74 * b.distance), key=lambda m: m.distance)
+    unique = {m.trainIdx: m for m in reversed(matches)}
+    if len(unique) < 12:
+        return None
+    src = np.float32([source[m.queryIdx].pt for m in unique.values()])
+    dst = np.float32([target[m.trainIdx].pt for m in unique.values()])
+    transform, mask = cv2.findHomography(src, dst, cv2.RANSAC, 4)
+    if transform is None or mask is None:
+        return None
+    inliers = mask.ravel().astype(bool)
+    h, w = reference.shape
+    # 작은 로고 한 곳만 우연히 일치할 경우 사진 전체를 투영하지 않는다.
+    if (inliers.sum() < 12 or inliers.mean() < .45
+            or cv2.contourArea(cv2.convexHull(src[inliers])) < w * h * .045):
+        return None
+    corners = np.float32([[[0, 0], [w, 0], [w, h], [0, h]]])
+    projected = cv2.perspectiveTransform(corners, transform)[0]
+    sh, sw = scene.shape
+    normalized = projected / np.float32([sw, sh])
+    if (not np.isfinite(normalized).all() or not cv2.isContourConvex(projected)
+            or not .004 <= cv2.contourArea(normalized, oriented=True) <= .5
+            or np.any(normalized < -.08) or np.any(normalized > 1.08)):
+        return None
+    # 앞에서 찍은 사진의 여백·손은 제외하고 일치한 인쇄면 주변만 사용한다.
+    low, high = np.quantile(dst[inliers] / [sw, sh], [.02, .98], axis=0)
+    margin = (high - low) * .12
+    low = np.maximum(low - margin, normalized.min(axis=0))
+    high = np.minimum(high + margin, normalized.max(axis=0))
+    return tuple(float(v) for v in np.clip([*low, *high], 0, 1))
+
+
 # 로컬 사진 두 장과 준비된 모델로 후보를 평가하고 결과만 출력한다.
 def main():
     parser = argparse.ArgumentParser(description="보관함 전후 사진의 포장 변화 실험")

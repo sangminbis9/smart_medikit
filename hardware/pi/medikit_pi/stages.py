@@ -6,7 +6,7 @@ import logging
 import cv2
 import numpy as np
 
-from .movement import compare_interior, locate_candidate
+from .movement import compare_interior, locate_candidate, match_package_interior
 
 LOGGER = logging.getLogger(__name__)
 
@@ -75,6 +75,14 @@ class StageWorker:
                 'candidate': candidate,
                 'geometry': locate_candidate(candidate, self.geometry),
             }
+        package_path = directory / 'package.jpg'
+        if after is not None and package_path.is_file():
+            package = cv2.imdecode(np.frombuffer(package_path.read_bytes(), np.uint8), cv2.IMREAD_COLOR)
+            bounds = match_package_interior(package, after) if package is not None else None
+            if bounds:
+                # 포장과 내부 사진의 일치는 변화 방향과 독립적인 위치 증거다.
+                candidate = {'box': bounds}
+                result['package_match'] = {'candidate': candidate, 'geometry': locate_candidate(candidate, self.geometry)}
         result["observed_at"] = event["captured_at"]
         with store._mutex, store._db:
             store._db.execute("INSERT INTO movement_results VALUES(?,?)", (event["session_id"], json.dumps(result)))

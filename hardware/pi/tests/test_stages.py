@@ -105,6 +105,36 @@ def test_single_visible_candidate_is_preserved(tmp_path):
         box.close()
 
 
+# 배경 검출이 반출로 나오더라도 현재 포장 대조 위치를 함께 전송한다.
+def test_package_match_is_saved_when_interior_suggests_out(tmp_path, monkeypatch):
+    box = Outbox(tmp_path, staged=True)
+    detector = Mock()
+    worker = StageWorker(box, 'MOVEMENT_REQUESTED', detector=detector)
+    bounds = (.31, .28, .59, .55)
+    monkeypatch.setattr('medikit_pi.stages.match_package_interior', Mock(return_value=bounds))
+    try:
+        first = box.begin_session('test-box')
+        box.save_capture(first, 'interior', photo())
+        box.finish_session(first)
+        detector.predict.return_value = [Detection((.09, .11, .9, .91), .6, 'box')]
+        worker.step()
+        second = box.begin_session('test-box')
+        box.save_capture(second, 'package', photo())
+        box.save_capture(second, 'interior', photo())
+        box.finish_session(second)
+        detector.predict.side_effect = [detector.predict.return_value, []]
+        worker.step()
+        transport = Mock()
+        sync = StageWorker(box, 'MOVEMENT_REQUESTED', transport=transport)
+        sync.step()
+        sync.step()
+        result = transport.upload_stage.call_args.args[0]['movement']
+        assert result['candidate']['direction'] == 'OUT'
+        assert result['package_match']['candidate']['box'] == list(bounds)
+    finally:
+        box.close()
+
+
 # 파일 저장 뒤 큐 기록이 빠진 장애를 재시작 시 복구한다.
 def test_recover_missing_stage(tmp_path):
     box = Outbox(tmp_path, staged=True)

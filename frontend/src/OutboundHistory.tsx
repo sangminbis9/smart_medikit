@@ -50,7 +50,10 @@ export default function OutboundHistory({
     'loading',
   );
   const [error, setError] = useState('');
-  const [editing, setEditing] = useState<OutboundEvent | null>(null);
+  const [editing, setEditing] = useState<{
+    item: OutboundEvent;
+    result: 'TAKEN' | 'DISPOSED';
+  } | null>(null);
   const [quantity, setQuantity] = useState('');
   const [saving, setSaving] = useState(false);
   const [formError, setFormError] = useState('');
@@ -149,9 +152,9 @@ export default function OutboundHistory({
     [selectedId, status],
   );
 
-  // 복용 수량을 입력할 대화상자를 연다.
-  function begin(item: OutboundEvent) {
-    setEditing(item);
+  // 복용 수량 입력 또는 폐기 확인 대화상자를 연다.
+  function begin(item: OutboundEvent, result: 'TAKEN' | 'DISPOSED') {
+    setEditing({ item, result });
     setQuantity('');
     setFormError('');
   }
@@ -163,7 +166,7 @@ export default function OutboundHistory({
   // 서버가 확인한 최초 응답만 대기 목록에서 제거하고 이력에 반영한다.
   async function confirm(
     item: OutboundEvent,
-    result: 'TAKEN' | 'NOT_TAKEN',
+    result: Exclude<OutboundEvent['status'], 'PENDING'>,
     count: number | null,
   ) {
     if (savingRef.current || !baseUrl) return;
@@ -231,11 +234,13 @@ export default function OutboundHistory({
       setSaving(false);
     }
   }
-  // 입력한 실제 수량만 서버에 제출한다.
+  // 폐기는 복용 수량 없이 저장하고 복용일 때만 입력 수량을 검사한다.
   function submit(event: FormEvent) {
     event.preventDefault();
     if (!editing) return;
-    const amount = editing.unit === 'OTHER' ? null : Number(quantity);
+    const { item, result } = editing;
+    const amount =
+      result === 'DISPOSED' || item.unit === 'OTHER' ? null : Number(quantity);
     if (
       amount !== null &&
       (!quantity || !Number.isSafeInteger(amount) || amount <= 0)
@@ -243,7 +248,7 @@ export default function OutboundHistory({
       setFormError('복용한 수량을 1 이상의 정수로 입력해주세요.');
       return;
     }
-    void confirm(editing, 'TAKEN', amount);
+    void confirm(item, result, amount);
   }
 
   return (
@@ -293,9 +298,13 @@ export default function OutboundHistory({
           ) : (
             <ul className="outbound-list">
               {data.pending.map(function pending(item) {
+                // 포장 전체를 폐기할지 확인한다.
+                function dispose() {
+                  begin(item, 'DISPOSED');
+                }
                 // 클릭만으로 반출이나 복용을 확정하지 않는다.
                 function yes() {
-                  begin(item);
+                  begin(item, 'TAKEN');
                 }
                 // 미복용도 서버의 확인 응답을 받은 뒤 이력으로 남긴다.
                 function no() {
@@ -314,6 +323,14 @@ export default function OutboundHistory({
                       </p>
                     </div>
                     <div className="outbound-actions">
+                      <button
+                        type="button"
+                        className="secondary-button outbound-dispose"
+                        onClick={dispose}
+                        disabled={saving}
+                      >
+                        폐기
+                      </button>
                       <button
                         type="button"
                         className="primary-button"
@@ -351,7 +368,11 @@ export default function OutboundHistory({
                       <Badge
                         tone={item.status === 'TAKEN' ? 'green' : 'neutral'}
                       >
-                        {item.status === 'TAKEN' ? '복용/사용 확인' : '미복용'}
+                        {item.status === 'TAKEN'
+                          ? '복용/사용 확인'
+                          : item.status === 'DISPOSED'
+                            ? '폐기 확인'
+                            : '미복용'}
                       </Badge>
                       <strong>{item.medicineName}</strong>
                       <p>
@@ -380,16 +401,26 @@ export default function OutboundHistory({
         </p>
       )}
       {editing && (
-        <Dialog title="복용·사용 확인" onClose={close} closeDisabled={saving}>
+        <Dialog
+          title={
+            editing.result === 'DISPOSED' ? '약품 폐기 확인' : '복용·사용 확인'
+          }
+          onClose={close}
+          closeDisabled={saving}
+        >
           <form onSubmit={submit} className="outbound-confirm">
             <p>
-              <strong>{editing.medicineName}</strong> ·{' '}
-              {formatTime(editing.occurredAt)}
+              <strong>{editing.item.medicineName}</strong> ·{' '}
+              {formatTime(editing.item.occurredAt)}
             </p>
-            <p>실제로 복용하거나 사용하셨나요?</p>
-            {editing.unit !== 'OTHER' && (
+            <p>
+              {editing.result === 'DISPOSED'
+                ? '이 포장을 폐기했나요? 확인하면 보관 약품 목록에서 제외됩니다.'
+                : '실제로 복용하거나 사용하셨나요?'}
+            </p>
+            {editing.result === 'TAKEN' && editing.item.unit !== 'OTHER' && (
               <label>
-                복용한 수량 ({editing.unit === 'CAPSULE' ? '캡슐' : '정'})
+                복용한 수량 ({editing.item.unit === 'CAPSULE' ? '캡슐' : '정'})
                 <input
                   type="number"
                   inputMode="numeric"
@@ -409,8 +440,19 @@ export default function OutboundHistory({
                 {formError}
               </p>
             )}
-            <button className="primary-button" disabled={saving}>
-              {saving ? '저장 중…' : '복용/사용 기록 저장'}
+            <button
+              className={
+                editing.result === 'DISPOSED'
+                  ? 'secondary-button outbound-dispose'
+                  : 'primary-button'
+              }
+              disabled={saving}
+            >
+              {saving
+                ? '저장 중…'
+                : editing.result === 'DISPOSED'
+                  ? '폐기 기록 저장'
+                  : '복용/사용 기록 저장'}
             </button>
           </form>
         </Dialog>

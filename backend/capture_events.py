@@ -122,7 +122,16 @@ def wake_notifications():
             print("NOTIFICATION_WAKE_RETRY_SCHEDULED")
 
 
-# 완료된 반입의 위치 후보를 현재도 같은 단독 포장인 경우에만 조건부 반영한다.
+# 직접 대조한 포장을 우선하고 없으면 내부 비교의 반입 후보를 사용한다.
+def observed_placement(movement):
+    direct = movement.get("package_match")
+    if isinstance(direct, dict) and direct.get("geometry") and isinstance(direct.get("candidate"), dict):
+        return direct
+    candidate = movement.get("candidate")
+    return movement if isinstance(candidate, dict) and candidate.get("direction") == "IN" else {}
+
+
+# 완료된 반입의 위치 후보를 현재도 같은 세션의 포장인 경우에만 조건부 반영한다.
 def apply_late_position(store, box, event_id, item):
     closed = item.get("SESSION_CLOSED") or {}
     movement_stage = item.get("MOVEMENT_REQUESTED") or {}
@@ -132,12 +141,9 @@ def apply_late_position(store, box, event_id, item):
             or movement_stage.get("sequence") != closed.get("sequence")
             or item.get("user_decision")):
         return
-    candidate = movement.get("candidate") or {}
-    if not isinstance(candidate, dict):
+    placement = observed_placement(movement)
+    if not placement and not movement.get("single_visible"):
         return
-    if candidate.get("direction") != "IN" and not movement.get("single_visible"):
-        return
-    placement = movement if candidate.get("direction") == "IN" else {}
     packages = [p for p in product_packages(store, box) if p.get("state") == "STORED"]
     single_visible = not placement and len(packages) == 1
     if single_visible:
@@ -289,9 +295,8 @@ def reconcile(store, box, event_id, decision=None):
         )
     elif by_inventory:
         direction = "OUT" if previous and previous.get("state") == "STORED" else "IN"
-        candidate = observed.get("candidate") or {}
-        # 내부 비교는 일치하는 반입의 위치만 보완하며 방향과 처리 시점을 정하지 않는다.
-        placement = observed if direction == "IN" and candidate.get("direction") == "IN" else {}
+        # 내부 분석은 반입 위치만 보완하며 방향과 처리 시점을 정하지 않는다.
+        placement = observed_placement(observed) if direction == "IN" else {}
         movement = {
             **closed,
             "captured_at": closed["closed_at"],
@@ -299,7 +304,7 @@ def reconcile(store, box, event_id, decision=None):
                 **placement,
                 "candidate": {
                     "direction": direction,
-                    "box": candidate.get("box", []) if placement else [],
+                    "box": (placement.get("candidate") or {}).get("box", []),
                 },
             },
         }

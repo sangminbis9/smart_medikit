@@ -2,7 +2,7 @@
 
 from unittest.mock import Mock
 import pytest
-from activity_api import confirm_activity, confirm_initial, ApiError
+from activity_api import confirm_activity, confirm_initial, ApiError, DynamoStore
 
 
 # 물리 반출 기록과 제품 제형이 있는 합성 저장소를 만든다.
@@ -37,6 +37,26 @@ def test_reject_repeat_and_excess():
     with pytest.raises(ApiError):
         confirm_activity(value, config, 'e1', {'result': 'TAKEN', 'quantity': 1})
     value.confirm.assert_not_called()
+
+
+# 사용자의 폐기 응답은 복용 수량 없이 저장하고 같은 반출에만 재고 상태를 바꾼다.
+def test_disposal_is_atomic_and_scoped_to_active_out():
+    config = dict(box='test', allow_estimated=True)
+    value = store()
+    value.confirm.side_effect = lambda *args: DynamoStore.confirm(value, *args)
+    value.encode.side_effect = dict
+    response = confirm_activity(value, config, 'e1', {'result': 'DISPOSED', 'quantity': None})
+    assert response['event']['status'] == 'DISPOSED'
+    assert response['event']['quantity'] is None
+    event, pack = [write['Update'] for write in value.client.transact_write_items.call_args.kwargs['TransactItems']]
+    assert event['ExpressionAttributeValues'][':result'] == 'DISPOSED'
+    assert '#status = :pending' in event['ConditionExpression']
+    assert 'active_out_event_id=:event' in pack['ConditionExpression']
+    assert pack['ExpressionAttributeValues'][':confirmed'] == 'CONFIRMED'
+    value.package.assert_not_called()
+    with pytest.raises(ApiError):
+        confirm_activity(value, config, 'e1', {'result': 'DISPOSED', 'quantity': 1})
+    value.client.transact_write_items.assert_called_once()
 
 
 # 새것 확인은 재고와 유통기한을 덮어쓰지 않는다.

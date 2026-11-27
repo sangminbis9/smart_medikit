@@ -140,6 +140,38 @@ def test_late_single_position_requires_current_unique_package():
     store.inventory.update_item.assert_not_called()
 
 
+# 내부 검출의 반출 판단과 관계없이 직접 일치한 포장의 위치를 저장한다.
+@pytest.mark.parametrize('arrived_late', [False, True])
+def test_package_match_survives_conflicting_movement(arrived_late):
+    store, record, _, _ = inventory_state_fixture()
+    record['MOVEMENT_REQUESTED']['movement'] = {
+        'candidate': {'direction': 'OUT', 'box': [.09, .11, .9, .91]},
+        'package_match': {'candidate': {'box': [.31, .28, .59, .55]},
+                          'geometry': {'position': {'x': 137.25, 'y': 68.48, 'z_estimated': 0,
+                                                    'certainty': 'UNCERTAIN'},
+                                       'size_class': 'SMALL'}},
+    }
+    if arrived_late:
+        record['processing_status'] = 'COMPLETED'
+        package = {'pk': 'PACKAGE#p1', 'state': 'STORED', 'last_event_id': 'e2', 'last_sequence': 2}
+        store.inventory.scan.return_value = {'Items': [package, {'state': 'STORED'}]}
+        assert reconcile(store, 'test', 'e2') == 'COMPLETED'
+        call = store.inventory.update_item.call_args.kwargs
+        assert call['ExpressionAttributeValues'][':bounds'][0] == Decimal('.31')
+        store.inventory.update_item.reset_mock()
+        package['last_event_id'] = 'e3'
+        assert reconcile(store, 'test', 'e2') == 'COMPLETED'
+        store.inventory.update_item.assert_not_called()
+        store.client.transact_write_items.assert_not_called()
+    else:
+        assert reconcile(store, 'test', 'e2') == 'COMPLETED'
+        writes = store.client.transact_write_items.call_args.kwargs['TransactItems']
+        package = writes[0]['Put']['Item']
+        assert package['state'] == 'STORED'
+        assert package['position']['x'] == Decimal('137.25')
+        assert package['visual_box'][0] == Decimal('.31')
+
+
 # 같은 이름의 다른 품목이나 폐기 이력은 신규 반입을 막지 않는다.
 def test_inventory_state_adds_new_product_without_movement():
     store, record, medicine, _ = inventory_state_fixture()

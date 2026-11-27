@@ -122,7 +122,7 @@ describe('표시 정책', function policies() {
     expect(stockLabel(item)).toBe('예상 잔여 0정');
     item.inventory!.initial_qty = 3;
     item.inventory!.estimated_qty = 3;
-    expect(stockLabel(item)).toBe('가득 참 · 3정');
+    expect(stockLabel(item)).toBe('전체 수량 3정');
     item.inventory!.estimated_qty = 2;
     expect(stockLabel(item)).toBe('예상 잔여 2정');
   });

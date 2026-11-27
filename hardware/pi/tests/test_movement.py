@@ -1,8 +1,9 @@
 """내부 영상 후보 비교가 불확실한 상황에서 확정을 피하는지 검사한다."""
 
+import cv2
 import numpy as np
 from medikit_pi.detection import Detection
-from medikit_pi.movement import compare_interior
+from medikit_pi.movement import compare_interior, match_package_interior
 
 
 # 같은 크기의 합성 내부 영상을 만든다.
@@ -90,3 +91,17 @@ def test_top_placement_hides_multiple_packages():
     result = compare_interior(frame, frame, lower, [upper], automatic_in=True)
     assert result['processing_status'] == 'COMPLETED'
     assert result['candidate']['direction'] == 'STATE'
+
+
+# 포장 사진과 각도·크기가 다른 내부 사진에서 같은 인쇄면의 위치를 찾는다.
+def test_match_package_interior():
+    rng = np.random.default_rng(317)
+    package = rng.integers(0, 255, (300, 400, 3), dtype=np.uint8)
+    package = cv2.GaussianBlur(package, (7, 7), 1.5)
+    source = np.float32([[0, 0], [400, 0], [400, 300], [0, 300]])
+    corners = np.float32([[190, 150], [480, 128], [505, 340], [200, 360]])
+    scene = cv2.warpPerspective(package, cv2.getPerspectiveTransform(source, corners), (800, 550))
+    bounds = match_package_interior(package, scene)
+    np.testing.assert_allclose(bounds, [190 / 800, 128 / 550, 505 / 800, 360 / 550], atol=.02)
+    unrelated = rng.integers(0, 255, (300, 400, 3), dtype=np.uint8)
+    assert match_package_interior(package, unrelated) is None

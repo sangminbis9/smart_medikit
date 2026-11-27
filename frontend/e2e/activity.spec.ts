@@ -90,8 +90,13 @@ test('신규 약 정보와 반출 미복용 이력을 저장한다', async funct
         json: { packageId: 'p1', firstRegistrationPending: false },
       });
     } else if (path.endsWith('/confirm')) {
-      const result = event.eventId === 'e1' ? 'NOT_TAKEN' : 'TAKEN';
-      const count = event.eventId === 'e1' ? null : 2;
+      const result =
+        event.eventId === 'e1'
+          ? 'NOT_TAKEN'
+          : event.eventId === 'e2'
+            ? 'TAKEN'
+            : 'DISPOSED';
+      const count = event.eventId === 'e2' ? 2 : null;
       expect(route.request().postDataJSON()).toEqual({
         result,
         quantity: count,
@@ -138,6 +143,18 @@ test('신규 약 정보와 반출 미복용 이력을 저장한다', async funct
   await page.getByRole('spinbutton').fill('2');
   await page.getByRole('dialog').getByRole('button', { name: /저장/ }).click();
   await expect(page.getByText('확인할 반출 기록이 없어요.')).toBeVisible();
+  confirmed = false;
+  event.eventId = 'e3';
+  event.status = 'PENDING';
+  event.recordedAt = null;
+  event.quantity = null;
+  await page.goto('/schedule?out_event=e3');
+  await page.getByRole('button', { name: '폐기', exact: true }).click();
+  const disposal = page.getByRole('dialog', { name: '약품 폐기 확인' });
+  await expect(disposal.getByRole('spinbutton')).toHaveCount(0);
+  await disposal.getByRole('button', { name: '폐기 기록 저장' }).click();
+  await expect(page.getByText('확인할 반출 기록이 없어요.')).toBeVisible();
+  await expect(page.getByText('폐기 확인', { exact: true })).toBeVisible();
 });
 
 // 새 약 수량 저장과 복약 화면의 반출·복용 기록 표시를 검증한다.

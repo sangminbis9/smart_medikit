@@ -69,6 +69,13 @@
   flex-wrap: wrap;
   gap: 8px;
 }
+.secondary-button.outbound-dispose {
+  background: #fff1ef;
+  color: #a33025;
+}
+.secondary-button.outbound-dispose:hover:not(:disabled) {
+  background: #fce0dc;
+}
 .outbound-confirm {
   display: grid;
   gap: 14px;

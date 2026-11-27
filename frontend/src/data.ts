@@ -241,7 +241,7 @@ export function stockLabel(item: Package): string | null {
   if (qty == null) return '수량을 입력해주세요';
   // 실제 입력한 초기 수량과 같을 때만 가득 찬 것으로 표시한다.
   if (qty > 0 && qty === item.inventory?.initial_qty)
-    return `가득 참 · ${qty}${unit}`;
+    return `전체 수량 ${qty}${unit}`;
   return `예상 잔여 ${qty}${unit}`;
 }
 

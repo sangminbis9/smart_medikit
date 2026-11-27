@@ -111,7 +111,7 @@ def event_view(item, box, allow_estimated=False):
     name, unit, status = item.get("medicineName"), item.get("unit"), item.get("status")
     if (not isinstance(name, str) or not name.strip() or len(name) > 200
             or unit not in ("TABLET", "CAPSULE", "OTHER")
-            or status not in ("PENDING", "TAKEN", "NOT_TAKEN")):
+            or status not in ("PENDING", "TAKEN", "NOT_TAKEN", "DISPOSED")):
         raise ValueError("INVALID_EVENT_FIELDS")
     timestamp(item.get("occurredAt"))
     recorded = item.get("recordedAt")
@@ -121,8 +121,8 @@ def event_view(item, box, allow_estimated=False):
             raise ValueError("INVALID_PENDING")
     else:
         timestamp(recorded)
-        if status == "NOT_TAKEN" and count is not None:
-            raise ValueError("INVALID_NOT_TAKEN")
+        if status in ("NOT_TAKEN", "DISPOSED") and count is not None:
+            raise ValueError("INVALID_CONFIRMATION_QUANTITY")
         if status == "TAKEN" and unit == "OTHER" and count is not None:
             raise ValueError("INVALID_OTHER_QUANTITY")
         if status == "TAKEN" and unit != "OTHER":
@@ -210,7 +210,7 @@ class DynamoStore:
                 raise ApiError(409, "PACKAGE_CHANGED", "약품 정보가 변경됐어요. 다시 확인해 주세요.") from None
             raise
 
-    # 확인 기록과 알약 차감을 하나의 조건부 트랜잭션으로 저장한다.
+    # 확인 기록과 재고 차감·폐기를 하나의 조건부 트랜잭션으로 저장한다.
     def confirm(self, box, event_id, result, count, recorded, package_id, inventory):
         event_update = {"TableName": ACTIVITY_TABLE,
                         "Key": self.encode({"pk": f"BOX#{box}", "sk": f"OUT#{event_id}"}),
@@ -219,7 +219,21 @@ class DynamoStore:
                         "ExpressionAttributeNames": {"#status": "status", "#quantity": "quantity", "#recorded": "recordedAt", "#kind": "eventType", "#package": "packageId"},
                         "ExpressionAttributeValues": self.encode({":result": result, ":quantity": count, ":recorded": recorded, ":pending": "PENDING", ":kind": "OUT", ":package": package_id})}
         changes = [{"Update": event_update}]
-        if inventory is not None:
+        if result == "DISPOSED":
+            # 이전 반출을 확인하는 동안 재반입된 포장이나 후속 반출이 바뀌지 않게 한다.
+            package_update = {
+                "TableName": INVENTORY_TABLE,
+                "Key": self.encode({"pk": f"PACKAGE#{package_id}", "sk": "META"}),
+                "UpdateExpression": "SET #state=:disposed, disposal_certainty=:confirmed",
+                "ConditionExpression": ("box_id=:box AND active_out_event_id=:event AND "
+                                        "(#state=:out OR (#state=:disposed AND disposal_certainty=:estimated))"),
+                "ExpressionAttributeNames": {"#state": "state"},
+                "ExpressionAttributeValues": self.encode({":box": box, ":event": event_id, ":out": "OUT",
+                                                       ":disposed": "DISPOSED", ":confirmed": "CONFIRMED",
+                                                       ":estimated": "ESTIMATED"}),
+            }
+            changes.append({"Update": package_update})
+        elif inventory is not None:
             prior = inventory["estimated_qty"]
             package_update = {"TableName": INVENTORY_TABLE,
                               "Key": self.encode({"pk": f"PACKAGE#{package_id}", "sk": "META"}),
@@ -266,7 +280,7 @@ def confirm_activity(store, config, event_id, body):
     event_id = identifier(event_id)
     exact_body(body, ("result", "quantity"))
     result = body["result"]
-    if result not in ("TAKEN", "NOT_TAKEN"):
+    if result not in ("TAKEN", "NOT_TAKEN", "DISPOSED"):
         raise ApiError(422, "INVALID_RESULT", "복용 여부를 확인해 주세요.")
     item = store.event(config["box"], event_id)
     if item is None:
@@ -278,7 +292,7 @@ def confirm_activity(store, config, event_id, body):
     if event is None or event["status"] != "PENDING":
         raise ApiError(409, "EVENT_CHANGED", "이미 확인했거나 확인할 수 없는 기록이에요.")
     count = body["quantity"]
-    if result == "NOT_TAKEN" or event["unit"] == "OTHER":
+    if result in ("NOT_TAKEN", "DISPOSED") or event["unit"] == "OTHER":
         if count is not None:
             raise ApiError(422, "INVALID_QUANTITY", "알약 수를 확인해 주세요.")
     else:

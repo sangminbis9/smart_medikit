@@ -8,7 +8,7 @@ export const eventSchema = z.object({
   occurredAt: z.iso.datetime({ offset: true }),
   eventType: z.literal('OUT').optional(),
   movementCertainty: z.enum(['CONFIRMED', 'ESTIMATED']).optional(),
-  status: z.enum(['PENDING', 'TAKEN', 'NOT_TAKEN']),
+  status: z.enum(['PENDING', 'TAKEN', 'NOT_TAKEN', 'DISPOSED']),
   quantity: z.number().int().positive().nullable(),
   unit: z.enum(['TABLET', 'CAPSULE', 'OTHER']),
   recordedAt: z.iso.datetime({ offset: true }).nullable(),
@@ -34,7 +34,8 @@ export const activitySchema = z
               item.quantity !== null)) ||
           (group === 'history' &&
             (item.status === 'PENDING' || item.recordedAt === null)) ||
-          (item.status === 'NOT_TAKEN' && item.quantity !== null) ||
+          ((item.status === 'NOT_TAKEN' || item.status === 'DISPOSED') &&
+            item.quantity !== null) ||
           (item.status === 'TAKEN' &&
             (item.unit === 'OTHER') !== (item.quantity === null))
         ) {

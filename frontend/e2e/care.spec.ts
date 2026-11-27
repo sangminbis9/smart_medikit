@@ -3,6 +3,31 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { careGuides } from '../src/careGuides';
 
+// 한글 조합 중에는 주소를 바꾸지 않고 완료 직후 이동해도 검색어를 보존한다.
+test('케어 검색에서 한글 조합과 빠른 상세 이동을 유지한다', async function composition({
+  page,
+}) {
+  await page.goto('/care?category=통증%20및%20발열');
+  const input = page.getByRole('searchbox', { name: '증상 검색' });
+  await input.dispatchEvent('compositionstart', { data: '' });
+  await input.fill('두');
+  await page.waitForTimeout(350);
+  await expect(page).toHaveURL(/category=/);
+  expect(new URL(page.url()).searchParams.has('q')).toBe(false);
+  await input.fill('두통');
+  await input.dispatchEvent('compositionend', { data: '통' });
+  await expect(input).toHaveValue('두통');
+  await expect(
+    page.getByRole('link', { name: '두통', exact: true }),
+  ).toBeVisible();
+  await page.getByRole('link', { name: '두통', exact: true }).click();
+  await page.getByRole('link', { name: '증상 목록으로' }).click();
+  await expect(input).toHaveValue('두통');
+  await expect
+    .poll(() => new URL(page.url()).searchParams.get('q'))
+    .toBe('두통');
+});
+
 // PC·휴대폰에서 검색·상세·위험 신호·목록 복귀와 렌더링 오류를 검증한다.
 test('케어 검색 → 상세 → 목록 복귀와 32개 가이드', async function care({
   page,

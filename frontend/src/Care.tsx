@@ -1,4 +1,4 @@
-import { useEffect, useRef, type ChangeEvent } from 'react';
+import { useEffect, useRef, useState, type ChangeEvent } from 'react';
 import { Link, useParams, useSearchParams } from 'react-router-dom';
 import { careCategories, careGuides, findCareGuides } from './careGuides';
 import type { Medkit } from './useMedkit';
@@ -8,18 +8,44 @@ import CareMedicines from './CareMedicines';
 // 검색과 카테고리를 주소에 남겨 상세 화면에서 돌아와도 탐색을 유지한다.
 export function CareIndex() {
   const [params, setParams] = useSearchParams();
-  const query = params.get('q') || '';
+  const urlQuery = params.get('q') || '';
+  const [query, setQuery] = useState(urlQuery);
+  const [composing, setComposing] = useState(false);
   const category = params.get('category') || '';
   const results = findCareGuides(query, category);
-  // 입력한 검색어만 바꾸고 선택 카테고리는 유지한다.
+  // 뒤로 가기와 외부 링크에서 전달된 검색어를 입력창에 반영한다.
+  useEffect(
+    function syncQuery() {
+      setQuery(urlQuery);
+    },
+    [urlQuery],
+  );
+  // 조합이 끝난 검색어만 주소에 모아 반영해 입력 중 라우팅을 줄인다.
+  useEffect(
+    function syncAddress() {
+      if (composing || query === urlQuery) return;
+      const timer = window.setTimeout(function updateAddress() {
+        const next = new URLSearchParams(params);
+        if (query) next.set('q', query);
+        else next.delete('q');
+        setParams(next, { replace: true });
+      }, 250);
+      return function cancelUpdate() {
+        window.clearTimeout(timer);
+      };
+    },
+    [composing, query, urlQuery, params, setParams],
+  );
+  const currentParams = new URLSearchParams(params);
+  if (query) currentParams.set('q', query);
+  else currentParams.delete('q');
+  // 조합 중에도 입력창과 검색 결과는 즉시 갱신한다.
   function search(event: ChangeEvent<HTMLInputElement>) {
-    const next = new URLSearchParams(params);
-    if (event.target.value) next.set('q', event.target.value);
-    else next.delete('q');
-    setParams(next, { replace: true });
+    setQuery(event.target.value);
   }
   // 카테고리 선택과 검색을 초기화한다.
   function reset() {
+    setQuery('');
     setParams({});
   }
   return (
@@ -47,6 +73,13 @@ export function CareIndex() {
           type="search"
           value={query}
           onChange={search}
+          onCompositionStart={function startComposition() {
+            setComposing(true);
+          }}
+          onCompositionEnd={function endComposition(event) {
+            setQuery(event.currentTarget.value);
+            setComposing(false);
+          }}
           placeholder="증상으로 찾아보세요. 예: 두통, 코막힘"
         />
       </label>
@@ -60,7 +93,7 @@ export function CareIndex() {
         {careCategories.map(
           // 기존 검색을 유지한 채 카테고리만 전환한다.
           function filter(name) {
-            const next = new URLSearchParams(params);
+            const next = new URLSearchParams(currentParams);
             next.set('category', name);
             return (
               <Link
@@ -115,7 +148,7 @@ export function CareIndex() {
                       return (
                         <Link
                           key={item.id}
-                          to={`/care/${item.id}${params.size ? `?${params}` : ''}`}
+                          to={`/care/${item.id}${currentParams.size ? `?${currentParams}` : ''}`}
                           className="care-symptom-link"
                         >
                           <span>{item.name}</span>

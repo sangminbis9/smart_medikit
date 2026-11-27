@@ -10,15 +10,37 @@ export async function getJson(
 ): Promise<unknown> {
   const url = new URL(`${settings.apiUrl}${path}`);
   url.searchParams.set('box_id', settings.boxId);
-  const response = await fetch(url, {
-    signal,
-    credentials: 'include',
-    cache: 'no-store',
-    headers: { Accept: 'application/json' },
-  });
-  if (!response.ok)
-    throw new Error(`서버 조회에 실패했어요. (${response.status})`);
-  return response.json();
+  for (let attempt = 0; attempt < 4; attempt++) {
+    const response = await fetch(url, {
+      signal,
+      credentials: 'include',
+      cache: 'no-store',
+      headers: { Accept: 'application/json' },
+    });
+    if (response.ok) return response.json();
+    if (response.status !== 429 || attempt === 3)
+      throw new Error(`서버 조회에 실패했어요. (${response.status})`);
+    // 여러 기기의 재시도가 같은 시각에 몰리지 않도록 간격을 둔다.
+    await new Promise<void>(function wait(resolve, reject) {
+      if (signal.aborted) {
+        reject(new DOMException('Aborted', 'AbortError'));
+        return;
+      }
+      const timer = window.setTimeout(
+        function complete() {
+          signal.removeEventListener('abort', cancel);
+          resolve();
+        },
+        1200 * (attempt + 1) + Math.random() * 500,
+      );
+      // 취소된 조회는 다음 재시도를 수행하지 않는다.
+      function cancel() {
+        window.clearTimeout(timer);
+        reject(new DOMException('Aborted', 'AbortError'));
+      }
+      signal.addEventListener('abort', cancel, { once: true });
+    });
+  }
 }
 
 // 서버 조회와 시연 데이터를 분리하고 늦게 도착한 이전 응답을 무시한다.
@@ -53,16 +75,14 @@ export function useMedkit() {
       request.current = controller;
       // 첫 조회에만 로딩 영역을 표시하고 백그라운드 갱신은 기존 화면을 유지한다.
       if (!hasSnapshot.current) setStatus('loading');
-      const timeout = window.setTimeout(abortRequest, 12000);
+      const timeout = window.setTimeout(abortRequest, 20000);
       // 응답이 멈춘 요청은 종료하고 재시도할 수 있게 한다.
       function abortRequest() {
         controller.abort();
       }
       try {
-        const [inventory, alerts] = await Promise.all([
-          getJson('/inventory', controller.signal),
-          getJson('/alerts', controller.signal),
-        ]);
+        const inventory = await getJson('/inventory', controller.signal);
+        const alerts = await getJson('/alerts', controller.signal);
         if (request.current !== controller || controller.signal.aborted) return;
         const next = parseData(inventory, alerts, settings.boxId);
         // 변하지 않은 목록과 치수의 참조를 유지해 3D 장면을 불필요하게 다시 만들지 않는다.

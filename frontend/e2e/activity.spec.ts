@@ -1,6 +1,42 @@
 import { test, expect } from '@playwright/test';
 import { packageSchema } from '../src/data';
 
+// 일시적인 API 요청 제한이 풀리면 최신 보관함을 다시 불러온다.
+test('요청 제한 후 보관함 조회를 재시도한다', async function retryThrottle({
+  page,
+}) {
+  let calls = 0;
+  await page.route('**/api/**', async function api(route) {
+    if (route.request().url().includes('/inventory')) {
+      calls++;
+      if (calls === 1) {
+        await route.fulfill({
+          status: 429,
+          json: { message: 'Too Many Requests' },
+        });
+        return;
+      }
+      await route.fulfill({
+        json: {
+          box: { box_id: 'test-box' },
+          packages: [],
+          inventory_status: 'CONFIRMED',
+        },
+      });
+      return;
+    }
+    await route.fulfill({ json: { alerts: [] } });
+  });
+  await page.goto('/');
+  await expect(
+    page.getByRole('region', { name: '보관 약품 목록' }),
+  ).toContainText('보관 약품 0');
+  await expect(
+    page.getByText('최신 정보를 가져오지 못했어요.', { exact: false }),
+  ).toHaveCount(0);
+  expect(calls).toBeGreaterThanOrEqual(2);
+});
+
 // 제품 캐시가 남아 있어도 보관 포장이 없으면 홈에 빈 보관함을 표시한다.
 test('포장 없는 제품은 홈과 케어 가이드에 표시하지 않는다', async function emptyCabinet({
   page,

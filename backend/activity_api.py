@@ -221,18 +221,17 @@ class DynamoStore:
         changes = [{"Update": event_update}]
         if result == "DISPOSED":
             # 이전 반출을 확인하는 동안 재반입된 포장이나 후속 반출이 바뀌지 않게 한다.
-            package_update = {
+            package_delete = {
                 "TableName": INVENTORY_TABLE,
                 "Key": self.encode({"pk": f"PACKAGE#{package_id}", "sk": "META"}),
-                "UpdateExpression": "SET #state=:disposed, disposal_certainty=:confirmed",
                 "ConditionExpression": ("box_id=:box AND active_out_event_id=:event AND "
                                         "(#state=:out OR (#state=:disposed AND disposal_certainty=:estimated))"),
                 "ExpressionAttributeNames": {"#state": "state"},
                 "ExpressionAttributeValues": self.encode({":box": box, ":event": event_id, ":out": "OUT",
-                                                       ":disposed": "DISPOSED", ":confirmed": "CONFIRMED",
+                                                       ":disposed": "DISPOSED",
                                                        ":estimated": "ESTIMATED"}),
             }
-            changes.append({"Update": package_update})
+            changes.append({"Delete": package_delete})
         elif inventory is not None:
             prior = inventory["estimated_qty"]
             package_update = {"TableName": INVENTORY_TABLE,

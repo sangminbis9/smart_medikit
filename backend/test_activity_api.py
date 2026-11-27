@@ -48,11 +48,13 @@ def test_disposal_is_atomic_and_scoped_to_active_out():
     response = confirm_activity(value, config, 'e1', {'result': 'DISPOSED', 'quantity': None})
     assert response['event']['status'] == 'DISPOSED'
     assert response['event']['quantity'] is None
-    event, pack = [write['Update'] for write in value.client.transact_write_items.call_args.kwargs['TransactItems']]
+    writes = value.client.transact_write_items.call_args.kwargs['TransactItems']
+    event, pack = writes[0]['Update'], writes[1]['Delete']
     assert event['ExpressionAttributeValues'][':result'] == 'DISPOSED'
     assert '#status = :pending' in event['ConditionExpression']
     assert 'active_out_event_id=:event' in pack['ConditionExpression']
-    assert pack['ExpressionAttributeValues'][':confirmed'] == 'CONFIRMED'
+    assert pack['Key']['pk'] == 'PACKAGE#p1'
+    assert ':out' in pack['ExpressionAttributeValues']
     value.package.assert_not_called()
     with pytest.raises(ApiError):
         confirm_activity(value, config, 'e1', {'result': 'DISPOSED', 'quantity': 1})

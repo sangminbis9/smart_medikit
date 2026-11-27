@@ -231,7 +231,7 @@ export function CareDetail({ kit }: { kit: Medkit }) {
       <div className="care-detail-grid">
         <section aria-labelledby="care-steps-title">
           <div className="care-section-heading">
-            <h2 id="care-steps-title">일반 건강정보</h2>
+            <h2 id="care-steps-title">대처 방법</h2>
             <span>{guide.steps.length}단계</span>
           </div>
           <ol className="care-steps">

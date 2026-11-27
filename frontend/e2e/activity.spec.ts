@@ -1,6 +1,51 @@
 import { test, expect } from '@playwright/test';
 import { packageSchema } from '../src/data';
 
+// 제품 캐시가 남아 있어도 보관 포장이 없으면 홈에 빈 보관함을 표시한다.
+test('포장 없는 제품은 홈과 케어 가이드에 표시하지 않는다', async function emptyCabinet({
+  page,
+}) {
+  const item = packageSchema.parse({
+    package_id: 'p-cache',
+    box_id: 'test-box',
+    kind: 'OTC',
+    state: 'OUT',
+    name: '합성 시험약',
+    medicines: [
+      {
+        medicine_id: 'm-cache',
+        name: '합성 시험약',
+        product_info_status: 'SUCCEEDED',
+        product_info: {
+          source: 'DYNAMODB_PRODUCT_INFO',
+          indications: '두통 완화',
+        },
+      },
+    ],
+  });
+  await page.route('**/api/**', async function inventory(route) {
+    await route.fulfill({
+      json: route.request().url().includes('/inventory')
+        ? {
+            box: { box_id: 'test-box' },
+            packages: [],
+            catalog_medicines: item.medicines,
+            catalog_complete: true,
+            inventory_status: 'CONFIRMED',
+          }
+        : { alerts: [] },
+    });
+  });
+  await page.goto('/');
+  await expect(page.getByText('보관 중 0', { exact: false })).toBeAttached();
+  await expect(
+    page.getByRole('region', { name: '보관 약품 목록' }),
+  ).toContainText('보관 약품 0');
+  await expect(page.getByText('합성 시험약')).toHaveCount(0);
+  await page.goto('/care/headache');
+  await expect(page.getByText('합성 시험약')).toHaveCount(0);
+});
+
 // 반출 상태는 재고 기록에 남아도 홈의 보관 목록과 3D에서 제외한다.
 test('반출된 포장은 홈 보관 목록에 표시하지 않는다', async function outboundHome({
   page,

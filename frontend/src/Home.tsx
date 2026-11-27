@@ -4,12 +4,10 @@ import InitialPackage from './InitialPackage';
 import {
   expiryLabel,
   displayMedicineName,
-  findCatalogMedicines,
   findPackages,
   stockLabel,
   type Package,
 } from './data';
-import CatalogMedicines from './CatalogMedicines';
 import { careCategories } from './careGuides';
 import { findCategoryMedicines } from './careMatching';
 import { formatDosageText } from './MedicineUsage';
@@ -49,8 +47,6 @@ export default function Home({
   const { data, demo } = kit;
   const navigate = useNavigate();
   const location = useLocation();
-  const catalogCount = demo ? 0 : findCatalogMedicines(data).length;
-  const catalogOnly = data.packages.length === 0 && catalogCount > 0;
   const list = useRef<HTMLDivElement>(null);
   const scrollTarget = useRef<number | null>(null);
   const [category, setCategory] = useState('');
@@ -167,16 +163,11 @@ export default function Home({
       <div className="page-heading home-heading">
         <div>
           <h1>우리집 약품함</h1>
-          <p>
-            {catalogOnly
-              ? '등록된 약품을 검색하고 제품 정보를 확인하세요.'
-              : '보고 있는 약을, 보관함에서도 바로 찾아보세요.'}
-          </p>
+          <p>보고 있는 약을, 보관함에서도 바로 찾아보세요.</p>
         </div>
         <div className="heading-badges">
-          {catalogCount > 0 && <Badge>등록 제품 {catalogCount}</Badge>}
-          {!catalogOnly && <Badge tone="green">보관 중 {stored}</Badge>}
-          {!catalogOnly && <Badge tone="amber">확인할 정보 {review}</Badge>}
+          <Badge tone="green">보관 중 {stored}</Badge>
+          <Badge tone="amber">확인할 정보 {review}</Badge>
         </div>
         <Link className="mobile-connection" to="/device">
           <Badge tone={demo ? 'amber' : 'neutral'}>
@@ -215,9 +206,7 @@ export default function Home({
         </div>
         <span>분류는 효능 문구를 기준으로 검색해요.</span>
       </div>
-      <div
-        className={`home-grid${!catalogOnly && catalogCount > 0 ? ' home-grid-with-catalog' : ''}`}
-      >
+      <div className="home-grid">
         <div className="scene-column">
           <Suspense
             fallback={
@@ -253,131 +242,108 @@ export default function Home({
               </p>
             </Link>
           ) : (
-            <div
-              className={`focus-summary${catalogOnly ? ' catalog-position-note' : ''}`}
-            >
+            <div className="focus-summary">
               <h2>
-                {catalogOnly
-                  ? '포장 위치 정보가 아직 없어요'
-                  : query || category
-                    ? '검색 결과가 없어요'
-                    : '아직 보관된 약품이 없어요'}
+                {query || category
+                  ? '검색 결과가 없어요'
+                  : '아직 보관된 약품이 없어요'}
               </h2>
-              <p>
-                {catalogOnly
-                  ? '등록된 제품은 목록에서 볼 수 있어요. 포장 위치가 연결되면 3D에 표시돼요.'
-                  : '보관함 카메라로 등록한 약품이 여기에 표시돼요.'}
-              </p>
+              <p>보관함 카메라로 등록한 약품이 여기에 표시돼요.</p>
             </div>
           )}
           <p className="scene-caption">
             가려진 약품의 위치는 실제 배치와 다를 수 있어요.
           </p>
         </div>
-        {catalogOnly ? (
-          <CatalogMedicines
-            kit={kit}
-            query={query}
-            medicineIds={categoryMatches?.medicineIds}
-          />
-        ) : (
-          <section className="inventory" aria-label="보관 약품 목록">
-            <div className="inventory-heading">
-              <div className="flex items-center justify-between gap-3">
-                <h2>
-                  보관 약품 <span>{items.length}</span>
-                </h2>
-                <div className="stepper">
-                  <span>
-                    {index < 0 ? '00' : String(index + 1).padStart(2, '0')} /{' '}
-                    {String(items.length).padStart(2, '0')}
-                  </span>
-                  <button
-                    className="icon-button"
-                    aria-label="이전 약품"
-                    onClick={previous}
-                    disabled={index <= 0}
-                  >
-                    <Icon name="up" />
-                  </button>
-                  <button
-                    className="icon-button"
-                    aria-label="다음 약품"
-                    onClick={next}
-                    disabled={index < 0 || index >= items.length - 1}
-                  >
-                    <Icon name="down" />
-                  </button>
-                </div>
-              </div>
-              <p>카드를 스크롤하면 3D에서도 같은 약을 강조해요.</p>
-            </div>
-            <div
-              className="card-list"
-              ref={list}
-              tabIndex={0}
-              aria-label="약품 카드 스크롤 영역"
-            >
-              {items.length ? (
-                items.map(
-                  /* 포장별 요약 카드와 상세 링크를 표시한다. */ function card(
-                    item,
-                    order,
-                  ) {
-                    // 카드 본문을 선택하면 3D만 바꾸고 상세 링크는 별도로 연다.
-                    function focus() {
-                      select(item.package_id);
-                      if (
-                        item.first_registration_pending ||
-                        (item.inventory?.stock_enabled &&
-                          item.inventory.estimated_qty == null)
-                      )
-                        navigate(
-                          `/?new_package=${encodeURIComponent(item.package_id)}`,
-                        );
-                    }
-                    return (
-                      <PackageCard
-                        key={item.package_id}
-                        item={item}
-                        order={order + 1}
-                        selected={item.package_id === selectedId}
-                        onSelect={focus}
-                      />
-                    );
-                  },
-                )
-              ) : (
-                <EmptyState
-                  title={
-                    query || category
-                      ? '일치하는 약품이 없어요'
-                      : '첫 약품을 기다리고 있어요'
-                  }
-                  action={
-                    query || category ? (
-                      <button className="secondary-button" onClick={clear}>
-                        검색 초기화
-                      </button>
-                    ) : undefined
-                  }
+        <section className="inventory" aria-label="보관 약품 목록">
+          <div className="inventory-heading">
+            <div className="flex items-center justify-between gap-3">
+              <h2>
+                보관 약품 <span>{items.length}</span>
+              </h2>
+              <div className="stepper">
+                <span>
+                  {index < 0 ? '00' : String(index + 1).padStart(2, '0')} /{' '}
+                  {String(items.length).padStart(2, '0')}
+                </span>
+                <button
+                  className="icon-button"
+                  aria-label="이전 약품"
+                  onClick={previous}
+                  disabled={index <= 0}
                 >
-                  {query || category
-                    ? '약 이름이나 다른 검색어로 다시 찾아보세요.'
-                    : '약 포장을 보관함 카메라에 보여주면 자동 등록돼요.'}
-                </EmptyState>
-              )}
+                  <Icon name="up" />
+                </button>
+                <button
+                  className="icon-button"
+                  aria-label="다음 약품"
+                  onClick={next}
+                  disabled={index < 0 || index >= items.length - 1}
+                >
+                  <Icon name="down" />
+                </button>
+              </div>
             </div>
-          </section>
-        )}
+            <p>카드를 스크롤하면 3D에서도 같은 약을 강조해요.</p>
+          </div>
+          <div
+            className="card-list"
+            ref={list}
+            tabIndex={0}
+            aria-label="약품 카드 스크롤 영역"
+          >
+            {items.length ? (
+              items.map(
+                /* 포장별 요약 카드와 상세 링크를 표시한다. */ function card(
+                  item,
+                  order,
+                ) {
+                  // 카드 본문을 선택하면 3D만 바꾸고 상세 링크는 별도로 연다.
+                  function focus() {
+                    select(item.package_id);
+                    if (
+                      item.first_registration_pending ||
+                      (item.inventory?.stock_enabled &&
+                        item.inventory.estimated_qty == null)
+                    )
+                      navigate(
+                        `/?new_package=${encodeURIComponent(item.package_id)}`,
+                      );
+                  }
+                  return (
+                    <PackageCard
+                      key={item.package_id}
+                      item={item}
+                      order={order + 1}
+                      selected={item.package_id === selectedId}
+                      onSelect={focus}
+                    />
+                  );
+                },
+              )
+            ) : (
+              <EmptyState
+                title={
+                  query || category
+                    ? '일치하는 약품이 없어요'
+                    : '첫 약품을 기다리고 있어요'
+                }
+                action={
+                  query || category ? (
+                    <button className="secondary-button" onClick={clear}>
+                      검색 초기화
+                    </button>
+                  ) : undefined
+                }
+              >
+                {query || category
+                  ? '약 이름이나 다른 검색어로 다시 찾아보세요.'
+                  : '약 포장을 보관함 카메라에 보여주면 자동 등록돼요.'}
+              </EmptyState>
+            )}
+          </div>
+        </section>
       </div>
-      {!catalogOnly && (
-        <CatalogMedicines
-          kit={kit}
-          query={query}
-          medicineIds={categoryMatches?.medicineIds}
-        />
-      )}
       <InitialPackage key={location.search} kit={kit} />
     </div>
   );

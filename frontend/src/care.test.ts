@@ -14,9 +14,10 @@ import { emptyData, packageSchema, snapshotSchema, type Package } from './data';
 
 const now = new Date('2026-11-02T12:00:00+09:00');
 
-// 효능 검색용 제품을 만들며 검토 승인과 실제 보유는 부여하지 않는다.
+// 효능 검색용 합성 보관 포장을 만든다.
 function indicationData(text: string) {
-  const medicine = reviewedPackage().medicines[0];
+  const item = reviewedPackage();
+  const medicine = item.medicines[0];
   medicine.care_assessment = null;
   medicine.product_info = {
     source: 'DYNAMODB_PRODUCT_INFO',
@@ -26,6 +27,7 @@ function indicationData(text: string) {
   };
   return {
     ...emptyData(),
+    packages: [item],
     catalog_medicines: [medicine],
     catalog_complete: true,
   };
@@ -438,8 +440,8 @@ describe('제품 연결 안전 경계', function matching() {
       }
     }
   });
-  // 제품이 조회되어도 포장 연결이 없으면 미보유나 사용 가능으로 확정하지 않는다.
-  it('빈 포장과 제품 정보가 함께 있으면 보관 정보 확인이 필요하다', function unlinkedCatalog() {
+  // 포장 없는 제품 캐시는 보관 약품으로 표시하지 않는다.
+  it('빈 보관함은 제품 캐시가 있어도 미보유다', function unlinkedCatalog() {
     const data = {
       ...emptyData(),
       inventory_status: 'CONFIRMED' as const,
@@ -453,9 +455,9 @@ describe('제품 연결 안전 경계', function matching() {
       true,
       now,
     );
-    expect(matched.status).toBe('확인 필요');
-    expect(matched.reason).toContain('등록된 제품 정보는 조회됐지만');
+    expect(matched.status).toBe('미보유');
     expect(matched.matches).toEqual([]);
+    expect(findIndicationMedicines(data, 'headache').matches).toEqual([]);
   });
   // 관련 없는 제품도 검토가 완료되어야 미보유 판정에 사용할 수 있다.
   it('승인된 비관련 제품만 있으면 미보유', function noMatch() {

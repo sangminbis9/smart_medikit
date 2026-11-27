@@ -38,7 +38,7 @@ export default function CareMedicines({
     >
       <div className="catalog-heading">
         <h2>
-          등록된 {guide.name} 관련 약품 <span>{matches.length}개</span>
+          보유 중인 {guide.name} 관련 약품 <span>{matches.length}개</span>
         </h2>
         <Badge>문구 검색</Badge>
       </div>
@@ -54,8 +54,7 @@ export default function CareMedicines({
       {(!kit.online || kit.status !== 'ready') && (
         <p role="status">이전 조회 결과예요. 최신 정보 확인이 필요해요.</p>
       )}
-      {(!kit.data.catalog_complete ||
-        kit.data.inventory_status !== 'CONFIRMED') && (
+      {kit.data.inventory_status !== 'CONFIRMED' && (
         <p>일부 정보만 조회되었어요. 검색 결과가 완전하지 않을 수 있어요.</p>
       )}
       {unavailableCount > 0 && (

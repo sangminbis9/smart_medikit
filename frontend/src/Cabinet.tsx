@@ -401,7 +401,7 @@ export default function Cabinet({
       <div className="flex items-center justify-between gap-2">
         <h2 className="cabinet-title">3D 보관함</h2>
         <Badge tone="amber">
-          {demo ? '시연 위치' : dimensions ? '위치 추정' : '치수 미설정'}
+          {demo ? '시연 위치' : dimensions ? '촬영 위치' : '치수 미설정'}
         </Badge>
       </div>
       <div

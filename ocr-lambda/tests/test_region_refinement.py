@@ -21,6 +21,7 @@ from backend.image_ocr import (
     reconcile_regions,
 )
 from backend.lambda_function import process_records
+from backend.mfds import permit_pack_sizes
 from backend.pi_package import PackageReader
 from backend.recognition import RecognitionError, identify, match_products
 
@@ -59,6 +60,37 @@ def test_package_title_joins_small_form_and_ignores_count():
     result = identify(cells, api)
     assert [medicine["name"] for medicine in result["medicines"]] == ["베아제정"]
     assert len(cells[0]["lines"]) == 2
+
+
+# 식약처에서 허가한 전체 수량만 읽고 묶음의 개별 PTP 수량은 별도로 세지 않는다.
+def test_permit_pack_sizes():
+    assert permit_pack_sizes('3정/PTP, 10정/PTP, 100정/병, 500정/병\n수출용 : 20정((10정/PTP)×2), 30정((10정/PTP)×3)', 'TABLET') == [3, 10, 20, 30, 100, 500]
+    assert permit_pack_sizes('30캡슐/병, 30캡슐/PTP', 'CAPSULE') == [30]
+    assert permit_pack_sizes('10정/PTP × 2, 3정/PTP', 'TABLET') == []
+
+
+# 제품 식별 결과와 촬영 수량을 나누어 저장할 수 있도록 관측값만 넘긴다.
+def test_package_reader_observes_standalone_count():
+    reader = PackageReader()
+    reader._predict = Mock(return_value=[line('베아제정', (20, 30, 400, 100), .98), line('3정', (435, 150, 480, 180), .97)])
+    _, photo = cv2.imencode('.jpg', np.full((300, 600, 3), 210, np.uint8))
+    item = reader.match_package(photo.tobytes(), api_for(product('베아제정')), .9, Diagnostics('test', enabled=False))
+    assert item['observed_pack_sizes'] == [3]
+
+
+# 공식 포장단위와 촬영에서 읽은 수량이 맞을 때만 선택 수량을 전달한다.
+@pytest.mark.parametrize('seen,quantity', [([3], 3), ([4], None), ([], None), ([3, 10], None)])
+def test_package_reader_verifies_quantity(monkeypatch, seen, quantity):
+    reader = PackageReader()
+    reader.match_package = Mock(return_value=dict(product_code='198700405', name='베아제정', manufacturer='대웅제약',
+                                                form='TABLET', observed_pack_sizes=seen))
+    api = Mock()
+    api.details.return_value = {'ITEM_SEQ': '198700405', 'PACK_UNIT': '3정/PTP, 10정/PTP'}
+    monkeypatch.setattr('backend.pi_package.MfdsClient', Mock(return_value=api))
+    enrich = Mock(return_value={'medicines': [{'product_code': '198700405'}]})
+    result = reader.identify(b'', Mock(), enrich, .9, 'capture')
+    assert result['medicines'][0]['mfds_pack_sizes'] == [3, 10]
+    assert result['medicines'][0]['mfds_pack_quantity'] == quantity
 
 
 # 첫 판독에서 놓친 제형은 같은 위치의 추가 판독과 일치하는 공식 품목으로만 복구한다.

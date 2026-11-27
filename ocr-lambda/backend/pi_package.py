@@ -12,7 +12,7 @@ from .image_ocr import (
     read_image,
     reconcile_regions,
 )
-from .mfds import MfdsClient
+from .mfds import ApiError, MfdsClient, permit_pack_sizes
 from .package_matching import PackageMatcher
 from .recognition import RecognitionError, normalize_name
 
@@ -104,11 +104,24 @@ class PackageReader(PaddleReader):
             "ITEM_NAME": medicine["name"],
             "ENTP_NAME": medicine["manufacturer"],
         }
+        sizes = []
+        if medicine["form"] in ("TABLET", "CAPSULE"):
+            try:
+                sizes = permit_pack_sizes(api.details(medicine["product_code"]).get("PACK_UNIT"), medicine["form"])
+            except ApiError as error:
+                LOGGER.info("Pi 포장단위 조회 결과 %s", error.code)
         result = enrich([{"lines": []}], legacy_api, min_score, verified_product=product)
         saved = result["medicines"]
         if len(saved) != 1 or saved[0]["product_code"] != medicine["product_code"]:
             raise RuntimeError("VERIFIED_PRODUCT_ENRICHMENT_MISMATCH")
         saved[0]["form"] = medicine["form"]
+        if sizes:
+            observed = medicine["observed_pack_sizes"]
+            saved[0]["mfds_pack_sizes"] = sizes
+            saved[0]["mfds_pack_quantity"] = (
+                observed[0] if len(observed) == 1 and observed[0] in sizes
+                else sizes[0] if not observed and len(sizes) == 1 else None
+            )
         # 공식 품목이 확정됐으므로 선택적 성분·허가정보 장애는 해당 필드의 상태로 보존한다.
         result.update(processing_status="COMPLETED", retryable=False)
         return result

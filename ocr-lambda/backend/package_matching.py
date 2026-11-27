@@ -495,6 +495,16 @@ class PackageMatcher:
             raise RecognitionError("validation", "REQUIRED_PRODUCT_FIELDS_MISSING")
         form = fields["form"]
         code = str(row["ITEM_SEQ"])
+        # 품목 식별에 쓰지 않은 수량도 정제·캡슐 포장과 대조할 수 있게 보존한다.
+        pack_units = {"정"} if form.endswith("정") else {"캡슐", "연질캡슐"} if "캡슐" in form else set()
+        quantities = {
+            value
+            for part in lines
+            for reading in (part, *part.get("alternatives", []))
+            if fragment_kind(reading["text"]) == "quantity"
+            for value, unit in name_fields(reading["text"])["quantities"]
+            if unit in pack_units
+        }
         return {
             "medicine_id": "MFDS#" + code,
             "product_code": code,
@@ -506,6 +516,7 @@ class PackageMatcher:
             "ingredients": [],
             "ingredients_status": "NOT_FETCHED",
             "ingredients_error_code": None,
+            "observed_pack_sizes": sorted(quantities),
         }
 
     # 이미 관측한 가장 큰 제목과 이웃 접미 글자를 포함하는 마지막 재검출 영역을 반환한다.

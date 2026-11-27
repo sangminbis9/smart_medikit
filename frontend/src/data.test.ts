@@ -117,18 +117,18 @@ describe('표시 정책', function policies() {
   it('미확인 수량과 소진 수량을 구분한다', function zeroQuantity() {
     const item = makeDemo().packages[0];
     item.inventory!.estimated_qty = null;
-    expect(stockLabel(item)).toBe('수량을 입력해주세요');
+    expect(stockLabel(item)).toBe('수량 미확인');
     item.inventory!.estimated_qty = 0;
-    expect(stockLabel(item)).toBe('예상 잔여 0정');
+    expect(stockLabel(item)).toBe('잔여 0정');
     item.inventory!.initial_qty = 3;
     item.inventory!.estimated_qty = 3;
     expect(stockLabel(item)).toBe('전체 수량 3정');
     item.inventory!.estimated_qty = 2;
-    expect(stockLabel(item)).toBe('예상 잔여 2정');
+    expect(stockLabel(item)).toBe('잔여 2정');
   });
   // 처방약은 구성 약품 수와 무관하게 봉투 회분으로 표시한다.
   it('처방약은 정수가 아닌 회분을 표시한다', function prescription() {
-    expect(stockLabel(makeDemo().packages[2])).toBe('예상 잔여 6회분');
+    expect(stockLabel(makeDemo().packages[2])).toBe('잔여 6회분');
   });
   // 임시 기준일을 실제 사용 가능 기한으로 바꿔 표시하지 않는다.
   it('임시 관리 날짜는 실제 유효기간으로 표시하지 않는다', function temporaryExpiry() {
@@ -138,7 +138,7 @@ describe('표시 정책', function policies() {
       verified: false,
       temporary_management_date: '2027-01-01',
     };
-    expect(expiryLabel(item)).toBe('유효기간: 2027.01.01 (추정)');
+    expect(expiryLabel(item)).toBe('관리 기한: 2027.01.01');
     item.expiry.temporary_management_date = null;
     expect(expiryLabel(item)).toBe('유효기간 미확인');
   });

@@ -33,7 +33,7 @@ function formatTime(value: string): string {
 // 촬영 기록의 반출 확실성을 사용자의 복용 확인과 분리한다.
 function movementLabel(item: OutboundEvent): string {
   if (item.movementCertainty === 'CONFIRMED') return '반출 확인';
-  if (item.movementCertainty === 'ESTIMATED') return '반출 추정';
+  if (item.movementCertainty === 'ESTIMATED') return '반출 감지';
   return '반출 확인 필요';
 }
 

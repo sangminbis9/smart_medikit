@@ -73,16 +73,25 @@ def save_pi_result(store, event_id, source, result, checked_at=None):
     for medicine in result.get("medicines", []):
         store._save_medicine(medicine, checked_at or datetime.now(timezone.utc).isoformat())
         form = official_form(medicine)
+        names = {"#form": "form"}
+        fields = {":form": form}
+        update = "SET #form=if_not_exists(#form,:form)"
+        if medicine.get("mfds_pack_sizes"):
+            # 공식 품목의 전체 포장단위와 개별 촬영에서 선택된 수량은 따로 보존한다.
+            names["#sizes"] = "mfds_pack_sizes"
+            fields[":sizes"] = medicine["mfds_pack_sizes"]
+            update += ", #sizes=:sizes"
         store.client.update_item(
             TableName=store.table_name,
             Key=attributes({"pk": f"MEDICINE#{medicine['product_code']}", "sk": "META"}),
-            UpdateExpression="SET #form=if_not_exists(#form,:form)",
-            ExpressionAttributeNames={"#form": "form"},
-            ExpressionAttributeValues=attributes({":form": form}),
+            UpdateExpression=update,
+            ExpressionAttributeNames=names,
+            ExpressionAttributeValues=attributes(fields),
         )
-        medicines.append(
-            {"product_code": medicine["product_code"], "name": medicine["name"], "form": form}
-        )
+        recognized = {"product_code": medicine["product_code"], "name": medicine["name"], "form": form}
+        if "mfds_pack_quantity" in medicine:
+            recognized["mfds_pack_quantity"] = medicine["mfds_pack_quantity"]
+        medicines.append(recognized)
     values = {
         "pk": f"RECOGNITION#{event_id}",
         "sk": "META",

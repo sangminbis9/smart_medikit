@@ -62,6 +62,11 @@ def transition(package, recognition, movement, now=None):
                               "name": recognition["name"], "first_registration_pending": True, "first_stored_at": occurred,
                               "inventory": {"stock_enabled": recognition.get("form") in ("TABLET", "CAPSULE"),
                                             "initial_qty": None, "estimated_qty": None}})
+    # 새 포장의 대조 결과를 저장하고, 재반입에서는 비어 있던 규격만 보완한다.
+    if (direction == "IN" and "mfds_pack_quantity" in recognition
+            and (package is None or (package.get("mfds_pack_quantity") is None
+                                     and recognition["mfds_pack_quantity"] is not None))):
+        updated["mfds_pack_quantity"] = recognition["mfds_pack_quantity"]
     updated.update(state="STORED" if direction == "IN" else "OUT", last_sequence=sequence,
                    movement_certainty="ESTIMATED", last_event_id=event_id)
     geometry = movement.get('movement', {}).get('geometry')

@@ -65,7 +65,8 @@ def test_success_is_persisted_once():
     result = {
         "processing_status": "COMPLETED",
         "medicines": [
-            {"product_code": "000000001", "name": "합성시험정500밀리그램", "ingredients": []}
+            {"product_code": "000000001", "name": "합성시험정500밀리그램", "ingredients": [],
+             "mfds_pack_sizes": [3, 10], "mfds_pack_quantity": 3}
         ],
     }
     source = {"bucket": "bucket", "key": "ocr-input/session-1/package.jpg", "etag": "digest"}
@@ -74,6 +75,8 @@ def test_success_is_persisted_once():
     item = {key: decoder.deserialize(value) for key, value in saved["event"].items()}
     assert item["processing_status"] == "COMPLETED"
     assert item["medicines"][0]["form"] == "TABLET"
+    assert item["medicines"][0]["mfds_pack_quantity"] == 3
+    assert store.client.update_item.call_args.kwargs["ExpressionAttributeValues"][":sizes"] == {"L": [{"N": "3"}, {"N": "10"}]}
     assert "ingredients" not in item["medicines"][0]
     save_pi_result(store, "event-1", source, result)
     store._save_medicine.assert_called_once()

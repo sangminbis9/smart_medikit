@@ -68,7 +68,7 @@
 - 내부 분석의 `NO_SINGLE_CHANGE`에서 현재 사진에 후보가 하나면 `single_visible`에 후보 박스와 추정 좌표를 보관한다. 서버는 같은 세션의 반입 결과가 완료된 이후라도 대상 포장이 동일 이벤트의 최신 보관 상태인 경우 위치를 조건부 갱신한다. 단독 후보는 보관 중인 포장이 하나인 경우에만 `UNCERTAIN`으로 연결한다. 지연 반영은 기존 위치나 사용자 정정을 덮어쓰지 않는다. 분석 결과에 후보가 없는 이전 세션은 별도 재분석이 필요하다.
 - `capture_events.py`는 단일 식약처 품목기준코드와 동일 세션을 결합한다. 포장 `last_sequence` 조건과 이력·알림 트랜잭션으로 중복을 막는다. 신규 포장에 `first_registration_pending=true`, 알 수 없는 수량·기한은 null이다. 재반입은 `active_out_event_id`를 해제한다.
 - `GET /activity` → `{pending,history}`. `POST /activity/{eventId}/confirm` → `{result:TAKEN|NOT_TAKEN|DISPOSED,quantity:number|null}`. N은 미복용 이력을 남기고 대기 목록에서만 제거한다. Y는 정제·캡슐만 수량 입력·최초 확인 트랜잭션 차감을 허용한다. 폐기는 `quantity:null`이며 같은 활성 반출의 포장과 이력을 한 트랜잭션으로 `DISPOSED` 처리한다. 포장에 `disposal_certainty=CONFIRMED`를 저장하고 활성 재고에서 제외한다. 이후 재반입·다른 반출에 대해서는 이전 요청이 적용되지 않는다.
-- `POST /packages/{packageId}/initial` → `{condition:NEW|USED,actualExpiry:YYYY-MM-DD|null,remainingQty:number|null}`. NEW는 기존 값을 유지하고 USED는 입력한 실제 값만 저장한다.
+- `POST /packages/{packageId}/initial` → `{condition:NEW|USED,actualExpiry:YYYY-MM-DD|null,remainingQty:number|null}`. NEW 요청은 기한과 수량에 `null`을 보낸다. 서버는 기존 수량을 유지하고, 수량이 비어 있을 때에만 식약처 포장단위로 전체·잔여 수량을 함께 입력한다. USED는 사용자가 확인한 기한·잔여 수량만 저장한다.
 - EventBridge Scheduler 1분 주기 유지보수는 반출 관측 시각부터 최소 24시간 경과와 동일 활성 반출 ID를 재확인해 `DISPOSED`, `disposal_certainty=ESTIMATED`를 저장한다. 재반입 및 후속 반출은 이전 예약에서 제외한다. 정확히 24시간의 실행·도착은 보장하지 않는다.
 - Web Push payload: `{notification_id,kind:OUT_CONFIRMATION|INITIAL_REGISTRATION,event_id?,medicine_name?,package_id?}`. 클릭 경로는 `/schedule?out_event=...` 또는 `/?new_package=...`. 클릭 자체는 복용 확인이 아니다.
 - `GET /push/config`는 VAPID 공개키만 반환한다. `POST /push/subscriptions` 및 `/remove`는 `{subscription}`을 받으며 기존 암호화 키가 같아야 변경한다. endpoint·auth·비밀키 조회 API는 없다. 구독별 성공을 기록하고 실패는 재시도한다. 전송 성공 직후 장애의 중복 가능성은 알림 tag로 완화한다.
@@ -87,7 +87,7 @@
 - 운영 OCR의 기존 제품 저장은 유지하되 `event-id`/`session-id` 메타데이터를 검증하고 Pi 성공·실패 `RECOGNITION`을 저장한다. 비-Pi 입력의 기존 저장 의미는 유지한다. 서버는 `medicines` 형식과 `product_codes` 참조 형식을 모두 읽는다.
 - Pi 포장 판독 개선 코드가 연결된 경우 실패한 `RECOGNITION`에는 `failure_stage`, `failure_code`가 선택적으로 들어간다. 실제 OCR 원문이나 미확정 후보 목록은 저장하지 않는다. 공식 품목코드 하나가 확정되면 선택적 성분·허가정보 보완 상태와 별개로 OCR 완료를 기록한다.
 - `GET /activity`에 `reviews:[{eventId,occurredAt,reason}]`를 추가한다. 기존 `POST /activity/{eventId}/confirm`은 `{review:{productCode:string|null,direction:IN|OUT|NONE}}`도 지원한다. OUT 복용 확인 본문은 그대로다. 확인 대기 CAPTURE만 처리하며 이후 포장 순번과 충돌하면 덮어쓰지 않는다. NONE은 약품 선택 없이 닫을 수 있다. 별도 `/reviews` 공개 경로나 새로운 접근 권한을 만들지 않는다.
-- `POST /packages/{packageId}/initial`의 NEW는 기존 수량이 null일 때만 선택적으로 `remainingQty`를 받아 초기/잔여 수량을 보완한다. 이미 최초 확인을 마쳤어도 수량이 null인 경우 보완 가능하다. 알려진 수량을 NEW로 덮어쓸 수 없으며 알 수 없는 포장 수량을 OCR 숫자로 임의 추정하지 않는다.
+- `MEDICINE.mfds_pack_sizes`에는 식약처 허가 상세 `PACK_UNIT`에서 읽은 정제·캡슐 포장단위를 저장한다. `RECOGNITION.medicines[].mfds_pack_quantity`는 같은 촬영에서 읽은 수량이 허가 목록과 일치하거나 수량 관측이 없고 허가 규격이 하나일 때의 수량이다. 신규 `PACKAGE`에 이 값을 보존하며, 재반입에서는 비어 있던 포장 규격만 보완한다. 충돌하거나 여러 규격을 구분할 수 없을 때는 null로 남긴다. 이 항목이 없는 기존 포장은 품목의 허가 규격이 하나일 때만 NEW로 채울 수 있다.
 - 새 포장의 최초 반입 시각과 제품 허가 사용기간이 명확하면 NEW 확인 시 반입일에 허가기간을 더한 `expiry.temporary_management_date`를 저장한다. 이는 제조일이나 포장에 인쇄된 실제 만료일이 아니며 `actual_expiry`와 `verified`는 변경하지 않는다. 기존 포장에 최초 반입 시각이 없으면 날짜를 추정하지 않는다.
 - 재고 조회는 인식 이력이 앞 페이지를 차지해도 커서 끝까지 진행한다. 커서 반복·전체 조회 실패는 오류로 반환하며 일부 목록을 완전한 목록으로 표시하지 않는다. 촬영·폐기 유지보수 오류와 개별 누락 포장은 다른 알림 발송을 막지 않는다.
 

@@ -12,7 +12,7 @@ import OutboundHistory from './OutboundHistory';
 
 const labels: Record<Dose['result'], string> = {
   SCHEDULED: '예정',
-  ESTIMATED: '복용 추정',
+  ESTIMATED: '복용 미확인',
   CONFIRMED: '사용자 확인',
   NOT_TAKEN: '미복용',
   DEFERRED: '확인 보류',
@@ -249,7 +249,7 @@ export default function Schedule({
           <div className="schedule-summary">
             <h2>선택한 날 {entries.length}회 일정</h2>
             <p>
-              사용자 확인 {confirmed} / 복용 추정 {estimated} / 그 외{' '}
+              사용자 확인 {confirmed} / 자동 기록 {estimated} / 그 외{' '}
               {entries.length - confirmed - estimated}
             </p>
             <div className="evidence-bars">

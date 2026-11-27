@@ -9,7 +9,7 @@ import {
 } from './data';
 import { stateLabels } from './Home';
 import type { Medkit } from './useMedkit';
-import { Badge, Dialog, EmptyState, Icon, Note } from './ui';
+import { Dialog, EmptyState, Icon, Note } from './ui';
 import MedicineUsage from './MedicineUsage';
 
 // 직접 링크로 열린 포장도 현재 목록에서 안전하게 조회한다.
@@ -82,7 +82,7 @@ export default function PackageDetail({ kit }: { kit: Medkit }) {
                 {item.kind === 'PRESCRIPTION' ? '처방의약품' : '일반의약품'} /{' '}
                 {item.state === 'DISPOSED' &&
                 item.disposal_certainty === 'ESTIMATED'
-                  ? '폐기 추정'
+                  ? '자동 폐기 처리'
                   : stateLabels[item.state]}
               </p>
             </div>
@@ -92,18 +92,17 @@ export default function PackageDetail({ kit }: { kit: Medkit }) {
               <div className="flex justify-between gap-3">
                 <h2>
                   {item.kind === 'PRESCRIPTION'
-                    ? '봉투 단위 예상 잔여 회분'
-                    : '예상 잔여량'}
+                    ? '봉투 단위 잔여 회분'
+                    : '수량 정보'}
                 </h2>
-                <Badge tone="amber">추정</Badge>
               </div>
               <strong>{stockLabel(item)}</strong>
               <p>
                 {item.kind === 'PRESCRIPTION'
-                  ? '봉투 전체의 예상 회분이며 개별 알약 수가 아니에요.'
+                  ? '봉투 전체의 회분 기준이에요.'
                   : item.inventory?.initial_qty == null
-                    ? '포장에 표시된 수량을 입력해주세요.'
-                    : `초기 ${item.inventory.initial_qty} · 포장 기준 추정값`}
+                    ? '포장 수량을 확인해주세요.'
+                    : `초기 수량 ${item.inventory.initial_qty}`}
               </p>
             </div>
           )}
@@ -114,7 +113,7 @@ export default function PackageDetail({ kit }: { kit: Medkit }) {
                 className="secondary-button"
                 to={`/?new_package=${encodeURIComponent(item.package_id)}`}
               >
-                보관 수량 입력
+                보관 수량 확인
               </Link>
             )}
           <dl className="detail-fields">
@@ -127,10 +126,10 @@ export default function PackageDetail({ kit }: { kit: Medkit }) {
               <dd>{expiryLabel(item)}</dd>
             </div>
             <div>
-              <dt>보관 위치 · 추정 배치</dt>
+              <dt>촬영 기반 위치</dt>
               <dd>
                 {item.position
-                  ? `X ${item.position.x} / Y ${item.position.y} / 추정 Z ${item.position.z_estimated} mm`
+                  ? `X ${item.position.x} / Y ${item.position.y} / Z ${item.position.z_estimated} mm`
                   : '위치 미확인'}
               </dd>
             </div>
@@ -179,7 +178,7 @@ export default function PackageDetail({ kit }: { kit: Medkit }) {
                 <dd>
                   {item.state === 'DISPOSED' &&
                   item.disposal_certainty === 'ESTIMATED'
-                    ? '폐기 추정'
+                    ? '자동 폐기 처리'
                     : stateLabels[item.state]}
                   {kit.demo
                     ? ' · 시연 정보'
@@ -192,7 +191,7 @@ export default function PackageDetail({ kit }: { kit: Medkit }) {
           </section>
           <Note>
             {hasStock(item)
-              ? '잔여량은 사용 기록에 따른 예상값이에요. 실제 남은 수량과 다르면 수정해주세요.'
+              ? '잔여량은 사용 기록을 기준으로 계산해요. 실제 남은 수량과 다르면 수정해주세요.'
               : item.kind === 'PRESCRIPTION'
                 ? '약봉투 반출만으로 실제 복용을 확정하지 않아요.'
                 : '이 제형은 잔여량을 표시하거나 차감하지 않아요. 포장 상태와 유효기간을 확인해주세요.'}
@@ -300,7 +299,7 @@ function EditPackage({
       </Note>
       {countable && (
         <label>
-          {item.kind === 'PRESCRIPTION' ? '예상 잔여 회분' : '예상 잔여 수량'}
+          {item.kind === 'PRESCRIPTION' ? '잔여 회분' : '잔여 수량'}
           <input
             type="number"
             name="amount"

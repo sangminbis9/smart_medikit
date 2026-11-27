@@ -272,20 +272,39 @@ def test_review_none_is_idempotent():
         resolve_review(store, "test", "e2", {"direction": "OUT", "productCode": "000000001"})
 
 
-# NEW 수량 미확인은 나중에 보완하고 알려진 재고를 덮어쓰지 않는다.
+# 같은 촬영의 허가 수량만 전체·잔여에 보완하고 입력값으로 덮어쓸 수 없다.
 def test_initial_quantity_backfill():
     store = Mock()
-    store.form.return_value = "TABLET"
     store.package.return_value = {
         "first_registration_pending": False,
+        "kind": "OTC",
+        "product_codes": ["198700405"],
+        "mfds_pack_quantity": Decimal(3),
         "inventory": {"stock_enabled": True, "estimated_qty": None, "initial_qty": None},
     }
+    store.inventory.get_item.return_value = {"Item": {"form": "TABLET", "mfds_pack_sizes": [Decimal(3), Decimal(10)]}}
     confirm_initial(
-        store, {"box": "test"}, "p1", {"condition": "NEW", "actualExpiry": None, "remainingQty": 10}
+        store, {"box": "test"}, "p1", {"condition": "NEW", "actualExpiry": None, "remainingQty": None}
     )
     values = store.initial.call_args.args[2]
-    assert values[":inventory"]["initial_qty"] == values[":inventory"]["estimated_qty"] == 10
+    assert values[":inventory"]["initial_qty"] == values[":inventory"]["estimated_qty"] == 3
     assert values[":old_inventory"]["estimated_qty"] is None
+    with pytest.raises(ApiError, match="INVALID_INITIAL"):
+        confirm_initial(store, {"box": "test"}, "p1", {"condition": "NEW", "actualExpiry": None, "remainingQty": 10})
+    store.initial.assert_called_once()
+
+
+# 허가 규격이 여러 개면 빈 수량을 유지하고, 단일 규격의 기존 포장만 채운다.
+@pytest.mark.parametrize('sizes,selection,expected', [([3, 10], {}, None), ([3], {}, 3), ([3], {"mfds_pack_quantity": None}, None)])
+def test_new_pack_size_requires_unambiguous_evidence(sizes, selection, expected):
+    store, _, _, _ = inventory_state_fixture()
+    store.package.return_value = {"kind": "OTC", "first_registration_pending": True,
+                                  "product_codes": ["198700405"], **selection,
+                                  "inventory": {"stock_enabled": True, "initial_qty": None, "estimated_qty": None}}
+    store.inventory.get_item.return_value = {"Item": {"form": "TABLET", "mfds_pack_sizes": sizes}}
+    confirm_initial(store, {"box": "test"}, "p1", {"condition": "NEW", "actualExpiry": None, "remainingQty": None})
+    values = store.initial.call_args.args[2]
+    assert (values.get(":inventory") or {}).get("estimated_qty") == expected
 
 
 # 인식 이력이 앞 페이지를 채워도 세 번째 페이지의 제품과 포장을 끝까지 찾는다.

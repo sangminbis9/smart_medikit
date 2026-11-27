@@ -26,6 +26,27 @@ class ApiError(Exception):
 INFO_FIELDS = ("indications", "dosage", "precautions", "storage_method", "shelf_life")
 
 
+# 허가 포장 문구에서 명시적인 정제·캡슐 전체 수량만 읽는다.
+def permit_pack_sizes(value, form):
+    if not isinstance(value, str) or form not in ("TABLET", "CAPSULE"):
+        return []
+    unit = r"정" if form == "TABLET" else r"(?:(?:연질|경질)?캡슐|캅셀)"
+    text = unicodedata.normalize("NFKC", value)
+    text = re.sub(r"(?<=\d),(?=\d{3}\s*(?:정|캡슐))", "", text)
+    sizes = set()
+    for part in re.split(r"[,;\n]|(?:내수용|수출용)\s*:", text):
+        if not part.strip():
+            continue
+        match = re.fullmatch(
+            rf"\s*([1-9]\d{{0,5}})\s*{unit}\s*(?:/\s*[A-Za-z가-힣 -]+)?(?:\s*\(.*\))?\s*", part
+        )
+        # 일부 규격을 읽지 못한 목록을 단일 규격으로 오판하지 않는다.
+        if not match:
+            return []
+        sizes.add(int(match[1]))
+    return sorted(sizes)
+
+
 class DocumentText(HTMLParser):
     # CDATA 안의 표시용 HTML을 실행하지 않고 문단별 평문으로 읽는다.
     def __init__(self):

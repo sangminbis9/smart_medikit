@@ -506,8 +506,9 @@ test.describe('공통 비밀번호 모드', function privateModeTests() {
     const savedState = structuredClone(server.state);
     const writes = server.putRequests;
     await page
-      .getByRole('link', { name: '홈', exact: true })
+      .locator('a[href="/device"]')
       .filter({ visible: true })
+      .first()
       .click();
     await page
       .getByRole('button', { name: '시연 데이터 보기', exact: true })
@@ -783,8 +784,9 @@ test.describe('완전 공개 시연 모드', function publicModeTests() {
     await registerSimplePlan(page, '합성 공개 서버 목록');
     const saved = structuredClone(server.state);
     await page
-      .getByRole('link', { name: '홈', exact: true })
+      .locator('a[href="/device"]')
       .filter({ visible: true })
+      .first()
       .click();
     await page
       .getByRole('button', { name: '시연 데이터 보기', exact: true })

@@ -318,7 +318,22 @@ def confirm_activity(store, config, event_id, body):
     return {"event": {**event, "status": result, "quantity": count, "recordedAt": recorded}}
 
 
-# 최초 등록의 새것·사용 중 정보를 한 번만 확인하고 실제로 입력한 값만 반영한다.
+# 같은 촬영에서 대조한 수량을 우선하고 기존 포장은 단일 허가 규격만 허용한다.
+def new_package_quantity(package, medicine):
+    sizes = medicine.get("mfds_pack_sizes")
+    if not isinstance(sizes, list) or not sizes or any(
+        not isinstance(value, (int, Decimal)) or isinstance(value, bool)
+        or not 1 <= value <= 1000000 or value != int(value) for value in sizes
+    ):
+        return None
+    unique = set(sizes)
+    selected = package.get("mfds_pack_quantity") if "mfds_pack_quantity" in package else (
+        next(iter(unique)) if len(unique) == 1 else None
+    )
+    return int(selected) if isinstance(selected, (int, Decimal)) and not isinstance(selected, bool) and selected in unique else None
+
+
+# 새것은 허가 포장단위를, 쓰던 약은 확인한 잔여 수량을 조건부 저장한다.
 def confirm_initial(store, config, package_id, body):
     package_id = identifier(package_id)
     exact_body(body, ("condition", "actualExpiry", "remainingQty"))
@@ -327,35 +342,39 @@ def confirm_initial(store, config, package_id, body):
         raise ApiError(422, "INVALID_CONDITION", "약품 상태를 선택해 주세요.")
     expiry = actual_date(body["actualExpiry"])
     remaining = body["remainingQty"]
-    if condition == "NEW" and expiry is not None:
+    if condition == "NEW" and (expiry is not None or remaining is not None):
         raise ApiError(422, "INVALID_INITIAL", "약품 정보를 다시 확인해 주세요.")
     if remaining is not None:
         remaining = quantity(remaining, allow_zero=True)
     package = store.package(config["box"], package_id)
+    inventory = package.get("inventory")
+    stock_enabled = isinstance(inventory, dict) and inventory.get("stock_enabled") is True
+    missing_quantity = stock_enabled and inventory.get("estimated_qty") is None
+    medicine = {}
+    if condition == "NEW":
+        codes = package.get("product_codes")
+        if isinstance(codes, list) and len(codes) == 1 and isinstance(codes[0], str) and re.fullmatch(r"\d{9}", codes[0]):
+            medicine = store.inventory.get_item(Key={"pk": f"MEDICINE#{codes[0]}", "sk": "META"}, ConsistentRead=True).get("Item") or {}
+        if (missing_quantity and inventory.get("initial_qty") is None and package.get("kind") == "OTC"
+                and medicine.get("form") in ("TABLET", "CAPSULE")):
+            remaining = new_package_quantity(package, medicine)
     # 제조일을 알 수 없으므로 반입일 기준 결과는 실제 만료일이 아닌 임시 기준일이다.
     temporary_date = None
     if condition == "NEW" and package.get("first_stored_at"):
-        codes = package.get("product_codes")
-        if isinstance(codes, list) and len(codes) == 1 and isinstance(codes[0], str) and re.fullmatch(r"\d{9}", codes[0]):
-            medicine = store.inventory.get_item(Key={"pk": f"MEDICINE#{codes[0]}", "sk": "META"}, ConsistentRead=True).get("Item", {})
-            info = medicine.get("product_info")
-            shelf_life = medicine.get("shelf_life") or (info.get("shelf_life") if isinstance(info, dict) else None)
-            match = re.fullmatch(r"\s*제조일로부터\s*(\d{1,3})\s*(개월|년)\s*", shelf_life or "") if isinstance(shelf_life, str) else None
-            if match and 0 < int(match.group(1)) <= 120:
-                try:
-                    first_day = timestamp(package["first_stored_at"]).astimezone(timezone(timedelta(hours=9))).date()
-                    months = int(match.group(1)) * (12 if match.group(2) == "년" else 1)
-                    year, month = divmod(first_day.year * 12 + first_day.month - 1 + months, 12)
-                    temporary_date = date(year, month + 1, min(first_day.day, calendar.monthrange(year, month + 1)[1])).isoformat()
-                except (ValueError, OverflowError):
-                    pass
-    missing_quantity = isinstance(package.get('inventory'), dict) and package['inventory'].get('estimated_qty') is None
+        info = medicine.get("product_info")
+        shelf_life = medicine.get("shelf_life") or (info.get("shelf_life") if isinstance(info, dict) else None)
+        match = re.fullmatch(r"\s*제조일로부터\s*(\d{1,3})\s*(개월|년)\s*", shelf_life or "") if isinstance(shelf_life, str) else None
+        if match and 0 < int(match.group(1)) <= 120:
+            try:
+                first_day = timestamp(package["first_stored_at"]).astimezone(timezone(timedelta(hours=9))).date()
+                months = int(match.group(1)) * (12 if match.group(2) == "년" else 1)
+                year, month = divmod(first_day.year * 12 + first_day.month - 1 + months, 12)
+                temporary_date = date(year, month + 1, min(first_day.day, calendar.monthrange(year, month + 1)[1])).isoformat()
+            except (ValueError, OverflowError):
+                pass
     if package.get("first_registration_pending") is not True and not (missing_quantity and remaining is not None):
         raise ApiError(409, "ALREADY_CONFIRMED", "이미 초기 정보를 확인했어요.")
-    if condition == 'NEW' and remaining is not None and not missing_quantity:
-        raise ApiError(422, 'QUANTITY_ALREADY_KNOWN', '기존 수량은 새것 확인으로 변경할 수 없어요.')
-    if remaining is not None and (store.form(package) == "OTHER" or not isinstance(package.get("inventory"), dict)
-                                  or package["inventory"].get("stock_enabled") is not True):
+    if condition == "USED" and remaining is not None and (not stock_enabled or store.form(package) == "OTHER"):
         raise ApiError(422, "QUANTITY_NOT_AVAILABLE", "이 약품의 수량은 입력할 수 없어요.")
     names = {"#box": "box_id", "#pending": "first_registration_pending", "#condition": "initial_condition"}
     values = {":box": config["box"], ":true": True, ":false": False, ":condition": condition}

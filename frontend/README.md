@@ -2,7 +2,7 @@
 
 현재 배포: `VITE_ACTIVITY_API_URL`로 이력 API에 연결하여 복약 하단 반출 Y/N·이력, 신규 포장 정보 저장, 기기별 푸시 구독을 제공한다. `first_registration_pending` 포장은 이름을 빨간색으로 표시하며 제품 사용정보 상단에서 새것/쓰던 약을 확인한다. `/schedule?out_event=...`, `/?new_package=...` 알림 경로를 지원한다. AWS API·유지보수 예약은 배포되었고, 설정이 없는 별도 환경에서는 가상 기록을 실제 기록으로 만들지 않는다. [실제 검증 범위](../docs/PIPELINE_AUDIT.md)를 참고한다.
 
-Figma의 모바일·데스크톱 시안을 구현한 **React + TypeScript + Tailwind CSS + Three.js** 초기 프론트엔드입니다. API·약품 DB·보관함 치수가 없어도 실행됩니다. 기본값은 빈 보관함이며, **시연 데이터 보기**를 눌러야 가상 포장이 표시됩니다.
+Figma의 모바일·데스크톱 시안을 구현한 **React + TypeScript + Tailwind CSS + Three.js** 초기 프론트엔드입니다. API·약품 DB·보관함 치수가 없어도 실행됩니다. 기본값은 빈 보관함이며, 가상 포장은 **보관함 연결** 화면의 **시연 데이터 보기**에서 켤 수 있습니다.
 
 ## 실행
 

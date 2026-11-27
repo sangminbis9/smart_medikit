@@ -106,9 +106,6 @@ export default function App() {
                 : '아직 없음'}
             </span>
           </Link>
-          <button className="demo-switch" onClick={toggleDemo}>
-            {kit.demo ? '시연 종료 · 서버 저장 없음' : '시연 데이터 보기'}
-          </button>
         </div>
       </aside>
       <div className="workspace">
@@ -168,7 +165,7 @@ export default function App() {
               path="/"
               element={
                 <Home
-                  kit={{ ...kit, toggleDemo }}
+                  kit={kit}
                   query={query}
                   setQuery={setQuery}
                   selected={selected}

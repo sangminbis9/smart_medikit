@@ -108,7 +108,7 @@ export function makeDemo(): Data {
         alert_id: 'demo-a02',
         type: 'REGISTRATION',
         title: '등록 정보를 확인해주세요',
-        body: '새 포장의 초기 수량이 추정값이에요. 등록된 정보와 실제 포장 수량을 확인해주세요.',
+        body: '등록된 수량과 실제 포장 수량을 확인해주세요.',
         scope: null,
         package_ids: ['demo-p01'],
         occurred_at: `${today}T15:02:00+09:00`,

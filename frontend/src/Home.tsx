@@ -46,7 +46,7 @@ export default function Home({
   selected,
   setSelected,
 }: Props) {
-  const { data, demo, toggleDemo } = kit;
+  const { data, demo } = kit;
   const navigate = useNavigate();
   const location = useLocation();
   const catalogCount = demo ? 0 : findCatalogMedicines(data).length;
@@ -248,7 +248,7 @@ export default function Home({
                 <span>선택된 약품</span>
               </div>
               <p>
-                {active.position ? '위치 추정' : '위치 미확인'} ·{' '}
+                {active.position ? '촬영 위치' : '위치 미확인'} ·{' '}
                 {active.note || '포장 정보를 확인해주세요.'}
               </p>
             </Link>
@@ -359,16 +359,12 @@ export default function Home({
                       <button className="secondary-button" onClick={clear}>
                         검색 초기화
                       </button>
-                    ) : (
-                      <button className="secondary-button" onClick={toggleDemo}>
-                        {demo ? '빈 보관함으로 돌아가기' : '시연 데이터 보기'}
-                      </button>
-                    )
+                    ) : undefined
                   }
                 >
                   {query || category
                     ? '약 이름이나 다른 검색어로 다시 찾아보세요.'
-                    : '약 포장을 보관함 카메라에 보여주면 자동 등록돼요. 지금은 시연 데이터로 먼저 둘러볼 수 있어요.'}
+                    : '약 포장을 보관함 카메라에 보여주면 자동 등록돼요.'}
                 </EmptyState>
               )}
             </div>
@@ -465,7 +461,7 @@ function PackageCard({
             <small>
               {item.state === 'DISPOSED' &&
               item.disposal_certainty === 'ESTIMATED'
-                ? '폐기 추정'
+                ? '자동 폐기 처리'
                 : stateLabels[item.state]}{' '}
               / {item.kind === 'PRESCRIPTION' ? '처방약 봉투' : '일반의약품'}
             </small>

@@ -233,16 +233,16 @@ function isCountable(medicine: Package['medicines'][number]): boolean {
 export function stockLabel(item: Package): string | null {
   if (item.kind === 'PRESCRIPTION')
     return item.remaining_doses === null
-      ? '예상 회분 미확인'
-      : `예상 잔여 ${item.remaining_doses}회분`;
+      ? '회분 미확인'
+      : `잔여 ${item.remaining_doses}회분`;
   if (!hasStock(item)) return null;
   const qty = item.inventory?.estimated_qty;
   const unit = item.medicines[0]?.form === 'CAPSULE' ? '캡슐' : '정';
-  if (qty == null) return '수량을 입력해주세요';
+  if (qty == null) return '수량 미확인';
   // 실제 입력한 초기 수량과 같을 때만 가득 찬 것으로 표시한다.
   if (qty > 0 && qty === item.inventory?.initial_qty)
     return `전체 수량 ${qty}${unit}`;
-  return `예상 잔여 ${qty}${unit}`;
+  return `잔여 ${qty}${unit}`;
 }
 
 // 실제 만료일과 임시 관리 기준일의 근거를 구분한다.
@@ -251,7 +251,7 @@ export function expiryLabel(item: Package, today = dayKey()): string {
   if (expiry.verified && expiry.actual_expiry)
     return `유효기간: ${expiry.actual_expiry.replaceAll('-', '.')}${expiry.actual_expiry < today ? ' · 만료' : ''}`;
   if (expiry.temporary_management_date)
-    return `유효기간: ${expiry.temporary_management_date.replaceAll('-', '.')} (추정)`;
+    return `관리 기한: ${expiry.temporary_management_date.replaceAll('-', '.')}`;
   return '유효기간 미확인';
 }
 

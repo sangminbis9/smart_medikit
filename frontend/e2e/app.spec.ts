@@ -1,4 +1,20 @@
-import { expect, test } from '@playwright/test';
+import { expect, test, type Page } from '@playwright/test';
+
+// 홈에서 시연을 시작하는 버튼 없이 연결 설정에서 시연을 켠다.
+async function openDemoFromDevice(page: Page) {
+  await page
+    .locator('a[href="/device"]')
+    .filter({ visible: true })
+    .first()
+    .click();
+  await page
+    .getByRole('button', { name: '시연 데이터 보기', exact: true })
+    .click();
+  await page
+    .getByRole('link', { name: '홈', exact: true })
+    .filter({ visible: true })
+    .click();
+}
 
 // 처음 접속한 사용자에게 가상의 의료 데이터나 연결 성공을 표시하지 않는지 확인한다.
 test('빈 시작 화면 → 시연 → 검색 → 상세 수정 → 종료', async function flow({
@@ -15,10 +31,10 @@ test('빈 시작 화면 → 시연 → 검색 → 상세 수정 → 종료', asy
   ).toBeVisible();
   await expect(page.getByText('첫 약품을 기다리고 있어요')).toBeVisible();
   await expect(page.getByText('치수 미설정')).toBeVisible();
-  await page
-    .getByRole('button', { name: '시연 데이터 보기', exact: true })
-    .last()
-    .click();
+  await expect(
+    page.getByRole('button', { name: '시연 데이터 보기', exact: true }),
+  ).toHaveCount(0);
+  await openDemoFromDevice(page);
   await expect(
     page.getByText('시연 데이터 · 실제 약품·기록이 아니에요'),
   ).toBeVisible();
@@ -35,7 +51,7 @@ test('빈 시작 화면 → 시연 → 검색 → 상세 수정 → 종료', asy
   await page.getByRole('spinbutton').fill('5');
   await page.getByLabel('수정 사유').fill('가상 포장 수량 확인');
   await page.getByRole('button', { name: '시연 정보에 반영' }).click();
-  await expect(page.getByText('예상 잔여 5정')).toBeVisible();
+  await expect(page.getByText('잔여 5정')).toBeVisible();
   await expect(page.getByRole('status')).toContainText('서버 저장');
   await page.getByRole('button', { name: '시연 종료', exact: true }).click();
   await page.getByRole('link', { name: '홈으로 돌아가기' }).click();
@@ -46,10 +62,7 @@ test('빈 시작 화면 → 시연 → 검색 → 상세 수정 → 종료', asy
 // 필터 없는 카드 선택·달력·주의정보가 같은 시연 상태를 사용하는지 확인한다.
 test('3D 선택과 복약·알림 탐색', async function navigation({ page }) {
   await page.goto('/');
-  await page
-    .getByRole('button', { name: '시연 데이터 보기', exact: true })
-    .last()
-    .click();
+  await openDemoFromDevice(page);
   await page.getByRole('button', { name: '다음 약품', exact: true }).click();
   await expect(
     page.getByRole('button', { name: '일반의약품 B 3D에서 선택' }),
@@ -144,10 +157,7 @@ test('좁은 휴대폰·태블릿·PC 전환에서도 선택 유지', async func
   page,
 }) {
   await page.goto('/');
-  await page
-    .getByRole('button', { name: '시연 데이터 보기', exact: true })
-    .last()
-    .click();
+  await openDemoFromDevice(page);
   await page
     .getByRole('searchbox', { name: '보관 약품 검색', exact: true })
     .filter({ visible: true })
@@ -175,10 +185,7 @@ test('낮은 PC 홈 화면 세로 스크롤', async function desktopScroll({
   test.skip(testInfo.project.name !== 'desktop');
   await page.setViewportSize({ width: 1440, height: 620 });
   await page.goto('/');
-  await page
-    .getByRole('button', { name: '시연 데이터 보기', exact: true })
-    .last()
-    .click();
+  await openDemoFromDevice(page);
 
   const home = page.locator('.main-home');
   const caption = page.locator('.scene-caption');

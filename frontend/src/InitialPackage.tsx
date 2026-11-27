@@ -45,7 +45,7 @@ export default function InitialPackage({ kit }: { kit: Medkit }) {
             condition,
             actualExpiry: condition === 'USED' && expiry ? expiry : null,
             remainingQty:
-              (condition === 'USED' || item.inventory?.estimated_qty == null) &&
+              condition === 'USED' &&
               item.inventory?.stock_enabled &&
               count !== ''
                 ? Number(count)
@@ -75,7 +75,7 @@ export default function InitialPackage({ kit }: { kit: Medkit }) {
           <strong>
             {item.first_registration_pending
               ? '처음 등록된 약입니다'
-              : '보관 수량 입력'}
+              : '보관 수량 확인'}
           </strong>
           <label>
             약품 상태{' '}
@@ -105,35 +105,29 @@ export default function InitialPackage({ kit }: { kit: Medkit }) {
               </label>
             </>
           )}
-          {item.inventory?.stock_enabled &&
-            (condition === 'USED' || item.inventory.estimated_qty == null) && (
-              <label>
-                {condition === 'NEW'
-                  ? '포장에 표시된 전체 수량 (선택)'
-                  : '잔여 수량'}{' '}
-                <input
-                  type="number"
-                  min="0"
-                  max="1000000"
-                  step="1"
-                  value={count}
-                  disabled={saving}
-                  onChange={
-                    // 수량 보완 입력을 서버 저장 전까지 폼에 유지한다.
-                    function changeCount(event) {
-                      setCount(event.target.value);
-                    }
+          {item.inventory?.stock_enabled && condition === 'NEW' && (
+            <p>식약처 포장단위가 확인되면 전체 수량이 자동으로 입력돼요.</p>
+          )}
+          {item.inventory?.stock_enabled && condition === 'USED' && (
+            <label>
+              잔여 수량{' '}
+              <input
+                type="number"
+                min="0"
+                max="1000000"
+                step="1"
+                value={count}
+                disabled={saving}
+                onChange={
+                  // 수량 보완 입력을 서버 저장 전까지 폼에 유지한다.
+                  function changeCount(event) {
+                    setCount(event.target.value);
                   }
-                />{' '}
-                알
-                {condition === 'NEW' && (
-                  <small>
-                    수량을 입력하면 복용 확인 시 남은 수량을 계산해요. 나중에
-                    입력할 수도 있어요.
-                  </small>
-                )}
-              </label>
-            )}
+                }
+              />{' '}
+              알
+            </label>
+          )}
           {error && <p role="alert">{error}</p>}
           <button className="primary-button" disabled={saving || kit.demo}>
             {saving ? '저장 중…' : '기본 정보 확인'}

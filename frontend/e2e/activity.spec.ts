@@ -202,7 +202,7 @@ test('새 약 수량을 저장하고 촬영 확인 대기는 표시하지 않는
       expect(route.request().postDataJSON()).toEqual({
         condition: 'NEW',
         actualExpiry: null,
-        remainingQty: 10,
+        remainingQty: null,
       });
       item.inventory = {
         stock_enabled: true,
@@ -229,11 +229,17 @@ test('새 약 수량을 저장하고 촬영 확인 대기는 표시하지 않는
     }
   });
   await page.goto('/?new_package=p2');
-  await page.getByLabel('포장에 표시된 전체 수량', { exact: false }).fill('10');
+  await expect(
+    page.getByText('식약처 포장단위가 확인되면 전체 수량이 자동으로 입력돼요.'),
+  ).toBeVisible();
+  await expect(page.getByRole('dialog').getByRole('spinbutton')).toHaveCount(0);
   await page.getByRole('button', { name: '기본 정보 확인' }).click();
   await expect(
-    page.getByLabel('포장에 표시된 전체 수량', { exact: false }),
+    page.getByRole('button', { name: '기본 정보 확인' }),
   ).toHaveCount(0);
+  await expect(
+    page.getByText('전체 수량 10정', { exact: true }),
+  ).toBeAttached();
   await page.goto('/schedule');
   const history = page.getByRole('region', { name: '보관함 복용 기록' });
   await expect(history.getByText('확인할 반출 기록이 없어요.')).toBeVisible();

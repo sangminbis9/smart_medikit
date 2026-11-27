@@ -321,6 +321,28 @@ export default function OutboundHistory({
                       <p>
                         {movementLabel(item)} · {formatTime(item.occurredAt)}
                       </p>
+                      {!!item.duplicateWarnings?.length && (
+                        <div className="outbound-duplicate">
+                          <strong>당일 중복 복용 주의</strong>
+                          <ul>
+                            {
+                              // 앞서 복용한 약 이름과 확인된 공통 성분을 함께 표시한다.
+                              item.duplicateWarnings.map(
+                                function warning(entry, index) {
+                                  return (
+                                    <li key={index}>
+                                      같은 날 {entry.medicineName} 복용 기록이
+                                      있어요. 주의가 필요해요.
+                                      {entry.ingredients.length > 0 &&
+                                        ` 겹치는 성분은 ${entry.ingredients.join(', ')}입니다.`}
+                                    </li>
+                                  );
+                                },
+                              )
+                            }
+                          </ul>
+                        </div>
+                      )}
                     </div>
                     <div className="outbound-actions">
                       <button

@@ -1,11 +1,15 @@
 """확인된 보관함 반출의 사용자 응답과 신규 포장 정보를 조건부 저장한다."""
 
 import json
+import logging
 import os
 import re
 import calendar
+import unicodedata
+from collections import defaultdict
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
+from functools import cache
 from urllib.parse import urlsplit
 
 ACTIVITY_TABLE = "inha-capstone-02-medkit-activity"
@@ -13,6 +17,7 @@ INVENTORY_TABLE = "inha-capstone-02-medkit-data"
 ID_PATTERN = re.compile(r"[A-Za-z0-9_-]{1,100}\Z")
 MAX_BODY = 8192
 MAX_PAGES = 100
+KST = timezone(timedelta(hours=9))
 
 
 class ApiError(Exception):
@@ -163,12 +168,16 @@ class DynamoStore:
             raise ApiError(404, "PACKAGE_NOT_FOUND", "해당 약품을 찾지 못했어요.")
         return item
 
+    # 확인한 품목코드에 해당하는 제품 정보를 읽는다.
+    def medicine(self, code):
+        return self.inventory.get_item(Key={"pk": f"MEDICINE#{code}", "sk": "META"}, ConsistentRead=True).get("Item")
+
     # 단일 제품의 공식 제형만 수량 관리 근거로 사용한다.
     def form(self, package):
         codes = package.get("product_codes")
         if not isinstance(codes, list) or len(codes) != 1 or not isinstance(codes[0], str) or not re.fullmatch(r"\d{9}", codes[0]):
             return "OTHER"
-        medicine = self.inventory.get_item(Key={"pk": f"MEDICINE#{codes[0]}", "sk": "META"}, ConsistentRead=True).get("Item")
+        medicine = self.medicine(codes[0])
         if package.get("kind") != "OTC" or not isinstance(medicine, dict):
             return "OTHER"
         return medicine.get("form") if medicine.get("form") in ("TABLET", "CAPSULE") else "OTHER"
@@ -260,18 +269,101 @@ def get_store():
     return _store
 
 
+# 한국 날짜가 같은 이전 복용 확인과 비교해 반출 카드용 주의 정보를 만든다.
+def add_duplicate_warnings(store, box, pending, history, product_codes):
+    # 예전 기록은 식별자가 같은 포장이나 최초 등록 때 생성한 포장 ID로 복원한다.
+    @cache
+    def legacy_code(package_id):
+        match = re.fullmatch(rf"{re.escape(box[:60])}-([0-9]{{9}})-[0-9a-f]{{12}}", package_id)
+        if match:
+            return match[1]
+        try:
+            codes = store.package(box, package_id).get("product_codes")
+        except ApiError as error:
+            if error.code != "PACKAGE_NOT_FOUND":
+                raise
+            return None
+        if isinstance(codes, list) and len(codes) == 1 and isinstance(codes[0], str) and re.fullmatch(r"[0-9]{9}", codes[0]):
+            return codes[0]
+        return None
+
+    # 신규 기록은 포장 삭제 후에도 저장 당시 품목코드를 사용한다.
+    def code_for(item):
+        return product_codes.get(item["eventId"]) or legacy_code(item["packageId"])
+
+    # 식약처 성분 조회가 성공한 제품만 사용하고 염·수화물 이름은 그대로 구분한다.
+    @cache
+    def ingredients_for(code):
+        if not code:
+            return {}
+        medicine = store.medicine(code) or {}
+        ingredients = medicine.get("ingredients")
+        if medicine.get("ingredients_status") != "SUCCEEDED" or not isinstance(ingredients, list):
+            return {}
+        names = {}
+        for entry in ingredients:
+            name = entry.get("name") if isinstance(entry, dict) else None
+            if isinstance(name, str) and name.strip():
+                key = re.sub(r"\s+", "", unicodedata.normalize("NFKC", name)).lower()
+                names[key] = name.strip()
+        return names
+
+    taken_by_day = defaultdict(list)
+    for item in history:
+        if item["status"] == "TAKEN":
+            occurred = timestamp(item["occurredAt"])
+            taken_by_day[occurred.astimezone(KST).date()].append((occurred, item))
+    for item in pending:
+        occurred = timestamp(item["occurredAt"])
+        previous = taken_by_day.get(occurred.astimezone(KST).date(), [])
+        if not previous:
+            continue
+        code = code_for(item)
+        names = ingredients_for(code)
+        warnings = {}
+        for taken_at, taken in previous:
+            if taken_at > occurred:
+                continue
+            taken_code = code_for(taken)
+            same_product = (code is not None and code == taken_code) or item["packageId"] == taken["packageId"]
+            taken_names = ingredients_for(taken_code)
+            overlap = [name for key, name in names.items() if key in taken_names]
+            if overlap or same_product:
+                # 같은 약을 여러 번 복용해도 같은 경고를 반복하지 않는다.
+                warnings[taken_code or taken["packageId"]] = {
+                    "medicineName": taken["medicineName"], "ingredients": overlap,
+                }
+        if warnings:
+            item["duplicateWarnings"] = list(warnings.values())
+
+
 # 손상되거나 일부만 읽힌 이력을 정상 빈 목록으로 숨기지 않는다.
 def list_activity(store, config):
     from capture_events import list_reviews
+    box = config["box"]
     try:
-        events = [event_view(item, config["box"], config["allow_estimated"]) for item in store.events(config["box"])]
-        events = [item for item in events if item is not None]
+        events = []
+        product_codes = {}
+        for raw in store.events(box):
+            item = event_view(raw, box, config["allow_estimated"])
+            if item is None:
+                continue
+            events.append(item)
+            code = raw.get("productCode")
+            if isinstance(code, str) and re.fullmatch(r"[0-9]{9}", code):
+                product_codes[item["eventId"]] = code
         events.sort(key=lambda item: timestamp(item["occurredAt"]), reverse=True)
     except (ValueError, TypeError, KeyError):
         raise ApiError(503, "ACTIVITY_INVALID", "복용 기록을 확인하지 못했어요.") from None
-    return {"pending": [item for item in events if item["status"] == "PENDING"],
-            "history": [item for item in events if item["status"] != "PENDING"],
-            "reviews": list_reviews(store, config['box'])}
+    pending = [item for item in events if item["status"] == "PENDING"]
+    history = [item for item in events if item["status"] != "PENDING"]
+    if pending:
+        try:
+            add_duplicate_warnings(store, box, pending, history, product_codes)
+        except Exception as error:
+            # 부가 성분 조회 장애가 복용 기록 조회와 확인을 막지 않게 한다.
+            logging.warning("반출 중복 성분 조회 실패: %s", type(error).__name__)
+    return {"pending": pending, "history": history, "reviews": list_reviews(store, box)}
 
 
 # 외부에서 방향이 확인된 반출만 사용자 확인으로 확정한다.
@@ -365,7 +457,7 @@ def confirm_initial(store, config, package_id, body):
         match = re.fullmatch(r"\s*제조일로부터\s*(\d{1,3})\s*(개월|년)\s*", shelf_life or "") if isinstance(shelf_life, str) else None
         if match and 0 < int(match.group(1)) <= 120:
             try:
-                first_day = timestamp(package["first_stored_at"]).astimezone(timezone(timedelta(hours=9))).date()
+                first_day = timestamp(package["first_stored_at"]).astimezone(KST).date()
                 months = int(match.group(1)) * (12 if match.group(2) == "년" else 1)
                 year, month = divmod(first_day.year * 12 + first_day.month - 1 + months, 12)
                 temporary_date = date(year, month + 1, min(first_day.day, calendar.monthrange(year, month + 1)[1])).isoformat()

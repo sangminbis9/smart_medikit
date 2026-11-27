@@ -156,6 +156,9 @@ test('신규 약 정보와 반출 미복용 이력을 저장한다', async funct
     unit: 'TABLET',
     recordedAt: null as string | null,
     movementCertainty: 'ESTIMATED',
+    duplicateWarnings: [
+      { medicineName: '먼저 복용한 합성 약', ingredients: ['검증용 성분'] },
+    ],
   };
   // API에 전송된 본문을 검사한 뒤에만 성공 응답을 돌려준다.
   await page.route('https://activity.test/**', async function activity(route) {
@@ -209,8 +212,17 @@ test('신규 약 정보와 반출 미복용 이력을 저장한다', async funct
   ).toHaveCount(0);
   await page.goto('/schedule?out_event=e1');
   await expect(page.getByText('복용 확인 필요', { exact: true })).toBeVisible();
+  const warningCard = page.locator('.outbound-card').filter({
+    hasText: '당일 중복 복용 주의',
+  });
+  await expect(warningCard).toContainText('같은 날 먼저 복용한 합성 약');
+  await expect(warningCard).toContainText('겹치는 성분은 검증용 성분입니다.');
+  await expect(
+    warningCard.getByRole('button', { name: /Y.*복용/ }),
+  ).toBeVisible();
   await page.getByRole('button', { name: /N.*복용/ }).click();
   await expect(page.getByText('확인할 반출 기록이 없어요.')).toBeVisible();
+  await expect(warningCard).toHaveCount(0);
   await expect(
     page.locator('#outbound-history').getByText('미복용', { exact: true }),
   ).toBeVisible();

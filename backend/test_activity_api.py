@@ -2,7 +2,7 @@
 
 from unittest.mock import Mock
 import pytest
-from activity_api import confirm_activity, confirm_initial, ApiError, DynamoStore
+from activity_api import confirm_activity, confirm_initial, list_activity, ApiError, DynamoStore
 
 
 # 물리 반출 기록과 제품 제형이 있는 합성 저장소를 만든다.
@@ -84,3 +84,63 @@ def test_other_form_has_no_quantity():
     value.form.return_value = 'OTHER'
     with pytest.raises(ApiError):
         confirm_initial(value, {'box': 'test'}, 'p1', {'condition': 'USED', 'actualExpiry': '2027-01-01', 'remainingQty': 2})
+
+
+# 동일 품목, 다른 제품의 동일 성분, 삭제된 포장, 한국 날짜 경계를 한 조회에서 검증한다.
+def test_activity_warns_for_same_day_confirmed_intakes():
+    value = store()
+    value.records.return_value = []
+    template = value.event.return_value
+
+    # 같은 보관함의 합성 반출을 상태와 발생 시간에 맞춰 만든다.
+    def event(event_id, code, name, occurred, status='TAKEN', package_id=None):
+        return dict(template, eventId=event_id, sk=f'OUT#{event_id}', medicineName=name,
+                    packageId=package_id or f'p-{event_id}', productCode=code, occurredAt=occurred,
+                    status=status, quantity=1 if status == 'TAKEN' else None,
+                    recordedAt='2026-11-11T01:00:00Z' if status != 'PENDING' else None)
+
+    value.events.return_value = [
+        event('current', '100000001', '현재 약', '2026-11-11T01:00:00Z', 'PENDING'),
+        event('same', '100000001', '이전에 복용한 같은 약', '2026-11-10T15:00:00Z'),
+        event('shared', None, '폐기한 약의 복용 기록', '2026-11-10T16:00:00Z',
+              package_id='test-100000002-123456abcdef'),
+        event('different', '100000003', '다른 성분의 약', '2026-11-10T17:00:00Z'),
+        event('yesterday', '100000001', '어제 복용한 약', '2026-11-10T14:59:59Z'),
+        event('not-taken', '100000001', '복용하지 않은 약', '2026-11-10T18:00:00Z', 'NOT_TAKEN'),
+        event('disposed', '100000001', '복용하지 않고 버린 약', '2026-11-10T19:00:00Z', 'DISPOSED'),
+        event('pending', '100000001', '응답하지 않은 약', '2026-11-10T20:00:00Z', 'PENDING'),
+        event('later', '100000001', '나중에 반출한 약', '2026-11-11T02:00:00Z'),
+        event('unverified', '100000004', '성분 미확인 약', '2026-11-10T21:00:00Z'),
+    ]
+    value.medicine.side_effect = {
+        '100000001': {'ingredients_status': 'SUCCEEDED', 'ingredients': [{'name': '성분 A'}]},
+        '100000002': {'ingredients_status': 'SUCCEEDED', 'ingredients': [{'name': '성분a'}]},
+        '100000003': {'ingredients_status': 'SUCCEEDED', 'ingredients': [{'name': '성분 A 염'}]},
+        '100000004': {'ingredients_status': 'PARTIAL', 'ingredients': [{'name': '성분 A'}]},
+    }.__getitem__
+
+    result = list_activity(value, dict(box='test', allow_estimated=True))
+    assert result['pending'][0]['duplicateWarnings'] == [
+        {'medicineName': '폐기한 약의 복용 기록', 'ingredients': ['성분 A']},
+        {'medicineName': '이전에 복용한 같은 약', 'ingredients': ['성분 A']},
+    ]
+    assert all('duplicateWarnings' not in item for item in result['history'])
+    value.package.assert_not_called()
+    assert value.medicine.call_count == 4
+
+
+# 예전 포장의 품목코드를 조회하고 성분이 없어도 동일 품목 복용 기록을 알린다.
+def test_activity_warns_for_same_product_without_ingredients():
+    value = store()
+    value.records.return_value = []
+    value.package.return_value = {'product_codes': ['100000001']}
+    value.medicine.return_value = None
+    current = value.event.return_value
+    previous = dict(current, eventId='old', sk='OUT#old', packageId='legacy-package',
+                    status='TAKEN', quantity=1, recordedAt='2026-11-10T00:00:00Z')
+    value.events.return_value = [dict(current, productCode='100000001'), previous]
+    result = list_activity(value, dict(box='test', allow_estimated=True))
+    assert result['pending'][0]['duplicateWarnings'] == [
+        {'medicineName': current['medicineName'], 'ingredients': []},
+    ]
+    value.package.assert_called_once_with('test', 'legacy-package')

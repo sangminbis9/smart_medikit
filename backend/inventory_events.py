@@ -85,8 +85,9 @@ def transition(package, recognition, movement, now=None):
     activity = None
     if direction == "OUT":
         updated.update(active_out_event_id=event_id, out_at=occurred)
+        # 포장을 폐기하더라도 복용 이력을 당시 식약처 품목코드와 연결한다.
         activity = {"pk": f"BOX#{box}", "sk": f"OUT#{event_id}", "eventType": "OUT", "eventId": event_id,
-                    "packageId": package_id, "medicineName": updated["name"], "occurredAt": occurred,
+                    "packageId": package_id, "medicineName": updated["name"], "occurredAt": occurred, "productCode": code,
                     "movementCertainty": "ESTIMATED", "status": "PENDING", "quantity": None, "recordedAt": None,
                     "unit": recognition.get("form") if recognition.get("form") in ("TABLET", "CAPSULE") else "OTHER",
                     "disposalDueAt": (timestamp(occurred) + timedelta(hours=24)).isoformat()}

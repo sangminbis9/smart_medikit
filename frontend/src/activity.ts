@@ -12,6 +12,14 @@ export const eventSchema = z.object({
   quantity: z.number().int().positive().nullable(),
   unit: z.enum(['TABLET', 'CAPSULE', 'OTHER']),
   recordedAt: z.iso.datetime({ offset: true }).nullable(),
+  duplicateWarnings: z
+    .array(
+      z.object({
+        medicineName: z.string().trim().min(1).max(200),
+        ingredients: z.array(z.string().trim().min(1)),
+      }),
+    )
+    .optional(),
 });
 export const activitySchema = z
   .object({

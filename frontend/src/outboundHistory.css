@@ -64,6 +64,22 @@
   border-color: #159768;
   box-shadow: 0 0 0 2px #d5f1e3;
 }
+.outbound-duplicate {
+  margin-top: 10px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: #fff3e3;
+  color: #874211;
+  font-size: 0.875rem;
+  overflow-wrap: anywhere;
+}
+.outbound-duplicate strong {
+  margin-top: 0;
+}
+.outbound-duplicate ul {
+  margin: 4px 0 0;
+  padding-inline-start: 18px;
+}
 .outbound-actions {
   display: flex;
   flex-wrap: wrap;

@@ -101,6 +101,7 @@ def test_occlusion_resolves_to_existing_package_out():
     writes = store.client.transact_write_items.call_args.kwargs["TransactItems"]
     assert writes[0]["Put"]["Item"]["state"] == "OUT"
     assert writes[1]["Put"]["Item"]["status"] == "PENDING"
+    assert writes[1]["Put"]["Item"]["productCode"] == medicine["product_code"]
 
 
 # 확인된 닫힘과 일치하는 포장 OCR을 가진 새 촬영으로 바꾼다.

@@ -59,7 +59,7 @@ def transition(package, recognition, movement, now=None):
     identifier(package_id)
     updated = dict(package or {"pk": f"PACKAGE#{package_id}", "sk": "META", "package_id": package_id,
                               "box_id": box, "kind": "OTC", "product_codes": [code],
-                              "name": recognition["name"], "first_registration_pending": True,
+                              "name": recognition["name"], "first_registration_pending": True, "first_stored_at": occurred,
                               "inventory": {"stock_enabled": recognition.get("form") in ("TABLET", "CAPSULE"),
                                             "initial_qty": None, "estimated_qty": None}})
     updated.update(state="STORED" if direction == "IN" else "OUT", last_sequence=sequence,

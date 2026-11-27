@@ -47,6 +47,15 @@ def test_new_preserves_stock():
     assert '#expiry' not in value.initial.call_args.args[1]
 
 
+# 새 약의 허가기간은 최초 반입일을 기준으로 한 임시 날짜로만 저장한다.
+def test_new_shelf_life_is_temporary():
+    value = store()
+    value.package.return_value.update(product_codes=['198700405'], first_stored_at='2026-01-31T00:00:00Z')
+    value.inventory.get_item.return_value = {'Item': {'shelf_life': '제조일로부터 1 개월'}}
+    confirm_initial(value, {'box': 'test'}, 'p1', {'condition': 'NEW', 'actualExpiry': None, 'remainingQty': None})
+    assert value.initial.call_args.args[2][':expiry'] == {'temporary_management_date': '2026-02-28'}
+
+
 # 비정제 약품의 잔여 알약 수 입력을 거부한다.
 def test_other_form_has_no_quantity():
     value = store()

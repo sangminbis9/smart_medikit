@@ -3,7 +3,8 @@
 import json
 import os
 import re
-from datetime import date, datetime, timezone
+import calendar
+from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 from urllib.parse import urlsplit
 
@@ -317,6 +318,23 @@ def confirm_initial(store, config, package_id, body):
     if remaining is not None:
         remaining = quantity(remaining, allow_zero=True)
     package = store.package(config["box"], package_id)
+    # 제조일을 알 수 없으므로 반입일 기준 결과는 실제 만료일이 아닌 임시 기준일이다.
+    temporary_date = None
+    if condition == "NEW" and package.get("first_stored_at"):
+        codes = package.get("product_codes")
+        if isinstance(codes, list) and len(codes) == 1 and isinstance(codes[0], str) and re.fullmatch(r"\d{9}", codes[0]):
+            medicine = store.inventory.get_item(Key={"pk": f"MEDICINE#{codes[0]}", "sk": "META"}, ConsistentRead=True).get("Item", {})
+            info = medicine.get("product_info")
+            shelf_life = medicine.get("shelf_life") or (info.get("shelf_life") if isinstance(info, dict) else None)
+            match = re.fullmatch(r"\s*제조일로부터\s*(\d{1,3})\s*(개월|년)\s*", shelf_life or "") if isinstance(shelf_life, str) else None
+            if match and 0 < int(match.group(1)) <= 120:
+                try:
+                    first_day = timestamp(package["first_stored_at"]).astimezone(timezone(timedelta(hours=9))).date()
+                    months = int(match.group(1)) * (12 if match.group(2) == "년" else 1)
+                    year, month = divmod(first_day.year * 12 + first_day.month - 1 + months, 12)
+                    temporary_date = date(year, month + 1, min(first_day.day, calendar.monthrange(year, month + 1)[1])).isoformat()
+                except (ValueError, OverflowError):
+                    pass
     missing_quantity = isinstance(package.get('inventory'), dict) and package['inventory'].get('estimated_qty') is None
     if package.get("first_registration_pending") is not True and not (missing_quantity and remaining is not None):
         raise ApiError(409, "ALREADY_CONFIRMED", "이미 초기 정보를 확인했어요.")
@@ -332,12 +350,13 @@ def confirm_initial(store, config, package_id, body):
     if package.get('first_registration_pending') is not True:
         condition_expr = '#box = :box'
         del values[':true']
-    if expiry is not None:
+    if expiry is not None or temporary_date is not None:
         old = package.get("expiry")
         if old is not None and not isinstance(old, dict):
             raise ApiError(503, "EXPIRY_INVALID", "유통기한 정보를 확인해 주세요.")
         names["#expiry"] = "expiry"
-        values[":expiry"] = {**(old or {}), "actual_expiry": expiry, "verified": True}
+        values[":expiry"] = ({**(old or {}), "actual_expiry": expiry, "verified": True}
+                              if expiry is not None else {**(old or {}), "temporary_management_date": temporary_date})
         update += ", #expiry = :expiry"
         if "expiry" not in package:
             condition_expr += " AND attribute_not_exists(#expiry)"

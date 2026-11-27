@@ -87,6 +87,7 @@
 - Pi 포장 판독 개선 코드가 연결된 경우 실패한 `RECOGNITION`에는 `failure_stage`, `failure_code`가 선택적으로 들어간다. 실제 OCR 원문이나 미확정 후보 목록은 저장하지 않는다. 공식 품목코드 하나가 확정되면 선택적 성분·허가정보 보완 상태와 별개로 OCR 완료를 기록한다.
 - `GET /activity`에 `reviews:[{eventId,occurredAt,reason}]`를 추가한다. 기존 `POST /activity/{eventId}/confirm`은 `{review:{productCode:string|null,direction:IN|OUT|NONE}}`도 지원한다. OUT 복용 확인 본문은 그대로다. 확인 대기 CAPTURE만 처리하며 이후 포장 순번과 충돌하면 덮어쓰지 않는다. NONE은 약품 선택 없이 닫을 수 있다. 별도 `/reviews` 공개 경로나 새로운 접근 권한을 만들지 않는다.
 - `POST /packages/{packageId}/initial`의 NEW는 기존 수량이 null일 때만 선택적으로 `remainingQty`를 받아 초기/잔여 수량을 보완한다. 이미 최초 확인을 마쳤어도 수량이 null인 경우 보완 가능하다. 알려진 수량을 NEW로 덮어쓸 수 없으며 알 수 없는 포장 수량을 OCR 숫자로 임의 추정하지 않는다.
+- 새 포장의 최초 반입 시각과 제품 허가 사용기간이 명확하면 NEW 확인 시 반입일에 허가기간을 더한 `expiry.temporary_management_date`를 저장한다. 이는 제조일이나 포장에 인쇄된 실제 만료일이 아니며 `actual_expiry`와 `verified`는 변경하지 않는다. 기존 포장에 최초 반입 시각이 없으면 날짜를 추정하지 않는다.
 - 재고 조회는 인식 이력이 앞 페이지를 차지해도 커서 끝까지 진행한다. 커서 반복·전체 조회 실패는 오류로 반환하며 일부 목록을 완전한 목록으로 표시하지 않는다. 촬영·폐기 유지보수 오류와 개별 누락 포장은 다른 알림 발송을 막지 않는다.
 
 | `processing_status` | 의미 | Pi 동작 |
